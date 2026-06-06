@@ -1,0 +1,137 @@
+import { apiRequest } from './client';
+
+export interface StreamSessionStatus {
+  session_id: string;
+  protocol: string;
+  remote?: string;
+  bitrate_kbits?: number;
+  read_bitrate_kbits?: number;
+  write_bitrate_kbits?: number;
+}
+
+export interface StreamPlayURL {
+  protocol: string;
+  url: string;
+  backend: string;
+}
+
+export interface StreamInfo {
+  engine: string;
+  stream_id: string;
+  app_name?: string;
+  managed: boolean;
+  management_type?: 'bound' | 'promoted' | 'camera';
+  camera_id?: string;
+  camera_name?: string;
+  source_type: string;
+  active: boolean;
+  publisher?: StreamSessionStatus;
+  subscribers?: StreamSessionStatus[];
+  video_codec?: string;
+  audio_codec?: string;
+  in_fps?: number;
+  last_frame_time?: string;
+  play_urls?: StreamPlayURL[];
+}
+
+export interface StreamsResponse {
+  streams: StreamInfo[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListStreamsParams {
+  q?: string;
+  managed?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface StreamsListResult {
+  streams: StreamInfo[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface BindCameraRequest {
+  camera_id: string;
+}
+
+export interface PromoteStreamRequest {
+  name: string;
+  description?: string;
+  location?: string;
+}
+
+export interface StreamOperationResponse {
+  stream_id: string;
+  camera_id?: string;
+  session_id?: string;
+  source_type?: string;
+  status: string;
+}
+
+export async function listStreams(
+  params?: ListStreamsParams,
+  signal?: AbortSignal,
+): Promise<StreamsListResult> {
+  const searchParams = new URLSearchParams();
+  if (params?.q) searchParams.set('q', params.q);
+  if (params?.managed !== undefined) searchParams.set('managed', String(params.managed));
+  if (params?.limit !== undefined) searchParams.set('limit', String(params.limit));
+  if (params?.offset !== undefined) searchParams.set('offset', String(params.offset));
+
+  const query = searchParams.toString();
+  const path = query ? `/streams?${query}` : '/streams';
+  const response = await apiRequest<StreamsResponse>(path, { signal });
+
+  return {
+    streams: response.streams ?? [],
+    total: response.total ?? response.streams?.length ?? 0,
+    limit: response.limit ?? 20,
+    offset: response.offset ?? 0,
+  };
+}
+
+export async function getStream(streamId: string, signal?: AbortSignal): Promise<StreamInfo> {
+  return apiRequest<StreamInfo>(`/streams/${encodeURIComponent(streamId)}`, { signal });
+}
+
+export async function bindCamera(streamId: string, cameraId: string, signal?: AbortSignal): Promise<StreamOperationResponse> {
+  return apiRequest<StreamOperationResponse>(`/streams/${encodeURIComponent(streamId)}/bind-camera`, {
+    method: 'POST',
+    body: JSON.stringify({ camera_id: cameraId }),
+    signal,
+  });
+}
+
+export async function unbindCamera(streamId: string, signal?: AbortSignal): Promise<StreamOperationResponse> {
+  return apiRequest<StreamOperationResponse>(`/streams/${encodeURIComponent(streamId)}/unbind-camera`, {
+    method: 'POST',
+    signal,
+  });
+}
+
+export async function promoteStream(streamId: string, data: PromoteStreamRequest, signal?: AbortSignal): Promise<StreamOperationResponse> {
+  return apiRequest<StreamOperationResponse>(`/streams/${encodeURIComponent(streamId)}/promote`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+    signal,
+  });
+}
+
+export async function deleteStream(streamId: string, signal?: AbortSignal): Promise<StreamOperationResponse> {
+  return apiRequest<StreamOperationResponse>(`/streams/${encodeURIComponent(streamId)}`, {
+    method: 'DELETE',
+    signal,
+  });
+}
+
+export async function kickPublisher(streamId: string, signal?: AbortSignal): Promise<StreamOperationResponse> {
+  return apiRequest<StreamOperationResponse>(`/streams/${encodeURIComponent(streamId)}/kick-publisher`, {
+    method: 'POST',
+    signal,
+  });
+}

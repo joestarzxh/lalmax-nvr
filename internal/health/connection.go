@@ -1,0 +1,134 @@
+package health
+
+import (
+	"sync"
+	"time"
+
+	"github.com/lalmax-pro/lalmax-nvr/internal/model"
+)
+
+// cameraConnState tracks per-camera connection state.
+type cameraConnState struct {
+	currentStatus string
+	statusSince   time.Time
+	alerted       bool // whether we already emitted connection_lost for this incident
+}
+
+// ConnectionMonitor detects camera connection loss and restoration.
+// It observes recorder status transitions and emits HealthEvents when a camera
+// remains in error/reconnecting state beyond the configured offline threshold.
+type ConnectionMonitor struct {
+	mu               sync.Mutex
+	offlineThreshold time.Duration
+	cameraOverrides  map[string]time.Duration // per-camera offline threshold overrides
+	cameras          map[string]*cameraConnState
+	eventHandler     func(cameraID string, event model.HealthEvent)
+}
+
+// NewConnectionMonitor creates a new connection health monitor.
+// The handler callback receives connection_lost and connection_restored events.
+func NewConnectionMonitor(offlineThreshold time.Duration, handler func(string, model.HealthEvent)) *ConnectionMonitor {
+	return &ConnectionMonitor{
+		offlineThreshold: offlineThreshold,
+		cameraOverrides:  make(map[string]time.Duration),
+		cameras:          make(map[string]*cameraConnState),
+		eventHandler:     handler,
+	}
+}
+// OnStatusChange is called when a camera's recorder status changes.
+func (m *ConnectionMonitor) OnStatusChange(cameraID string, status string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+	state, exists := m.cameras[cameraID]
+	if !exists {
+		state = &cameraConnState{currentStatus: status, statusSince: now}
+		m.cameras[cameraID] = state
+		return
+	}
+
+	prevStatus := state.currentStatus
+	state.currentStatus = status
+
+	// Status actually changed
+	if prevStatus != status {
+		// Transition TO error/reconnecting — start the timer
+		if status == string(model.StatusError) || status == string(model.StatusReconnecting) {
+			state.statusSince = now
+			state.alerted = false
+		}
+
+		// Transition FROM error/reconnecting TO recording → connection restored
+		if isOfflineStatus(prevStatus) && status == string(model.StatusRecording) {
+			if state.alerted {
+				m.eventHandler(cameraID, model.HealthEvent{
+					CameraID:  cameraID,
+					EventType: string(model.HealthEventConnectionRestored),
+					Status:    string(model.HealthStatusHealthy),
+					Message:   "Connection restored",
+					Metadata:  `{"downtime":"` + time.Since(state.statusSince).String() + `"}`,
+				})
+			}
+			state.alerted = false
+		}
+	}
+}
+
+// Check is called periodically to detect threshold breaches.
+func (m *ConnectionMonitor) Check() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+	for cameraID, state := range m.cameras {
+		if isOfflineStatus(state.currentStatus) && !state.alerted {
+			threshold := m.offlineThreshold
+			if t, ok := m.cameraOverrides[cameraID]; ok && t > 0 {
+				threshold = t
+			}
+			if now.Sub(state.statusSince) >= threshold {
+				state.alerted = true
+				m.eventHandler(cameraID, model.HealthEvent{
+					CameraID:  cameraID,
+					EventType: string(model.HealthEventConnectionLost),
+					Status:    string(model.HealthStatusError),
+					Message:   "Camera offline",
+					Metadata:  `{"offline_duration":"` + now.Sub(state.statusSince).String() + `"}`,
+				})
+			}
+		}
+	}
+}
+
+// SetCameraOverride sets the per-camera offline threshold override.
+func (m *ConnectionMonitor) SetCameraOverride(cameraID string, threshold time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cameraOverrides[cameraID] = threshold
+}
+
+// RemoveCamera removes tracking for a camera.
+func (m *ConnectionMonitor) RemoveCamera(cameraID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.cameras, cameraID)
+	delete(m.cameraOverrides, cameraID)
+}
+
+// GetOfflineDuration returns how long the given camera has been in an offline state.
+// Returns 0 if the camera is recording, unknown, or not tracked.
+func (m *ConnectionMonitor) GetOfflineDuration(cameraID string) time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state, ok := m.cameras[cameraID]
+	if !ok || !isOfflineStatus(state.currentStatus) {
+		return 0
+	}
+	return time.Since(state.statusSince)
+}
+
+// isOfflineStatus returns true if the status represents a disconnected state.
+func isOfflineStatus(status string) bool {
+	return status == string(model.StatusError) || status == string(model.StatusReconnecting)
+}

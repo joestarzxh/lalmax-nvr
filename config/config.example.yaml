@@ -1,0 +1,188 @@
+# lalmax-nvr Configuration
+# Copy to lalmax-nvr.yaml and customize for your setup
+# Or use: ./lalmax-nvr init --password <your-password>
+#
+# All durations use Go duration format: 30s, 5m, 1h, 24h
+# Camera IDs must be unique and kebab-case (e.g., "front-door")
+# Enables, ports, and thresholds are validated on startup
+
+# HTTP server listen address (default: ":9090")
+server:
+  listen: ":9090"
+
+# Storage settings
+# root_dir: where recordings, database, and HLS segments are stored.
+# Docker: set via NVR_DATA_DIR env var (default /data). See docker-compose.yml.
+# Binary: set via --data-dir flag or directly in YAML.
+storage:
+  root_dir: "/var/lib/lalmax-nvr"   # Change to your preferred path (e.g. /mnt/external/nvr)
+  segment_duration: "30s"          # MP4 segment duration (max 30s on RPi)
+
+# Optional lal/lalmax media engine.
+# Enabled by default — set to false to fall back to built-in streaming stack.
+media:
+  enabled: true
+  mode: "embedded"                         # embedded | http
+  lalmax_http_addr: "http://127.0.0.1:1290"
+  lalmax_public_url: "http://127.0.0.1:1290"
+  # lalmax_config_path is auto-generated at {root_dir}/config/lalmax.conf.json
+  # Uncomment to override: lalmax_config_path: "/custom/path/lalmax.conf.json"
+  # Lal protocol ports (used for RTMP, RTSP, HTTP-FLV, HLS-TS playback URLs)
+  # These are only used when mode=http; embedded mode uses default ports
+  # rtmp_port: 1935                       # RTMP port (default: 1935)
+  # rtsp_port: 5544                       # RTSP port (default: 5544)
+  # http_port: 8080                       # HTTP-FLV and HLS-TS port (default: 8080)
+  #
+  # Protocol -> Port mapping:
+  #   lalmax (port 1290): HLS (fMP4), LL-HLS, WebRTC, fMP4, WS-FLV
+  #   lal (port 8080):    HLS (TS), HTTP-FLV
+  #   lal (port 1935):    RTMP
+  #   lal (port 5544):    RTSP
+
+# Authentication
+# Option 1: Set password_hash (generate with: lalmax-nvr hash-password <pw>)
+# Option 2: Set password in plaintext (auto-converted to hash on first run)
+auth:
+  username: "admin"
+  password_hash: ""  # Use `lalmax-nvr hash-password <password>` to generate
+  # password: ""      # Or set plaintext here (auto-hashed on first start)
+
+# Camera configuration — add your cameras here
+# Each camera must have a unique ID and valid URL with scheme + host
+# Supported protocols: rtsp, http, onvif, xiaomi
+# Supported encodings: h264, h265, mjpeg, jpeg
+cameras: []
+# Example cameras:
+# cameras:
+#   - id: "front-door"
+#     name: "Front Door"
+#     protocol: "rtsp"        # Transport: rtsp, http, onvif, xiaomi
+#     encoding: "h264"         # Encoding: h264, h265, mjpeg, jpeg
+#     url: "rtsp://192.168.1.100:554/stream"
+#     enabled: true
+#     audio_enabled: false          # Enable audio recording (default: false)
+#   - id: "backyard"
+#     name: "Back Yard"
+#     protocol: "http"
+#     encoding: "jpeg"
+#     url: "http://192.168.1.101/capture"
+#     enabled: true
+#     audio_enabled: false          # Enable audio recording (default: false). Not supported for MJPEG/HTTP-JPEG.
+#   - id: "xiaomi-cam"
+#     name: "Xiaomi Camera"
+#     protocol: "xiaomi"
+#     encoding: "h264"
+#     did: "xiaomi_device_id"      # Xiaomi Device ID
+#     vendor: "cs2"                # Transport vendor: "cs2" (default)
+#     enabled: true
+#     audio_enabled: false          # Enable audio recording (default: false)
+
+# Xiaomi cloud account settings (required for xiaomi cameras)
+# xiaomi:
+#   user_id: ""    # Populated after first login
+#   token: ""      # Xiaomi passToken (obtained via /api/xiaomi/auth)
+#   region: "cn"   # Region: cn, sg, de, etc.
+
+# Cleanup — retention and disk threshold policies
+# Cleanup runs on a schedule and removes old recordings
+cleanup:
+  retention_days: 30               # Delete recordings older than N days (1-3650)
+  check_interval: "1h"             # How often to check for expired recordings
+  disk_threshold_percent: 95       # Start cleanup when disk usage exceeds N% (50-99)
+
+# Segment merging — combine short segments into longer recordings
+# Only active when enabled: true. All duration fields are required when enabled.
+merge:
+  enabled: false                   # Enable segment merging
+  check_interval: "1h"             # How often to check for merge candidates
+  window_size: "1h"                # Time window for merging segments
+  batch_limit: 200                 # Max segments to merge in one batch
+  min_segment_age: "10m"           # Minimum age before a segment can be merged
+  min_segments_to_merge: 3         # Minimum segments required to trigger a merge
+
+# FTP server — provides file access over FTP protocol
+# Configurable port and passive port range
+ftp:
+  enabled: true                    # Enable FTP server (default: true)
+  port: 2121                       # FTP control port (1-65535)
+  passive_port_range: "2122-2140"  # Passive mode port range
+
+# MQTT trigger-based recording for smart home integration
+# When enabled, subscribe to topic for recording triggers
+mqtt:
+  enabled: false                   # Enable MQTT client
+  broker: "tcp://localhost:1883"   # MQTT broker URL
+  topic: "lalmax-nvr/trigger"         # MQTT topic to subscribe to
+  client_id: "lalmax-nvr"           # MQTT client ID
+  username: ""                     # MQTT broker authentication (optional)
+  password: ""                     # MQTT broker password (optional, auto-encrypted if encryption key is set)
+
+# WebDAV server — file access over WebDAV protocol
+# Shares recordings directory over HTTP
+webdav:
+  enabled: true                    # Enable WebDAV server (default: true)
+  path_prefix: "/dav"              # URL path prefix for WebDAV access
+  read_write: false                # Allow write operations (PUT, MKCOL, DELETE, etc.)
+
+# RTMP ingest — receive pushed streams from cameras or encoders
+# RTMP is served by lalmax on port 1935 (managed by the media engine).
+# stream_keys maps camera_id -> stream_key for push URL resolution.
+# Push URL format: rtmp://<host>:1935/live/<stream_key>
+# You can also push directly with camera ID as stream key: rtmp://<host>:1935/live/<camera_id>
+# rtmp:
+#   enabled: true
+#   stream_keys:
+#     front-door: "my-stream-key"
+
+# SRT ingest — receive MPEG-TS pushed streams from cameras or encoders
+# SRT is served by lalmax on port 9000 (managed by the media engine).
+# Camera streamid format: #!::h=<camera_id>,m=publish
+# Push URL: srt://<host>:9000 with streamid #!::h=<camera_id>,m=publish
+# srt:
+#   enabled: true
+
+# GB28181 SIP signaling — receive streams from GB28181 cameras/NVRs
+# When enabled, the NVR acts as a SIP platform that cameras register to.
+# After registration, cameras are queried for their channel catalog.
+# Streams are pulled via SIP INVITE and received by lalmax as RTP.
+# gb28181:
+#   enabled: true
+#   port: 5060                          # SIP listen port (default: 5060)
+#   id: "34020000002000000001"          # 20-digit platform SIP ID (required)
+#   password: ""                        # Global device registration password (optional)
+#   media_ip: "192.168.1.100"           # IP for SDP media reception (required, your server's IP)
+#   host: ""                            # SIP listen host (optional, auto-detect from media_ip)
+
+# HLS streaming — on-demand live view via Web Web UI
+# RPi constraint: max 4 concurrent streams
+hls:
+  write_buffer_size: 40            # Async frame buffer per stream (default: 100)
+  segment_max_size_mb: 10          # HLS segment max size in MB (default: 10)
+  segment_count: 7                 # Segments per stream (range: 3-10, default: 7)
+  max_streams: 4                   # Max concurrent HLS streams (range: 1-20, default: 4)
+
+# Observability — logging and debugging
+observability:
+  log_level: "info"                # Log level: debug, info, warn, error (default: info)
+  log_format: "text"               # Log format: json or text (default: text)
+  # enable_pprof: false            # Enable pprof debug endpoints (default: false)
+
+# Transcoding — optional video transcoding via FFmpeg
+# Used to reduce bitrate, change codec format, or adjust quality
+# Requires ffmpeg to be installed on the system
+# transcoding:
+#   enabled: false              # Enable transcoding (default: false)
+#   ffmpeg_path: ""              # Path to ffmpeg binary (empty = auto-detect)
+#   max_workers: 1               # Max concurrent transcoding jobs (range: 1-4, default: 1)
+#   replace_original: false      # Replace original recordings with transcoded versions
+#   download_url: ""             # Auto-populated FFmpeg download URL per platform
+#
+# Per-camera transcoding overrides:
+#   cameras:
+#     - id: "front-door"
+#       ...
+#       transcoding:
+#         enabled: true           # Override global enabled for this camera
+#         target_codec: "h264"    # Target codec: h264, h265 (default: same as source)
+#         preset: "ultrafast"     # FFmpeg preset: ultrafast, faster, medium (default: ultrafast)
+#         bitrate: "2M"           # Target bitrate (e.g. "1M", "2M", "500K")

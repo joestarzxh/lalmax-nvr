@@ -1,0 +1,14 @@
+FROM scratch
+
+ENV NVR_DATA_DIR=/data
+
+COPY .build-tmp/lalmax-nvr /usr/local/bin/lalmax-nvr
+
+VOLUME ["/data"]
+
+EXPOSE 9090
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["lalmax-nvr", "health"]
+
+ENTRYPOINT ["lalmax-nvr"]
+CMD ["-config", "/data/lalmax-nvr.yaml"]

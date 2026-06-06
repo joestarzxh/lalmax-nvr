@@ -1,0 +1,55 @@
+# lalmax-nvr — Docker Compose
+# Usage:
+#   1. docker compose up -d
+#   2. Open http://localhost:9090
+#   3. Complete the setup wizard in the browser
+#
+# Storage:
+#   Recordings and database are stored inside /data in the container.
+#   The default volume mount maps ./data on the host to /data in the container.
+#   To use a different host directory (e.g. external drive):
+#     volumes:
+#       - /mnt/external/nvr:/data    # ← change left side to your host path
+#   The right side (:data) and NVR_DATA_DIR must always match.
+#
+# Permissions:
+#   The container runs as UID/GID 1000 by default.
+#   Make sure the host directory is writable by that user, or set NVR_UID/NVR_GID
+#   to match the owner of the host directory.
+#
+# Networking:
+#   By default, this uses bridge networking with port mapping.
+#   ONVIF WS-Discovery (UDP multicast) does NOT work in bridge mode.
+#   To enable ONVIF auto-discovery, uncomment "network_mode: host"
+#   and remove the "ports" section below.
+services:
+  lalmax-nvr:
+    image: ghcr.io/lalmax-pro/lalmax-nvr:latest
+    container_name: lalmax-nvr
+    restart: unless-stopped
+
+    # Uncomment the line below to use host networking.
+    # This is required for ONVIF WS-Discovery auto-scan to work,
+    # and may improve WebRTC/FLV streaming performance.
+    # When using host mode, REMOVE the "ports" section below
+    # (port mappings are ignored in host mode).
+    # network_mode: host
+
+    ports:
+      - "9090:9090"   # Web UI / API
+      - "2121:2121"   # FTP
+      - "2122-2140:2122-2140"  # FTP passive ports
+    volumes:
+      - ./data:/data
+    environment:
+      - NVR_DATA_DIR=/data
+      # Match the UID/GID of the host user who owns ./data
+      # Defaults to 1000:1000 if omitted
+      # - NVR_UID=1000
+      # - NVR_GID=1000
+    healthcheck:
+      test: ["CMD", "lalmax-nvr", "health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3

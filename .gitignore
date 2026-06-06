@@ -1,0 +1,74 @@
+# Go build artifacts
+*.exe
+*.test
+*.out
+
+# Binary outputs
+/mibee-nvr
+/mibee-nvr-arm64
+/lalmax-nvr
+*-arm64
+*-armv7
+/bin/
+
+# Database files
+*.db
+
+# Config files (contain credentials)
+mibee-nvr.yaml
+lalmax-nvr.yaml
+
+# Runtime data
+/logs/
+/data/
+/run/
+/hls-temp/
+/cam-*/
+
+# Frontend
+web/node_modules/
+web/dist/
+
+# Embedded frontend build output
+internal/ui/static/assets/
+internal/ui/static/index.html
+
+# Legacy / unused directories
+web_embed/
+# Project management / tooling
+.sisyphus/
+.rtk/
+AGENTS.md
+
+# Test / tooling artifacts
+e2e-tests/
+.playwright-mcp/
+test-results/
+tmp/
+package-lock.json
+
+# Test screenshots
+/test*.png
+/e2e-*.png
+
+# QA screenshots
+/qa-*.png
+plugins-*.png
+
+# Private documentation (not committed to remote)
+docs/private/
+
+# IDE / Editor
+.vscode/
+.idea/
+.omo/
+*.swp
+*.swo
+*.
+.DS_Store
+
+# Build output
+build/
+.build-tmp/
+internal/transcoding/-decoders
+internal/transcoding/-encoders

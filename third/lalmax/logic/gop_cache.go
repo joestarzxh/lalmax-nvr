@@ -1,0 +1,148 @@
+package logic
+
+import (
+	"bytes"
+
+	"github.com/q191201771/lal/pkg/base"
+)
+
+type GopCache struct {
+	videoheader *base.RtmpMsg
+	audioheader *base.RtmpMsg
+
+	gopSize              int
+	singleGopMaxFrameNum int
+
+	data  []Gop
+	first int
+	last  int
+}
+
+// gopSize 为 0 时只保存音视频头，不缓存 GOP。
+func NewGopCache(gopSize, singleGopMaxFrameNum int) *GopCache {
+	if gopSize < 0 {
+		gopSize = 0
+	}
+	if singleGopMaxFrameNum < 0 {
+		singleGopMaxFrameNum = 0
+	}
+	num := gopSize + 1
+	return &GopCache{
+		data:                 make([]Gop, num),
+		gopSize:              num,
+		singleGopMaxFrameNum: singleGopMaxFrameNum,
+	}
+}
+
+func (c *GopCache) Feed(msg base.RtmpMsg) {
+	switch msg.Header.MsgTypeId {
+	case base.RtmpTypeIdMetadata:
+		return
+	case base.RtmpTypeIdAudio:
+		if msg.IsAacSeqHeader() {
+			if c.audioheader == nil || !bytes.Equal(c.audioheader.Payload, msg.Payload) {
+				c.Clear()
+			}
+			m := msg.Clone()
+			c.audioheader = &m
+			return
+		}
+		if msg.AudioCodecId() == base.RtmpSoundFormatG711A || msg.AudioCodecId() == base.RtmpSoundFormatG711U || msg.AudioCodecId() == base.RtmpSoundFormatOpus {
+			if c.audioheader == nil || c.audioheader.AudioCodecId() != msg.AudioCodecId() {
+				m := msg.Clone()
+				c.audioheader = &m
+			}
+		}
+	case base.RtmpTypeIdVideo:
+		if msg.IsVideoKeySeqHeader() {
+			if c.videoheader == nil || !bytes.Equal(c.videoheader.Payload, msg.Payload) {
+				c.Clear()
+			}
+			m := msg.Clone()
+			c.videoheader = &m
+			return
+		}
+	}
+
+	if c.gopSize > 1 {
+		if msg.IsVideoKeyNalu() {
+			c.feedNewGop(msg)
+		} else {
+			c.feedLastGop(msg)
+		}
+	}
+}
+
+func (c *GopCache) feedNewGop(msg base.RtmpMsg) {
+	if c.isGopRingFull() {
+		c.first = (c.first + 1) % c.gopSize
+	}
+	c.data[c.last].clear()
+	c.data[c.last].feed(msg)
+	c.last = (c.last + 1) % c.gopSize
+}
+
+func (c *GopCache) feedLastGop(msg base.RtmpMsg) {
+	if c.isGopRingEmpty() {
+		return
+	}
+
+	idx := (c.last - 1 + c.gopSize) % c.gopSize
+	if c.singleGopMaxFrameNum == 0 || c.data[idx].size() < c.singleGopMaxFrameNum {
+		c.data[idx].feed(msg)
+	}
+}
+
+func (c *GopCache) isGopRingFull() bool {
+	return (c.last+1)%c.gopSize == c.first
+}
+
+func (c *GopCache) isGopRingEmpty() bool {
+	return c.first == c.last
+}
+
+func (c *GopCache) Clear() {
+	for i := range c.data {
+		c.data[i].release()
+	}
+	c.last = 0
+	c.first = 0
+}
+
+func (c *GopCache) GetGopCount() int {
+	return (c.last + c.gopSize - c.first) % c.gopSize
+}
+
+func (c *GopCache) GetGopDataAt(pos int) []base.RtmpMsg {
+	if pos >= c.GetGopCount() || pos < 0 {
+		return nil
+	}
+	return c.data[(c.first+pos)%c.gopSize].data
+}
+
+// clear 保留底层容量用于复用；release 用于码流头变化时释放旧 payload。
+type Gop struct {
+	data []base.RtmpMsg
+}
+
+func (g *Gop) feed(msg base.RtmpMsg) {
+	g.data = append(g.data, msg.Clone())
+}
+
+func (g *Gop) clear() {
+	if len(g.data) == 0 {
+		return
+	}
+	for i := range g.data {
+		g.data[i] = base.RtmpMsg{}
+	}
+	g.data = g.data[:0]
+}
+
+func (g *Gop) release() {
+	g.data = nil
+}
+
+func (g *Gop) size() int {
+	return len(g.data)
+}
