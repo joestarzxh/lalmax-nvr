@@ -388,15 +388,19 @@ func Save(path string, cfg *Config) error {
 		return fmt.Errorf("config is nil")
 	}
 
+	// Cameras are stored in SQLite, not in the YAML config file.
+	saveCfg := *cfg
+	saveCfg.Cameras = nil
+
 	// Snapshot and encrypt sensitive fields if key is available
 	key := GetEncryptionKey()
 	if key != nil {
-		snap := snapshotSensitive(cfg)
-		encryptConfig(cfg, key)
-		defer snap.restore(cfg)
+		snap := snapshotSensitive(&saveCfg)
+		encryptConfig(&saveCfg, key)
+		defer snap.restore(&saveCfg)
 	}
 
-	data, err := yaml.Marshal(cfg)
+	data, err := yaml.Marshal(&saveCfg)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}

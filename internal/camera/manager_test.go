@@ -614,7 +614,7 @@ func TestAddCamera_AutoID(t *testing.T) {
 }
 
 func TestAddCamera_Persists(t *testing.T) {
-	mgr, _, _, configPath := newTestManager(t)
+	mgr, _, db, configPath := newTestManager(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -627,18 +627,11 @@ func TestAddCamera_Persists(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Reload config from disk
-	loaded, err := config.Load(configPath)
+	_ = configPath
+	row, err := db.GetCamera(ctx, "cam-persist")
 	require.NoError(t, err)
-	found := false
-	for _, cam := range loaded.Cameras {
-		if cam.ID == "cam-persist" {
-			found = true
-			assert.Equal(t, "Persist Camera", cam.Name)
-			break
-		}
-	}
-	assert.True(t, found, "camera should be persisted to config file")
+	require.NotNil(t, row)
+	assert.Equal(t, "Persist Camera", row.Name)
 }
 
 func TestRemoveCamera_WithRecorder(t *testing.T) {
@@ -977,10 +970,11 @@ func TestStartRecorder_PersistsPreparedONVIFState(t *testing.T) {
 	require.Equal(t, "h264", row.Encoding)
 	require.Equal(t, "H264", row.StreamEncoding)
 
-	loaded, err := config.Load(configPath)
+	_ = configPath
+	loaded, err := db.ListCameraConfigs(context.Background())
 	require.NoError(t, err)
 	found := false
-	for _, cam := range loaded.Cameras {
+	for _, cam := range loaded {
 		if cam.ID == "cam-onvif-persist" {
 			found = true
 			require.Equal(t, "main", cam.ProfileToken)
@@ -1064,17 +1058,17 @@ func TestCreateRecorder_ONVIF_ProbesEncodingWhenMediaEngineEnabled(t *testing.T)
 	assert.Equal(t, "h265", row.Encoding)
 	assert.Equal(t, "H265", row.StreamEncoding)
 
-	// Verify config file persistence
-	loaded, err := config.Load(configPath)
+	_ = configPath
+	loaded, err := db.ListCameraConfigs(context.Background())
 	require.NoError(t, err)
 	found := false
-	for _, c := range loaded.Cameras {
+	for _, c := range loaded {
 		if c.ID == "cam-onvif-probe" {
 			found = true
 			assert.Equal(t, "h265", c.Encoding)
 		}
 	}
-	assert.True(t, found, "camera should be persisted to config file")
+	assert.True(t, found, "camera should be persisted to database")
 }
 
 func TestStartMediaPullLocked_UsesCameraRTSPTransport(t *testing.T) {

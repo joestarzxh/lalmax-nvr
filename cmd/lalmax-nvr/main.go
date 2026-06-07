@@ -409,6 +409,10 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		db.Close()
 		return nil, fmt.Errorf("db init: %w", err)
 	}
+	if err := camera.SyncCamerasFromStorage(ctx, cfg, db, configPath); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sync cameras from storage: %w", err)
+	}
 
 	// Step 2: Metrics
 	a.metrics = metrics.NewMetrics()

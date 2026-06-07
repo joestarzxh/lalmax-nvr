@@ -14,10 +14,22 @@ import (
 
 // setupRequest is the JSON body for POST /api/setup.
 type setupRequest struct {
-	Username    string `json:"username"`
-	Password    string `json:"password"`
-	Language    string `json:"language,omitempty"`
-	StoragePath string `json:"storage_path,omitempty"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Language string `json:"language,omitempty"`
+}
+
+func resolveSetupStorageRoot(cfg *config.Config) string {
+	if cfg != nil && strings.TrimSpace(cfg.Storage.RootDir) != "" {
+		return cfg.Storage.RootDir
+	}
+	if envDir := os.Getenv("NVR_DATA_DIR"); envDir != "" {
+		return envDir
+	}
+	if info, err := os.Stat("/data"); err == nil && info.IsDir() {
+		return "/data"
+	}
+	return "/var/lib/lalmax-nvr"
 }
 
 // handleSetup handles POST /api/setup — first-time initialization.
@@ -54,20 +66,8 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build minimal valid config (mirrors cmdInit pattern)
-	dataDir := strings.TrimSpace(req.StoragePath)
-	if dataDir == "" {
-		// Prefer existing config value, then Docker env detection
-		if h.config.Storage.RootDir != "" {
-			dataDir = h.config.Storage.RootDir
-		} else if envDir := os.Getenv("NVR_DATA_DIR"); envDir != "" {
-			dataDir = envDir
-		} else if info, err := os.Stat("/data"); err == nil && info.IsDir() {
-			dataDir = "/data"
-		} else {
-			dataDir = "/var/lib/lalmax-nvr"
-		}
-	}
+	// Storage root is determined by config file / env / Docker — not the setup wizard.
+	dataDir := resolveSetupStorageRoot(h.config)
 
 	cfg := config.Config{
 		Server:  config.ServerConfig{Listen: ":9090"},

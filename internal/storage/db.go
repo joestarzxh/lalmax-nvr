@@ -354,6 +354,14 @@ func (d *DB) Init(ctx context.Context) error {
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_stream_bans_stream ON stream_bans(stream_id)")
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='17' WHERE key='schema_version'")
 
+	// Migration v17 → v18: per-camera extras JSON (timelapse, transcoding, etc.)
+	var extrasColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='extras_json'`).Scan(&extrasColExists)
+	if extrasColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, `ALTER TABLE cameras ADD COLUMN extras_json TEXT DEFAULT ''`)
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='18' WHERE key='schema_version'")
+
 	return nil
 
 }

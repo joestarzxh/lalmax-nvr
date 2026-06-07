@@ -846,8 +846,6 @@
   "setup.confirmPassword": "确认密码",
   "setup.confirmPasswordPlaceholder": "再次输入密码",
   "setup.language": "语言",
-  "setup.storagePath": "存储路径",
-  "setup.storagePathHint": "录像文件的存储目录",
   "setup.capabilities": "浏览器能力检测",
   "setup.supported": "支持",
   "setup.notSupported": "不支持",

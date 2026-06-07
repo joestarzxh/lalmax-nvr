@@ -232,11 +232,9 @@ export async function setupApi(
   username: string,
   password: string,
   language?: string,
-  storagePath?: string,
 ): Promise<SetupResponse> {
   const body: Record<string, string> = { username, password };
   if (language) body.language = language;
-  if (storagePath) body.storage_path = storagePath;
 
   const response = await fetch('/api/setup', {
     method: 'POST',

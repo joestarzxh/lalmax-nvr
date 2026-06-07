@@ -402,7 +402,7 @@ func TestSaveLoadWithEncryption(t *testing.T) {
 	require.Equal(t, "my-secret-pass", loaded.Auth.Password)
 	require.Equal(t, "user-123", loaded.Xiaomi.UserID)
 	require.Equal(t, "token-abc", loaded.Xiaomi.Token)
-	require.Equal(t, "cam-secret", loaded.Cameras[0].Password)
+	require.Empty(t, loaded.Cameras, "cameras must not be persisted in YAML")
 }
 
 func TestSaveLoadWithoutEncryption(t *testing.T) {
@@ -424,17 +424,17 @@ func TestSaveLoadWithoutEncryption(t *testing.T) {
 	err := Save(path, cfg)
 	require.NoError(t, err)
 
-	// Raw file should have plaintext
+	// Raw file should have plaintext auth only (cameras are not persisted)
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Contains(t, string(raw), "plain-pass")
-	require.Contains(t, string(raw), "cam-plain")
+	require.NotContains(t, string(raw), "cam-plain")
 
 	// Load should return plaintext
 	loaded, err := Load(path)
 	require.NoError(t, err)
 	require.Equal(t, "plain-pass", loaded.Auth.Password)
-	require.Equal(t, "cam-plain", loaded.Cameras[0].Password)
+	require.Empty(t, loaded.Cameras)
 }
 
 func TestLoadMixedEncryptedPlaintext(t *testing.T) {
@@ -541,7 +541,7 @@ func TestEncryptConfigFile(t *testing.T) {
 	helperSetEnvKey(t, key)
 	fields, err := EncryptConfigFile(path)
 	require.NoError(t, err)
-	require.Len(t, fields, 3) // auth.password, xiaomi.token, cameras[0].password
+	require.Len(t, fields, 2) // auth.password, xiaomi.token
 
 	// Verify encrypted in file
 	raw, _ = os.ReadFile(path)
@@ -556,7 +556,7 @@ func TestEncryptConfigFile(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "will-be-encrypted", loaded.Auth.Password)
 	require.Equal(t, "token-to-encrypt", loaded.Xiaomi.Token)
-	require.Equal(t, "cam-pass", loaded.Cameras[0].Password)
+	require.Empty(t, loaded.Cameras)
 }
 
 func TestEncryptConfigFileNoKey(t *testing.T) {

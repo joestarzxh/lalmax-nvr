@@ -120,11 +120,12 @@ func TestHandleSetup_InvalidJSON(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-func TestHandleSetup_CustomStoragePath(t *testing.T) {
+func TestHandleSetup_UsesExistingStorageRoot(t *testing.T) {
 	t.Parallel()
 	h, cfgPath := setupTestHandlerForSetup(t)
+	h.config.Storage.RootDir = "/tmp/existing-nvr-data"
 
-	body := setupRequest{Username: "admin", Password: "testpassword123", StoragePath: "/tmp/custom-nvr"}
+	body := setupRequest{Username: "admin", Password: "testpassword123"}
 	b, _ := json.Marshal(body)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/setup", bytes.NewReader(b))
@@ -137,7 +138,7 @@ func TestHandleSetup_CustomStoragePath(t *testing.T) {
 
 	saved, err := config.Load(cfgPath)
 	require.NoError(t, err)
-	require.Equal(t, "/tmp/custom-nvr", saved.Storage.RootDir)
+	require.Equal(t, "/tmp/existing-nvr-data", saved.Storage.RootDir)
 }
 
 func TestHandleSetup_TokenIsValid(t *testing.T) {

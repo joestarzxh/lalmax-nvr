@@ -848,8 +848,6 @@
   "setup.confirmPassword": "Confirm Password",
   "setup.confirmPasswordPlaceholder": "Re-enter your password",
   "setup.language": "Language",
-  "setup.storagePath": "Storage Path",
-  "setup.storagePathHint": "Directory where recordings will be stored",
   "setup.capabilities": "Browser Capabilities",
   "setup.supported": "Supported",
   "setup.notSupported": "Not supported",

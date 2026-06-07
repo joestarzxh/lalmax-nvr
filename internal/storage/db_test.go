@@ -894,7 +894,7 @@ func TestMigrationV5ToV6_OnvifColumns(t *testing.T) {
 	var version string
 	err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "17", version)
+	require.Equal(t, "18", version)
 }
 
 func TestInsertRecordingWithRetry_Success(t *testing.T) {

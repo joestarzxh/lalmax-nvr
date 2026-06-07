@@ -705,8 +705,10 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 
 	for _, cam := range cm.cfg.Cameras {
 		// Insert camera record into database
-		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding); err != nil {
+		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding, cameraRTSPTransport(cam)); err != nil {
 			logger.Error("failed to insert camera record", "camera_id", cam.ID, "error", err)
+		} else if err := cm.db.SaveCameraExtras(ctx, cam); err != nil {
+			logger.Error("failed to save camera extras", "camera_id", cam.ID, "error", err)
 		} else {
 			logger.Info("inserted camera record", "camera_id", cam.ID)
 		}
@@ -846,6 +848,8 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	if cm.db != nil {
 		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding, cameraRTSPTransport(cam)); err != nil {
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
+		} else if err := cm.db.SaveCameraExtras(ctx, cam); err != nil {
+			logger.Error("failed to save camera extras", "camera_id", cam.ID, "error", err)
 		}
 	}
 
@@ -858,11 +862,6 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 		if err := cm.startRecorder(ctx, cam, segDur); err != nil {
 			logger.Error("failed to start recorder", "error", err)
 		}
-	}
-
-	// Persist config to disk
-	if err := cm.persistConfig(); err != nil {
-		logger.Error("failed to persist config", "error", err)
 	}
 
 	return cam.ID, nil
@@ -1127,6 +1126,8 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if cm.db != nil {
 		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding, cameraRTSPTransport(*cam)); err != nil {
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
+		} else if err := cm.db.SaveCameraExtras(ctx, *cam); err != nil {
+			logger.Error("failed to save camera extras", "camera_id", cam.ID, "error", err)
 		}
 		// Persist DB-only metadata fields
 		if updates.Description != nil || updates.Location != nil || updates.Brand != nil || updates.Model != nil || updates.SerialNumber != nil || updates.RetentionDays != nil {
@@ -1184,11 +1185,6 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 			}
 		}
 		_ = cm.stopMediaPullLocked(ctx, cam.ID)
-	}
-
-	// Persist config to disk
-	if err := cm.persistConfig(); err != nil {
-		logger.Error("failed to persist config", "error", err)
 	}
 
 	return cam, nil

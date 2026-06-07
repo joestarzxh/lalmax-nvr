@@ -13,7 +13,6 @@
   let showPassword = $state(false);
   let showConfirmPassword = $state(false);
   let language = $state('en');
-  let storagePath = $state('/var/lib/lalmax-nvr');
   let error = $state('');
   let loading = $state(false);
 
@@ -102,7 +101,7 @@
     loading = true;
 
     try {
-      const res = await setupApi(username, password, language, storagePath);
+      const res = await setupApi(username, password, language);
 
       // Decode token to get credentials and store them
       const decoded = atob(res.token);
@@ -304,20 +303,6 @@
           <option value="en">English</option>
           <option value="zh">中文</option>
         </select>
-      </div>
-
-      <!-- Optional: Storage Path -->
-      <div>
-        <label for="setup-storage" class="input-label">{t('setup.storagePath')}</label>
-        <input
-          id="setup-storage"
-          type="text"
-          class="input"
-          bind:value={storagePath}
-          placeholder="/var/lib/lalmax-nvr"
-          disabled={loading}
-        />
-        <p class="th-text-tertiary text-xs mt-1">{t('setup.storagePathHint')}</p>
       </div>
 
       <!-- Submit -->

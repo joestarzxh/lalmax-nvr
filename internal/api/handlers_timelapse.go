@@ -116,12 +116,21 @@ func (h *Handler) handlePutCameraTimelapse(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Persist config to disk
-	if err := config.Save(h.configPath, h.config); err != nil {
-		logger.Warn("failed to save config after timelapse update", "camera_id", id, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to save config")
+	if h.db == nil {
+		writeError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	for i := range h.config.Cameras {
+		if h.config.Cameras[i].ID != id {
+			continue
+		}
+		if err := h.db.SaveCameraExtras(r.Context(), h.config.Cameras[i]); err != nil {
+			logger.Warn("failed to save camera timelapse settings", "camera_id", id, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to save timelapse settings")
+			return
+		}
+		break
+	}
 
-	writeJSON(w, http.StatusOK, h.config.Cameras)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
