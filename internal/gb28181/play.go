@@ -41,12 +41,19 @@ type StopPlayInput struct {
 func (g *GB28181API) handlerBye(req *sip.Request, tx sip.ServerTransaction) {
 	deviceID := req.From().Address.User
 	callID := string(*req.CallID())
-	slog.Info("received BYE", "device_id", deviceID, "call_id", callID)
+	source := req.Source()
+
+	slog.Info("[SIP] BYE received",
+		"device_id", deviceID,
+		"call_id", callID,
+		"source", source,
+	)
 
 	// Find and remove the stream by matching CallID
 	g.streams.streams.Range(func(key, value any) bool {
 		stream := value.(*Streams)
 		if stream.DeviceID == deviceID {
+			slog.Info("[SIP] BYE - stopping stream", "device_id", deviceID, "stream_key", key)
 			g.streams.deleteStream(key.(string))
 			if stream.SessionID != "" && g.mediaEngine != nil {
 				_ = g.mediaEngine.StopRTPReceive(context.Background(), stream.SessionID)
@@ -57,6 +64,7 @@ func (g *GB28181API) handlerBye(req *sip.Request, tx sip.ServerTransaction) {
 	})
 
 	tx.Respond(sip.NewResponseFromRequest(req, 200, "OK", nil))
+	slog.Info("[SIP] BYE response sent", "device_id", deviceID)
 }
 
 // Play initiates a GB28181 INVITE to pull media from a device.
@@ -244,6 +252,16 @@ func (g *GB28181API) sipPlayInvite(ch *Channel, in *PlayInput, port int) (string
 		Port:   getPort(dev.Address),
 	}
 
+	slog.Info("[SIP] INVITE preparing",
+		"device_id", in.DeviceID,
+		"channel_id", ch.ChannelID,
+		"recipient", recipient.String(),
+		"media_ip", ipStr,
+		"media_port", port,
+		"ssrc", ssrc,
+		"stream_mode", in.StreamMode,
+	)
+
 	req := sip.NewRequest(sip.INVITE, recipient)
 	req.SetBody(body)
 	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
@@ -267,6 +285,17 @@ func (g *GB28181API) sipPlaybackInvite(ch *Channel, in *PlaybackInput, port int)
 		Port:   getPort(dev.Address),
 	}
 
+	slog.Info("[SIP] Playback INVITE preparing",
+		"device_id", in.DeviceID,
+		"channel_id", ch.ChannelID,
+		"recipient", recipient.String(),
+		"media_ip", ipStr,
+		"media_port", port,
+		"ssrc", ssrc,
+		"start_time", in.StartTime,
+		"end_time", in.EndTime,
+	)
+
 	req := sip.NewRequest(sip.INVITE, recipient)
 	req.SetBody(body)
 	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
@@ -280,8 +309,10 @@ func (g *GB28181API) doInvite(req *sip.Request, ch *Channel) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	slog.Info("[SIP] INVITE sending", "recipient", req.Recipient.String())
 	tx, err := g.client.TransactionRequest(ctx, req)
 	if err != nil {
+		slog.Error("[SIP] INVITE send failed", "error", err)
 		return "", fmt.Errorf("INVITE send failed: %w", err)
 	}
 	defer tx.Terminate()
@@ -289,18 +320,43 @@ func (g *GB28181API) doInvite(req *sip.Request, ch *Channel) (string, error) {
 	for {
 		select {
 		case res := <-tx.Responses():
+			slog.Info("[SIP] INVITE response received",
+				"status_code", res.StatusCode,
+				"reason", res.Reason,
+			)
 			if res.IsProvisional() {
+				slog.Debug("[SIP] INVITE provisional response", "status", res.StatusCode)
 				continue
 			}
 			if res.IsSuccess() {
-				ack := sip.NewRequest(sip.ACK, req.Recipient)
+				slog.Info("[SIP] INVITE success - preparing ACK")
+				
+				// Get Contact from 200 OK for ACK destination
+				ackRecipient := req.Recipient
+				if contact := res.GetHeader("Contact"); contact != nil {
+					var contactUri sip.Uri
+					if err := sip.ParseUri(contact.Value(), &contactUri); err == nil {
+						ackRecipient = contactUri
+						slog.Info("[SIP] ACK using Contact from 200 OK", "contact", contact.Value())
+					} else {
+						slog.Warn("[SIP] Failed to parse Contact URI", "error", err)
+					}
+				}
+				
+				ack := sip.NewRequest(sip.ACK, ackRecipient)
 				ack.AppendHeader(sip.HeaderClone(req.From()))
 				ack.AppendHeader(sip.HeaderClone(res.To()))
 				ack.AppendHeader(sip.HeaderClone(req.CallID()))
 				cseq := *req.CSeq()
 				cseq.MethodName = sip.ACK
 				ack.AppendHeader(&cseq)
-				_, _ = g.client.Do(context.Background(), ack)
+				
+				slog.Info("[SIP] ACK sending", "to", ackRecipient.String())
+				if err := g.client.WriteRequest(ack); err != nil {
+					slog.Error("[SIP] ACK send failed", "error", err)
+				} else {
+					slog.Info("[SIP] ACK sent successfully")
+				}
 
 				ssrc := ""
 				if subj := req.GetHeader("Subject"); subj != nil {
@@ -310,10 +366,19 @@ func (g *GB28181API) doInvite(req *sip.Request, ch *Channel) (string, error) {
 						ssrc = strings.SplitN(parts[1], ",", 2)[0]
 					}
 				}
+				
+				// Parse SDP from response to get media info
+				if len(res.Body()) > 0 {
+					slog.Info("[SIP] INVITE response SDP", "body", string(res.Body()))
+				}
+				
+				slog.Info("[SIP] INVITE completed", "ssrc", ssrc)
 				return ssrc, nil
 			}
+			slog.Warn("[SIP] INVITE rejected", "status", res.StatusCode, "reason", res.Reason)
 			return "", fmt.Errorf("INVITE rejected: %d %s", res.StatusCode, res.Reason)
 		case <-ctx.Done():
+			slog.Error("[SIP] INVITE timeout")
 			return "", fmt.Errorf("INVITE timeout")
 		}
 	}

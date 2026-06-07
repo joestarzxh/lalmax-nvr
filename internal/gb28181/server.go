@@ -9,6 +9,7 @@ import (
 
 	"github.com/emiago/sipgo"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
+	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
 
 // Server is the GB28181 SIP signaling server.
@@ -23,8 +24,13 @@ type Server struct {
 }
 
 // NewServer creates and starts a GB28181 SIP server.
-func NewServer(cfg *Config, mediaEngine media.Engine) (*Server, func()) {
-	store := NewDeviceStore()
+func NewServer(cfg *Config, mediaEngine media.Engine, db *storage.DB) (*Server, func()) {
+	store := NewDeviceStore(db)
+	
+	// Load devices from database
+	if err := store.LoadFromDB(); err != nil {
+		slog.Error("failed to load GB28181 devices from database", "error", err)
+	}
 
 	sipHost := cfg.Host
 	if sipHost == "" {
@@ -78,15 +84,18 @@ func NewServer(cfg *Config, mediaEngine media.Engine) (*Server, func()) {
 
 	go func() {
 		addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
-		slog.Info("GB28181 SIP server starting", "addr", addr)
+		slog.Info("GB28181 SIP UDP server starting", "addr", addr)
 		if err := srv.ListenAndServe(ctx, "udp", addr); err != nil {
 			slog.Error("SIP UDP listener error", "error", err)
 		}
 	}()
 	go func() {
 		addr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
+		slog.Info("GB28181 SIP TCP server starting", "addr", addr)
 		if err := srv.ListenAndServe(ctx, "tcp", addr); err != nil {
 			slog.Error("SIP TCP listener error", "error", err)
+		} else {
+			slog.Info("GB28181 SIP TCP server stopped")
 		}
 	}()
 	go s.startTickerCheck()
@@ -165,6 +174,11 @@ func (s *Server) Playback(in *PlaybackInput) (string, error) {
 	return s.gb.Playback(in)
 }
 
+// IsStreamPlaying reports whether the given stream ID has an active GB28181 play session.
+func (s *Server) IsStreamPlaying(streamID string) bool {
+	return globalStreams.IsStreamPlaying(streamID)
+}
+
 // ListDevices returns all registered devices with their channels.
 func (s *Server) ListDevices() []map[string]interface{} {
 	var result []map[string]interface{}
@@ -173,7 +187,9 @@ func (s *Server) ListDevices() []map[string]interface{} {
 		dev.Channels.Range(func(k, v any) bool {
 			ch := v.(*Channel)
 			channels = append(channels, map[string]interface{}{
-				"channel_id": ch.ChannelID,
+				"channel_id":  ch.ChannelID,
+				"is_playing":  globalStreams.isPlaying(deviceID, ch.ChannelID),
+				"stream_id":   StreamID(deviceID, ch.ChannelID),
 			})
 			return true
 		})
@@ -190,9 +206,12 @@ func (s *Server) ListDevices() []map[string]interface{} {
 
 // Stop stops the SIP server.
 func (s *Server) Stop() {
+	slog.Info("[SIP] stopping GB28181 server")
 	if s.cancel != nil {
 		s.cancel()
 	}
+	// Small delay to allow listeners to close
+	time.Sleep(100 * time.Millisecond)
 	if s.client != nil {
 		s.client.Close()
 	}
@@ -202,6 +221,7 @@ func (s *Server) Stop() {
 	if s.ua != nil {
 		s.ua.Close()
 	}
+	slog.Info("[SIP] GB28181 server stopped")
 }
 
 // resolveHost resolves a hostname to IP address.

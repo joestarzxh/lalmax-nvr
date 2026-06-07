@@ -2,6 +2,10 @@ package media
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -229,4 +233,33 @@ func TestLalmaxHTTPBuildPlayURL_WebRTC(t *testing.T) {
 	require.NotNil(t, playURL)
 	require.Equal(t, "whep", playURL.Protocol)
 	require.Equal(t, "http://127.0.0.1:1290/webrtc/whep?app_name=live&streamid=cam1", playURL.URL)
+}
+
+func TestLalmaxHTTP_GetStream_GroupNotFound(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/stat/group", r.URL.Path)
+		require.Equal(t, "34020000001320000001:34020000001320000001", r.URL.Query().Get("stream_name"))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error_code": 1001,
+			"desp":       "group not found",
+			"data":       nil,
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	engine, err := NewLalmaxHTTP(LalmaxHTTPConfig{BaseURL: srv.URL})
+	require.NoError(t, err)
+
+	info, err := engine.GetStream(context.Background(), "34020000001320000001:34020000001320000001")
+	require.NoError(t, err)
+	require.Nil(t, info)
+}
+
+func TestIsLalGroupNotFound(t *testing.T) {
+	t.Parallel()
+	require.True(t, isLalGroupNotFound(fmt.Errorf("lalmax error 1001: group not found")))
+	require.False(t, isLalGroupNotFound(fmt.Errorf("lalmax error 2002: listen fail")))
+	require.False(t, isLalGroupNotFound(nil))
 }

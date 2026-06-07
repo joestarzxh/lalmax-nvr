@@ -716,6 +716,11 @@ func (cm *CameraManager) Start(ctx context.Context) error {
 			continue
 		}
 
+		if cam.Protocol == string(model.ProtoGB28181) {
+			logger.Info("gb28181 camera managed via GB28181 API, skipping recorder", "camera_id", cam.ID)
+			continue
+		}
+
 		if err := cm.startRecorder(ctx, cam, segDur); err != nil {
 			logger.Error("failed to start recorder", "camera_id", cam.ID, "protocol", cam.Protocol, "error", err)
 		} else {

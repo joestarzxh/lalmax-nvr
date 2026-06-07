@@ -47,6 +47,9 @@ func TestValidateProtocolEncoding(t *testing.T) {
 		{"http", "jpeg"},
 		{"onvif", "h264"},
 		{"onvif", "h265"},
+		{"gb28181", "h264"},
+		{"gb28181", "h265"},
+		{"gb28181", ""},
 	}
 	for _, c := range validCombos {
 		t.Run("valid_"+c.proto+"_"+c.enc, func(t *testing.T) {

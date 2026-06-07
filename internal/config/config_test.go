@@ -221,6 +221,19 @@ func TestValidateOnvifProtocol(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestValidateGB28181Protocol(t *testing.T) {
+	cfg := &Config{Cameras: []CameraConfig{{
+		ID:       "34020000001320000001:34020000001320000001",
+		Name:     "GB28181 IPC",
+		Protocol: "gb28181",
+		Encoding: "h264",
+		URL:      "rtsp://127.0.0.1:5544/live/34020000001320000001:34020000001320000001",
+	}}}
+	cfg.ApplyDefaults()
+	err := Validate(cfg)
+	require.NoError(t, err)
+}
+
 func TestResolveMergeConfig_NilReturnsGlobal(t *testing.T) {
 	global := MergeConfig{
 		Enabled:            true,

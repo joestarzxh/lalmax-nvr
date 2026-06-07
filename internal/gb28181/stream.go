@@ -48,3 +48,31 @@ func (m *streamsManager) deleteStream(key string) (*Streams, bool) {
 	}
 	return v.(*Streams), true
 }
+
+// StreamID returns the internal lalmax stream ID for a GB28181 channel.
+func StreamID(deviceID, channelID string) string {
+	return deviceID + ":" + channelID
+}
+
+func playStreamKey(deviceID, channelID string) string {
+	return "play:" + deviceID + ":" + channelID
+}
+
+func (m *streamsManager) isPlaying(deviceID, channelID string) bool {
+	_, ok := m.loadStream(playStreamKey(deviceID, channelID))
+	return ok
+}
+
+// IsStreamPlaying reports whether a lalmax stream ID has an active GB28181 play session.
+func (m *streamsManager) IsStreamPlaying(streamID string) bool {
+	found := false
+	m.streams.Range(func(_, value any) bool {
+		stream := value.(*Streams)
+		if StreamID(stream.DeviceID, stream.ChannelID) == streamID {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}

@@ -261,6 +261,12 @@ func (h *Handler) handleDownloadRecording(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	switch strings.ToLower(filepath.Ext(filePath)) {
+	case ".mp4":
+		w.Header().Set("Content-Type", "video/mp4")
+	case ".jpg", ".jpeg":
+		w.Header().Set("Content-Type", "image/jpeg")
+	}
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", filepath.Base(filePath)))
 	http.ServeFile(w, r, filePath)
 }

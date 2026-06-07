@@ -437,7 +437,7 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("camera[%d] and camera[%d] have duplicate id %q", j, i, c.ID)
 		}
 		seen[c.ID] = i
-		if strings.TrimSpace(c.URL) == "" && c.Protocol != "onvif" && c.Protocol != "xiaomi" {
+		if strings.TrimSpace(c.URL) == "" && c.Protocol != "onvif" && c.Protocol != "xiaomi" && c.Protocol != string(model.ProtoGB28181) {
 			return fmt.Errorf("camera[%d].url is required", i)
 		}
 		// Validate URL format if set
@@ -1070,6 +1070,8 @@ func (cfg *Config) ApplyDefaults() {
 				cam.Encoding = "jpeg"
 			case "onvif":
 				cam.Encoding = "" // ONVIF auto-detects
+			case string(model.ProtoGB28181):
+				cam.Encoding = "h264"
 			}
 		}
 		// Reject audio_enabled for MJPEG/HTTP-JPEG cameras (no audio source)

@@ -176,6 +176,7 @@ const (
 	ProtoRTSPH265  Protocol = "rtsp_h265"
 	ProtoONVIF     Protocol = "onvif"
 	ProtoXiaomi    Protocol = "xiaomi"
+	ProtoGB28181   Protocol = "gb28181"
 )
 
 // Transport-only protocol constants
@@ -228,8 +229,9 @@ type AudioFrame struct {
 var ValidEncodingsForProtocol = map[string][]string{
 	string(ProtoRTSP):   {string(FormatH264), string(FormatH265), string(FormatMJPEG)},
 	string(ProtoHTTP):   {string(EncJPEG)},
-	string(ProtoONVIF):  {string(FormatH264), string(FormatH265)},
-	string(ProtoXiaomi): {string(FormatH264), string(FormatH265)},
+	string(ProtoONVIF):    {string(FormatH264), string(FormatH265)},
+	string(ProtoXiaomi):   {string(FormatH264), string(FormatH265)},
+	string(ProtoGB28181):  {string(FormatH264), string(FormatH265)},
 }
 
 // ParseLegacyProtocol splits old combined protocol strings (e.g. "rtsp_h264") into separate protocol and encoding
@@ -259,6 +261,10 @@ func ValidateProtocolEncoding(protocol, encoding string) error {
 	}
 	// ONVIF allows empty encoding (auto-detect)
 	if protocol == string(ProtoONVIF) && encoding == "" {
+		return nil
+	}
+	// GB28181 streams are managed via SIP; encoding is informational for stream mapping.
+	if protocol == string(ProtoGB28181) && encoding == "" {
 		return nil
 	}
 	for _, e := range encodings {

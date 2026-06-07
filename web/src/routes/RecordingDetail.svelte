@@ -4,7 +4,7 @@
     getRecording,
     deleteRecording,
     downloadRecording as apiDownloadRecording,
-    loadRecordingVideoBlob,
+    getRecordingPlaybackUrl,
     listRecordings
   } from '$lib/api';
   import { getTranscodingStatus, enqueueTranscodeTask } from '$lib/api/transcoding';
@@ -23,12 +23,10 @@
   let error = $state('');
   let deleteConfirm = $state(false);
   let mjpegPlayer: MjpegPlayer | undefined = $state();
-  let videoBlobUrl = $state('');
+  let videoSrc = $state('');
   let videoLoading = $state(false);
   let downloadProgress = $state(0);
   let isDownloading = $state(false);
-  let nextRecordingId = $state<string | null>(null);
-  let nextBlobUrl = $state<string | null>(null);
   let isTransitioning = $state(false);
   // Transcoding state
   let transcodingStatus = $state<ManagerStatus | null>(null);
@@ -38,9 +36,6 @@
   async function loadRecording() {
     loading = true;
     error = '';
-    if (nextBlobUrl) { URL.revokeObjectURL(nextBlobUrl); }
-    nextRecordingId = null;
-    nextBlobUrl = null;
     try {
       recording = await getRecording(currentId);
       if (recording) {
@@ -79,21 +74,6 @@
     if (next) { isTransitioning = true; currentId = next.id; await loadRecording(); isTransitioning = false; }
   }
 
-  function handleTimeUpdate(e: Event) {
-    const video = e.target as HTMLVideoElement;
-    if (video.duration && video.currentTime / video.duration > 0.8 && !nextRecordingId) prefetchNextRecording();
-  }
-
-  async function prefetchNextRecording() {
-    if (nextRecordingId || !recording) return;
-    const next = await loadNextRecording();
-    if (next) {
-      nextRecordingId = next.id;
-      try { nextBlobUrl = await loadRecordingVideoBlob(next.id); }
-      catch (e) { console.warn('Failed to prefetch next recording:', e); nextRecordingId = null; }
-    }
-  }
-
   async function navigateToNext() {
     const next = await loadNextRecording();
     if (next) { isTransitioning = true; currentId = next.id; await loadRecording(); isTransitioning = false; }
@@ -101,10 +81,15 @@
 
   async function initVideoPlayer() {
     videoLoading = true;
-    if (videoBlobUrl) { URL.revokeObjectURL(videoBlobUrl); videoBlobUrl = ''; }
-    try { videoBlobUrl = await loadRecordingVideoBlob(currentId); }
-    catch (e) { console.error('Failed to load video:', e); error = t('detail.failedLoadVideo'); }
-    finally { videoLoading = false; }
+    videoSrc = '';
+    try {
+      videoSrc = getRecordingPlaybackUrl(currentId);
+    } catch (e) {
+      console.error('Failed to load video:', e);
+      error = t('detail.failedLoadVideo');
+    } finally {
+      videoLoading = false;
+    }
   }
 
   async function confirmDelete() {
@@ -203,13 +188,6 @@
     }
   }
 
-  $effect(() => {
-    return () => {
-      if (videoBlobUrl) URL.revokeObjectURL(videoBlobUrl);
-      if (nextBlobUrl) URL.revokeObjectURL(nextBlobUrl);
-    };
-  });
-
   onMount(() => {
     currentId = recordingId;
     if (!currentId) { error = t('detail.recordingIdRequired'); loading = false; return; }
@@ -248,7 +226,7 @@
       <div class="space-y-6">
         <!-- Playback section -->
         <div class="card border th-border overflow-hidden">
-        {#if recording.format === 'h264' || recording.format === 'h265'}
+        {#if recording.format === 'h264' || recording.format === 'h265' || recording.format === 'timelapse'}
             <div class="relative max-w-full bg-black rounded-t-[var(--radius-md)]">
               {#if isTransitioning}
                 <div class="absolute inset-0 bg-black/60 flex items-center justify-center z-10">
@@ -257,9 +235,9 @@
               {/if}
               {#if videoLoading}
                 <div class="flex items-center justify-center h-64"><div class="spinner spinner-lg"></div></div>
-              {:else if videoBlobUrl}
-                <video controls preload="auto" class="w-full max-h-[80vh]" src={videoBlobUrl}
-                  onended={handleVideoEnded} ontimeupdate={handleTimeUpdate}>
+              {:else if videoSrc}
+                <video controls preload="metadata" class="w-full max-h-[80vh]" src={videoSrc}
+                  onended={handleVideoEnded}>
                   <track kind="captions" />
                   {t('detail.videoUnsupported')}
                 </video>

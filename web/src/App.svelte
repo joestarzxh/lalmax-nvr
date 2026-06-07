@@ -17,6 +17,7 @@
 
   import TranscodingHistory from './routes/TranscodingHistory.svelte';
   import Surveillance from './routes/Surveillance.svelte';
+  import Devices from './routes/Devices.svelte';
   import Status from './routes/Status.svelte';
   import Header from './components/Header';
 
@@ -102,13 +103,24 @@
       return { route: 'surveillance', params: {} };
     }
 
+    if (segments[0] === 'devices') {
+      return { route: 'devices', params: {} };
+    }
+
     if (segments[0] === 'status') {
       const tab = segments[1] === 'transcoding' ? 'transcoding' : 'health';
       return { route: 'status', params: { tab } };
     }
     if (segments[0] === 'streams') {
-      if (segments[1]) {
-        return { route: 'stream-detail', params: { id: segments[1] } };
+      const streamPath = path.replace(/^\/?streams\/?/, '');
+      if (streamPath) {
+        let streamId = streamPath;
+        try {
+          streamId = decodeURIComponent(streamId);
+        } catch {
+          // keep raw segment when decoding fails
+        }
+        return { route: 'stream-detail', params: { id: streamId } };
       }
       return { route: 'streams', params: {} };
     }
@@ -220,6 +232,8 @@
       <LiveView cameraId={params.id} />
     {:else if currentRoute === 'surveillance'}
       <Surveillance />
+    {:else if currentRoute === 'devices'}
+      <Devices />
     {:else if currentRoute === 'status'}
       <Status initialTab={params.tab || 'health'} />
     {:else if currentRoute === 'streams'}

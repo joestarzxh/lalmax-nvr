@@ -59,6 +59,7 @@
   const navItems = [
     { href: '#/dashboard', labelKey: 'nav.dashboard', route: '/dashboard' },
     { href: '#/surveillance', labelKey: 'nav.surveillance', route: '/surveillance' },
+    { href: '#/devices', labelKey: 'nav.devices', route: '/devices' },
     { href: '#/recordings', labelKey: 'nav.recordings', route: '/recordings' },
     { href: '#/streams', labelKey: 'nav.streams', route: '/streams' },
     { href: '#/stats', labelKey: 'nav.stats', route: '/stats' },

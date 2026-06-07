@@ -1,7 +1,6 @@
 package gb28181
 
 import (
-	"encoding/xml"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -117,7 +116,7 @@ func (g *GB28181API) QueryRecordInfo(deviceID, channelID string, startTime, endT
 // handleRecordInfoResponse processes a RecordInfo response from a device.
 func (g *GB28181API) handleRecordInfoResponse(deviceID string, body []byte) {
 	var msg MessageRecordInfoResponse
-	if err := xml.Unmarshal(body, &msg); err != nil {
+	if err := xmlUnmarshal(body, &msg); err != nil {
 		slog.Error("RecordInfo xml decode error", "device_id", deviceID, "error", err)
 		return
 	}

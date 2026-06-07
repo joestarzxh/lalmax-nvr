@@ -1,7 +1,7 @@
 /**
  * Recording API — list, download, frames, stats, archives
  */
-import { apiRequest, apiRequestBlob, getAuthHeader } from './client';
+import { apiRequest, apiRequestBlob, getAuthHeader, getCredentials } from './client';
 
 // --- Types ---
 
@@ -124,14 +124,25 @@ export async function batchDeleteRecordings(
 }
 
 export function getRecordingDownloadUrl(id: string): string {
-  return `/api/recordings/${id}/download`;
+  return `/api/recordings/${encodeURIComponent(id)}/download`;
+}
+
+/** Direct playback URL with ?token= auth — enables browser Range requests (no full-file blob). */
+export function getRecordingPlaybackUrl(id: string): string {
+  let url = getRecordingDownloadUrl(id);
+  const creds = getCredentials();
+  if (creds) {
+    const token = btoa(`${creds.username}:${creds.password}`);
+    url += `?token=${encodeURIComponent(token)}`;
+  }
+  return url;
 }
 
 export async function downloadRecording(
   id: string,
   onProgress?: (loaded: number, total: number) => void
 ): Promise<void> {
-  const url = `/api/recordings/${id}/download`;
+  const url = `/api/recordings/${encodeURIComponent(id)}/download`;
 
   const blob = await new Promise<Blob>((resolve, reject) => {
     const xhr = new XMLHttpRequest();

@@ -100,6 +100,10 @@ func (d *DB) Init(ctx context.Context) error {
 	if _, err := d.db.ExecContext(ctx, recSQL); err != nil {
 		return err
 	}
+	// GB28181 tables
+	if err := d.createGB28181Tables(ctx); err != nil {
+		return err
+	}
 	// indices
 	idx1 := `CREATE INDEX IF NOT EXISTS idx_recordings_camera ON recordings(camera_id);`
 	idx2 := `CREATE INDEX IF NOT EXISTS idx_recordings_time ON recordings(started_at);`

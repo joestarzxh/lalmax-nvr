@@ -15,6 +15,9 @@ import (
 	"time"
 )
 
+// lal ErrorCodeGroupNotFound — group not in lalmax yet (e.g. GB28181 RTP port open, no packets).
+const lalErrorCodeGroupNotFound = 1001
+
 type LalmaxHTTPConfig struct {
 	BaseURL    string
 	PublicURL  string
@@ -191,10 +194,24 @@ func (e *LalmaxHTTP) GetStream(ctx context.Context, streamID string) (*StreamInf
 	q := url.Values{"stream_name": []string{streamID}}
 	var resp lalResp[groupPayload]
 	if err := e.getJSON(ctx, "/api/stat/group", q, &resp); err != nil {
+		if isLalGroupNotFound(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	info := groupToStreamInfo(resp.Data)
 	return &info, nil
+}
+
+func isLalGroupNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var code int
+	if _, scanErr := fmt.Sscanf(err.Error(), "lalmax error %d:", &code); scanErr == nil {
+		return code == lalErrorCodeGroupNotFound
+	}
+	return strings.Contains(err.Error(), "group not found")
 }
 
 func (e *LalmaxHTTP) ListStreams(ctx context.Context) ([]StreamInfo, error) {

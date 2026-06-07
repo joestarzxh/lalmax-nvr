@@ -1,7 +1,6 @@
 package gb28181
 
 import (
-	"encoding/xml"
 	"fmt"
 	"log/slog"
 )
@@ -19,7 +18,7 @@ type MessageDeviceInfoResponse struct {
 
 func (g *GB28181API) handleDeviceInfoResponse(deviceID string, body []byte) {
 	var msg MessageDeviceInfoResponse
-	if err := xml.Unmarshal(body, &msg); err != nil {
+	if err := xmlUnmarshal(body, &msg); err != nil {
 		slog.Error("device info xml decode error", "device_id", deviceID, "error", err)
 		return
 	}
@@ -31,6 +30,11 @@ func (g *GB28181API) handleDeviceInfoResponse(deviceID string, body []byte) {
 		"firmware", msg.Firmware,
 		"name", msg.DeviceName,
 	)
+
+	// Persist device info to database
+	if err := g.store.SaveDeviceInfo(deviceID, msg.Manufacturer, msg.Model, msg.Firmware); err != nil {
+		slog.Error("failed to save device info to DB", "device_id", deviceID, "error", err)
+	}
 }
 
 func (g *GB28181API) sendDeviceInfoQuery(deviceID string) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +24,23 @@ const (
 	streamIdleHistoryMaxItems = 200
 )
 
+// normalizeStreamID decodes percent-encoded stream IDs from URL path params.
+// GB28181 stream IDs contain ":" which may arrive as "%3A" or "%253A" when over-encoded.
+func normalizeStreamID(streamID string) string {
+	for range 3 {
+		decoded, err := url.PathUnescape(streamID)
+		if err != nil || decoded == streamID {
+			break
+		}
+		streamID = decoded
+	}
+	return streamID
+}
+
+func streamIDFromRequest(r *http.Request) string {
+	return normalizeStreamID(chi.URLParam(r, "stream_id"))
+}
+
 type streamListResponse struct {
 	Streams []streamSummary `json:"streams"`
 	Total   int             `json:"total"`
@@ -39,8 +57,9 @@ type streamSummary struct {
 	CameraID       string                `json:"camera_id,omitempty"`
 	CameraName     string                `json:"camera_name,omitempty"`
 	SourceType     string                `json:"source_type"`
-	Active         bool                  `json:"active"`
-	Publisher      *cameraSessionStatus  `json:"publisher,omitempty"`
+	Active          bool                  `json:"active"`
+	GB28181Playing  bool                  `json:"gb28181_playing,omitempty"`
+	Publisher       *cameraSessionStatus  `json:"publisher,omitempty"`
 	Subscribers    []cameraSessionStatus `json:"subscribers,omitempty"`
 	VideoCodec     string                `json:"video_codec,omitempty"`
 	AudioCodec     string                `json:"audio_codec,omitempty"`
@@ -184,6 +203,10 @@ func (h *Handler) streamSummaryFromMediaInfo(
 	bindingByStreamID, cameraByID map[string]string,
 ) streamSummary {
 	cameraID, cameraName, managementType, managed := h.resolveStreamManagement(info.StreamID, &info, bindingByStreamID, cameraByID)
+	appName := info.AppName
+	if appName == "" {
+		appName = "live"
+	}
 	item := streamSummary{
 		Engine:         "lalmax",
 		StreamID:       info.StreamID,
@@ -198,13 +221,28 @@ func (h *Handler) streamSummaryFromMediaInfo(
 		AudioCodec:     info.AudioCodec,
 		InFPS:          info.InFPS,
 		LastFrameTime:  timePointer(info.LastFrameTime),
-		PlayURLs:       h.buildStreamPlayURLs(ctx, info.StreamID, info.AppName),
+		PlayURLs:       h.buildStreamPlayURLs(ctx, info.StreamID, appName),
 	}
 	if managed {
 		item.CameraID = cameraID
 		item.CameraName = cameraName
 	}
+	h.applyGB28181PlayingState(&item)
 	return item
+}
+
+func (h *Handler) applyGB28181PlayingState(item *streamSummary) {
+	if h.gb28181Svr == nil || item == nil {
+		return
+	}
+	if !h.gb28181Svr.IsStreamPlaying(item.StreamID) {
+		return
+	}
+	item.GB28181Playing = true
+	item.Active = true
+	if item.SourceType == "camera" {
+		item.SourceType = "gb28181"
+	}
 }
 
 func (h *Handler) buildMergedStreamList(
@@ -226,7 +264,11 @@ func (h *Handler) buildMergedStreamList(
 		if _, ok := byID[cam.ID]; ok {
 			continue
 		}
-		byID[cam.ID] = streamSummary{
+		sourceType := "camera"
+		if cam.Protocol == "gb28181" {
+			sourceType = "gb28181"
+		}
+		item := streamSummary{
 			Engine:         "lalmax",
 			StreamID:       cam.ID,
 			AppName:        "live",
@@ -234,10 +276,12 @@ func (h *Handler) buildMergedStreamList(
 			ManagementType: "camera",
 			CameraID:       cam.ID,
 			CameraName:     cam.Name,
-			SourceType:     "camera",
+			SourceType:     sourceType,
 			Active:         false,
 			PlayURLs:       h.buildStreamPlayURLs(ctx, cam.ID, "live"),
 		}
+		h.applyGB28181PlayingState(&item)
+		byID[cam.ID] = item
 	}
 
 	for streamID, cameraID := range bindingByStreamID {
@@ -346,6 +390,11 @@ func paginateStreamSummaries(items []streamSummary, limit, offset int) ([]stream
 }
 
 func inferStreamSourceType(info media.StreamInfo, managed bool) string {
+	if info.Publisher != nil {
+		if src := inferStreamSourceTypeFromProtocol(info.Publisher.Protocol); src == "gb28181" {
+			return src
+		}
+	}
 	if managed {
 		return "camera"
 	}
@@ -363,6 +412,8 @@ func inferStreamSourceTypeFromProtocol(protocol string) string {
 		return "srt_push"
 	case "rtsp", "relay_pull", "pull":
 		return "relay_pull"
+	case "rtp", "gb28181", "ps":
+		return "gb28181"
 	default:
 		return "stream"
 	}
@@ -452,7 +503,7 @@ func (h *Handler) handleGetStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	streamID := chi.URLParam(r, "stream_id")
+	streamID := streamIDFromRequest(r)
 	if streamID == "" {
 		writeError(w, http.StatusBadRequest, "stream_id is required")
 		return
@@ -505,7 +556,11 @@ func (h *Handler) buildIdleStreamSummary(ctx context.Context, streamID string) (
 		return streamSummary{}, false
 	}
 	if cam != nil && cam.Enabled && !cam.Archived {
-		return streamSummary{
+		sourceType := "camera"
+		if cam.Protocol == "gb28181" {
+			sourceType = "gb28181"
+		}
+		item := streamSummary{
 			Engine:         "lalmax",
 			StreamID:       cam.ID,
 			AppName:        "live",
@@ -513,10 +568,12 @@ func (h *Handler) buildIdleStreamSummary(ctx context.Context, streamID string) (
 			ManagementType: "camera",
 			CameraID:       cam.ID,
 			CameraName:     cam.Name,
-			SourceType:     "camera",
+			SourceType:     sourceType,
 			Active:         false,
 			PlayURLs:       h.buildStreamPlayURLs(ctx, cam.ID, "live"),
-		}, true
+		}
+		h.applyGB28181PlayingState(&item)
+		return item, true
 	}
 
 	binding, err := h.db.GetStreamBinding(ctx, streamID)
@@ -531,7 +588,7 @@ func (h *Handler) buildIdleStreamSummary(ctx context.Context, streamID string) (
 			return streamSummary{}, false
 		}
 		if boundCam != nil && !boundCam.Archived {
-			return streamSummary{
+			item := streamSummary{
 				Engine:         "lalmax",
 				StreamID:       streamID,
 				AppName:        "live",
@@ -542,7 +599,9 @@ func (h *Handler) buildIdleStreamSummary(ctx context.Context, streamID string) (
 				SourceType:     "camera",
 				Active:         false,
 				PlayURLs:       h.buildStreamPlayURLs(ctx, streamID, "live"),
-			}, true
+			}
+			h.applyGB28181PlayingState(&item)
+			return item, true
 		}
 	}
 
@@ -552,6 +611,9 @@ func (h *Handler) buildIdleStreamSummary(ctx context.Context, streamID string) (
 		return streamSummary{}, false
 	}
 	if len(histories) == 0 {
+		if item, ok := h.buildGB28181IdleStreamSummary(ctx, streamID); ok {
+			return item, true
+		}
 		return streamSummary{}, false
 	}
 	latest := histories[0]
@@ -566,7 +628,7 @@ func (h *Handler) buildIdleStreamSummary(ctx context.Context, streamID string) (
 	if latest.EndedAt != nil {
 		lastSeen = *latest.EndedAt
 	}
-	return streamSummary{
+	item := streamSummary{
 		Engine:        "lalmax",
 		StreamID:      latest.StreamID,
 		AppName:       appName,
@@ -574,7 +636,31 @@ func (h *Handler) buildIdleStreamSummary(ctx context.Context, streamID string) (
 		Active:        false,
 		LastFrameTime: timePointer(lastSeen),
 		PlayURLs:      h.buildStreamPlayURLs(ctx, latest.StreamID, appName),
-	}, true
+	}
+	h.applyGB28181PlayingState(&item)
+	return item, true
+}
+
+func (h *Handler) buildGB28181IdleStreamSummary(ctx context.Context, streamID string) (streamSummary, bool) {
+	if h.gb28181Svr == nil || !h.gb28181Svr.IsStreamPlaying(streamID) {
+		return streamSummary{}, false
+	}
+	item := streamSummary{
+		Engine:     "lalmax",
+		StreamID:   streamID,
+		AppName:    "live",
+		SourceType: "gb28181",
+		Active:     false,
+		PlayURLs:   h.buildStreamPlayURLs(ctx, streamID, "live"),
+	}
+	if cam, err := h.db.GetCamera(ctx, streamID); err == nil && cam != nil && cam.Enabled && !cam.Archived {
+		item.Managed = true
+		item.ManagementType = "camera"
+		item.CameraID = cam.ID
+		item.CameraName = cam.Name
+	}
+	h.applyGB28181PlayingState(&item)
+	return item, true
 }
 
 type bindCameraRequest struct {
@@ -587,7 +673,7 @@ func (h *Handler) handleBindCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	streamID := chi.URLParam(r, "stream_id")
+	streamID := streamIDFromRequest(r)
 	if streamID == "" {
 		writeError(w, http.StatusBadRequest, "stream_id is required")
 		return
@@ -644,7 +730,7 @@ func (h *Handler) handleUnbindCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	streamID := chi.URLParam(r, "stream_id")
+	streamID := streamIDFromRequest(r)
 	if streamID == "" {
 		writeError(w, http.StatusBadRequest, "stream_id is required")
 		return
@@ -685,7 +771,7 @@ func (h *Handler) handlePromoteStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	streamID := chi.URLParam(r, "stream_id")
+	streamID := streamIDFromRequest(r)
 	if streamID == "" {
 		writeError(w, http.StatusBadRequest, "stream_id is required")
 		return
@@ -834,7 +920,7 @@ func (h *Handler) handleDeleteStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	streamID := chi.URLParam(r, "stream_id")
+	streamID := streamIDFromRequest(r)
 	if streamID == "" {
 		writeError(w, http.StatusBadRequest, "stream_id is required")
 		return
@@ -880,7 +966,7 @@ func (h *Handler) handleKickPublisher(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	streamID := chi.URLParam(r, "stream_id")
+	streamID := streamIDFromRequest(r)
 	if streamID == "" {
 		writeError(w, http.StatusBadRequest, "stream_id is required")
 		return
@@ -942,7 +1028,7 @@ func (h *Handler) handleListStreamHistory(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) handleDeleteStreamHistory(w http.ResponseWriter, r *http.Request) {
-	streamID := chi.URLParam(r, "stream_id")
+	streamID := streamIDFromRequest(r)
 	if streamID == "" {
 		writeError(w, http.StatusBadRequest, "stream_id is required")
 		return
@@ -961,7 +1047,7 @@ func (h *Handler) handleDeleteStreamHistory(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *Handler) handleBanStream(w http.ResponseWriter, r *http.Request) {
-	streamID := chi.URLParam(r, "stream_id")
+	streamID := streamIDFromRequest(r)
 	if streamID == "" {
 		writeError(w, http.StatusBadRequest, "stream_id is required")
 		return
@@ -1010,7 +1096,7 @@ func (h *Handler) handleBanStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUnbanStream(w http.ResponseWriter, r *http.Request) {
-	streamID := chi.URLParam(r, "stream_id")
+	streamID := streamIDFromRequest(r)
 	if streamID == "" {
 		writeError(w, http.StatusBadRequest, "stream_id is required")
 		return

@@ -292,7 +292,8 @@
     loading = true;
     error = '';
     try {
-      cameras = await listCameras();
+      const all = await listCameras();
+      cameras = all.filter(c => c.protocol !== 'gb28181');
       pausedCameras = new Set(cameras.filter(c => c.recording_paused).map(c => c.id));
       const tutkCameras = cameras.filter(c => c.error_type === 'tutk_incompatible');
       if (tutkCameras.length === 1) {

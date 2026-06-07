@@ -561,22 +561,27 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 
 		// Step 7.5: GB28181 SIP server (optional)
 		if cfg.GB28181.Enabled != nil && *cfg.GB28181.Enabled {
-			gbCfg := &gb28181.Config{
-				Enabled:  true,
-				Host:     cfg.GB28181.Host,
-				Port:     cfg.GB28181.Port,
-				ID:       cfg.GB28181.ID,
-				Password: cfg.GB28181.Password,
-				MediaIP:  cfg.GB28181.MediaIP,
+			// Skip GB28181 if ID is not configured
+			if cfg.GB28181.ID == "" {
+				slog.Warn("GB28181 enabled but id is empty, skipping. Set gb28181.id in config to enable")
+			} else {
+				gbCfg := &gb28181.Config{
+					Enabled:  true,
+					Host:     cfg.GB28181.Host,
+					Port:     cfg.GB28181.Port,
+					ID:       cfg.GB28181.ID,
+					Password: cfg.GB28181.Password,
+					MediaIP:  cfg.GB28181.MediaIP,
+				}
+				if err := gbCfg.Validate(); err != nil {
+					db.Close()
+					return nil, fmt.Errorf("gb28181 config: %w", err)
+				}
+				gbCfg.ApplyDefaults()
+				gbSvr, _ := gb28181.NewServer(gbCfg, engine, db)
+				a.gb28181Svr = gbSvr
+				slog.Info("GB28181 SIP server started", "port", cfg.GB28181.Port, "id", cfg.GB28181.ID)
 			}
-			if err := gbCfg.Validate(); err != nil {
-				db.Close()
-				return nil, fmt.Errorf("gb28181 config: %w", err)
-			}
-			gbCfg.ApplyDefaults()
-			gbSvr, _ := gb28181.NewServer(gbCfg, engine)
-			a.gb28181Svr = gbSvr
-			slog.Info("GB28181 SIP server started", "port", cfg.GB28181.Port, "id", cfg.GB28181.ID)
 		}
 	}
 
@@ -647,6 +652,9 @@ func (a *App) buildRouter() http.Handler {
 
 	// Wire streaming managers
 	handler.SetMediaEngine(a.mediaEngine)
+	if a.gb28181Svr != nil {
+		handler.SetGB28181Server(a.gb28181Svr)
+	}
 	handler.SetFLVManager(a.media.FLV())
 	handler.SetWSManager(a.media.WS())
 	handler.SetHealthManager(a.healthMgr)
@@ -772,32 +780,15 @@ func (a *App) buildRouter() http.Handler {
 
 	// GB28181 API routes (authenticated)
 	if a.gb28181Svr != nil {
+		gbHandler := api.NewGB28181Handler(a.gb28181Svr, a.camMgr, a.db, a.mediaEngine)
 		r.Group(func(r chi.Router) {
 			r.Use(a.authMW)
-			r.Get("/api/gb28181/devices", func(w http.ResponseWriter, r *http.Request) {
-				handler := api.NewGB28181Handler(a.gb28181Svr)
-				handler.ListDevices(w, r)
-			})
-			r.Post("/api/gb28181/play", func(w http.ResponseWriter, r *http.Request) {
-				handler := api.NewGB28181Handler(a.gb28181Svr)
-				handler.Play(w, r)
-			})
-			r.Post("/api/gb28181/stop", func(w http.ResponseWriter, r *http.Request) {
-				handler := api.NewGB28181Handler(a.gb28181Svr)
-				handler.StopPlay(w, r)
-			})
-			r.Post("/api/gb28181/ptz", func(w http.ResponseWriter, r *http.Request) {
-				handler := api.NewGB28181Handler(a.gb28181Svr)
-				handler.PTZControl(w, r)
-			})
-			r.Post("/api/gb28181/record_info", func(w http.ResponseWriter, r *http.Request) {
-				handler := api.NewGB28181Handler(a.gb28181Svr)
-				handler.RecordInfo(w, r)
-			})
-			r.Post("/api/gb28181/playback", func(w http.ResponseWriter, r *http.Request) {
-				handler := api.NewGB28181Handler(a.gb28181Svr)
-				handler.Playback(w, r)
-			})
+			r.Get("/api/gb28181/devices", gbHandler.ListDevices)
+			r.Post("/api/gb28181/play", gbHandler.Play)
+			r.Post("/api/gb28181/stop", gbHandler.StopPlay)
+			r.Post("/api/gb28181/ptz", gbHandler.PTZControl)
+			r.Post("/api/gb28181/record_info", gbHandler.RecordInfo)
+			r.Post("/api/gb28181/playback", gbHandler.Playback)
 		})
 	}
 

@@ -39,7 +39,7 @@
 </script>
 
 <a
-  href={`#/streams/${stream.stream_id}`}
+  href={`#/streams/${encodeURIComponent(stream.stream_id)}`}
   class="card stream-card border th-border p-4 transition-all hover:border-[var(--color-primary)]"
 >
   <div class="flex items-start justify-between gap-2 mb-3">

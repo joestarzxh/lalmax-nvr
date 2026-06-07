@@ -1318,6 +1318,46 @@ func TestGetStream_PromotedPushStream(t *testing.T) {
 	require.Equal(t, "camera", resp.SourceType)
 }
 
+type stubGB28181StreamStatus struct {
+	playing map[string]bool
+}
+
+func (s *stubGB28181StreamStatus) IsStreamPlaying(streamID string) bool {
+	if s == nil || s.playing == nil {
+		return false
+	}
+	return s.playing[streamID]
+}
+
+func TestGetStream_GB28181IdlePlaying(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	streamID := "34020000001320000001:34020000001320000001"
+	require.NoError(t, db.UpsertCamera(context.Background(), streamID, "GB IPC", "gb28181", "h264", "rtsp://127.0.0.1:5544/live/"+streamID, "", "", true, "", "", ""))
+
+	engine := &stubMediaEngine{stream: nil}
+
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h.SetMediaEngine(engine)
+	h.SetGB28181Server(&stubGB28181StreamStatus{
+		playing: map[string]bool{streamID: true},
+	})
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/streams/"+streamID, nil, "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+
+	var resp streamSummary
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Equal(t, streamID, resp.StreamID)
+	require.True(t, resp.GB28181Playing)
+	require.True(t, resp.Active)
+	require.Equal(t, "gb28181", resp.SourceType)
+}
+
 func TestGetStream_NotFound(t *testing.T) {
 	t.Helper()
 	t.Parallel()

@@ -1,7 +1,6 @@
 package gb28181
 
 import (
-	"encoding/xml"
 	"fmt"
 	"log/slog"
 )
@@ -17,7 +16,7 @@ type MessageDeviceListResponse struct {
 
 func (g *GB28181API) handleCatalogResponse(deviceID string, body []byte) {
 	var msg MessageDeviceListResponse
-	if err := xml.Unmarshal(body, &msg); err != nil {
+	if err := xmlUnmarshal(body, &msg); err != nil {
 		slog.Error("catalog xml decode error", "device_id", deviceID, "error", err)
 		return
 	}
@@ -34,6 +33,13 @@ func (g *GB28181API) handleCatalogResponse(deviceID string, body []byte) {
 		domain = g.cfg.GetDomain()
 	}
 
+	// Ensure device row exists before saving channels
+	if err := g.store.SaveDevice(deviceID, dev); err != nil {
+		slog.Error("failed to save device before catalog", "device_id", deviceID, "error", err)
+	}
+
+	// Build channel list for database
+	var dbChannels []Channel
 	for _, ch := range msg.Item {
 		ch.ChannelID = ch.DeviceID
 		ch.DeviceID = deviceID
@@ -43,6 +49,12 @@ func (g *GB28181API) handleCatalogResponse(deviceID string, body []byte) {
 		}
 		channel.init(domain)
 		dev.Channels.Store(ch.ChannelID, channel)
+		dbChannels = append(dbChannels, *channel)
+	}
+
+	// Persist channels to database
+	if err := g.store.SaveChannels(deviceID, dbChannels); err != nil {
+		slog.Error("failed to save channels to DB", "device_id", deviceID, "error", err)
 	}
 
 	slog.Info("catalog updated", "device_id", deviceID, "channels", len(msg.Item))

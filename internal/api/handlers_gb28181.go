@@ -1,22 +1,35 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/gb28181"
+	"github.com/lalmax-pro/lalmax-nvr/internal/media"
+	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
 
 // GB28181Handler provides HTTP API endpoints for GB28181 management.
 type GB28181Handler struct {
-	svr *gb28181.Server
+	svr         *gb28181.Server
+	camMgr      *camera.CameraManager
+	db          *storage.DB
+	mediaEngine media.Engine
 }
 
 // NewGB28181Handler creates a new GB28181Handler.
-func NewGB28181Handler(svr *gb28181.Server) *GB28181Handler {
-	return &GB28181Handler{svr: svr}
+func NewGB28181Handler(svr *gb28181.Server, camMgr *camera.CameraManager, db *storage.DB, mediaEngine media.Engine) *GB28181Handler {
+	return &GB28181Handler{
+		svr:         svr,
+		camMgr:      camMgr,
+		db:          db,
+		mediaEngine: mediaEngine,
+	}
 }
 
 // ListDevices returns all registered GB28181 devices.
@@ -49,7 +62,7 @@ func (h *GB28181Handler) Play(w http.ResponseWriter, r *http.Request) {
 
 	streamID := req.StreamID
 	if streamID == "" {
-		streamID = req.ChannelID
+		streamID = gb28181.StreamID(req.DeviceID, req.ChannelID)
 	}
 
 	ssrc, err := h.svr.Play(&gb28181.PlayInput{
@@ -64,10 +77,66 @@ func (h *GB28181Handler) Play(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := h.ensureGB28181Camera(r.Context(), req.DeviceID, req.ChannelID, streamID); err != nil {
+		slog.Warn("GB28181 play succeeded but camera registration failed",
+			"device_id", req.DeviceID,
+			"channel_id", req.ChannelID,
+			"stream_id", streamID,
+			"error", err,
+		)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"ssrc":      ssrc,
 		"stream_id": streamID,
 	})
+}
+
+func (h *GB28181Handler) ensureGB28181Camera(ctx context.Context, deviceID, channelID, streamID string) error {
+	if h.db == nil {
+		return fmt.Errorf("database unavailable")
+	}
+
+	if h.camMgr != nil {
+		if cam := h.camMgr.GetCameraConfig(streamID); cam != nil && cam.Enabled {
+			return nil
+		}
+	}
+
+	existing, err := h.db.GetCamera(ctx, streamID)
+	if err != nil {
+		return err
+	}
+	if existing != nil && !existing.Archived {
+		return nil
+	}
+
+	name := fmt.Sprintf("GB28181 %s", channelID)
+	cameraURL := ""
+	if h.mediaEngine != nil {
+		playURL, err := h.mediaEngine.BuildPlayURL(ctx, media.PlayURLRequest{
+			StreamID: streamID,
+			AppName:  "live",
+			Protocol: "rtsp",
+		})
+		if err == nil && playURL != nil && playURL.URL != "" {
+			cameraURL = playURL.URL
+		}
+	}
+	if cameraURL == "" {
+		cameraURL = fmt.Sprintf("rtsp://127.0.0.1:5544/live/%s", streamID)
+	}
+
+	if existing != nil && existing.Archived {
+		if err := h.db.UnarchiveCameraDB(ctx, streamID); err != nil {
+			return err
+		}
+	}
+
+	// Only persist to DB for stream-management mapping. Do not add to CameraManager
+	// config — GB28181 devices are managed via the GB28181 device API, not the
+	// ONVIF/RTSP camera list.
+	return h.db.UpsertCamera(ctx, streamID, name, "gb28181", "h264", cameraURL, "", "", true, "", "", "", "")
 }
 
 // StopPlayRequest is the request body for the stop play endpoint.
@@ -232,7 +301,7 @@ func (h *GB28181Handler) Playback(w http.ResponseWriter, r *http.Request) {
 
 	streamID := req.StreamID
 	if streamID == "" {
-		streamID = req.ChannelID + "_pb"
+		streamID = gb28181.StreamID(req.DeviceID, req.ChannelID) + "_pb"
 	}
 
 	ssrc, err := h.svr.Playback(&gb28181.PlaybackInput{

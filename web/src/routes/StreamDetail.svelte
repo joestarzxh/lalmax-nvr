@@ -153,12 +153,17 @@
   function sourceTypeLabel(type: string): string {
     switch (type) {
       case 'camera': return t('streams.sourceCamera');
+      case 'gb28181': return t('streams.sourceGB28181');
       case 'rtmp_push': return t('streams.sourceRTMPPush');
       case 'srt_push': return t('streams.sourceSRTPush');
       case 'relay_pull': return t('streams.sourceRelayPull');
       default: return t('streams.sourceStream');
     }
   }
+
+  let canPlay = $derived(
+    !!stream && (stream.active || stream.gb28181_playing) && getAvailableProtocols().length > 0
+  );
 
   function formatTime(value?: string): string {
     if (!value) return t('streams.unknown');
@@ -365,6 +370,7 @@
         </div>
       </div>
     {:else if stream}
+      {@const encodedStreamId = encodeURIComponent(stream.stream_id)}
       <!-- Header -->
       <header class="detail-header glass">
         <div class="header-left">
@@ -434,19 +440,19 @@
             {/if}
           </div>
 
-          {#if stream.active && getAvailableProtocols().length}
+          {#if canPlay}
               <div class="player-container">
                 {#key selectedProtocol + ':' + getPlayerURL(selectedProtocol)}
                   {#if selectedProtocol === 'webrtc'}
                     <WebRTCPlayer
-                      cameraId={stream.stream_id}
-                      cameraName={stream.stream_id}
+                      cameraId={encodedStreamId}
+                      cameraName={stream.camera_name || stream.stream_id}
                       expanded={true}
                     />
                   {:else if selectedProtocol === 'flv' || selectedProtocol === 'ws-flv'}
                     <FlvPlayer
-                      cameraId={stream.stream_id}
-                      cameraName={stream.stream_id}
+                      cameraId={encodedStreamId}
+                      cameraName={stream.camera_name || stream.stream_id}
                       streamUrl={getPlayerURL(selectedProtocol)}
                       protocol={selectedProtocol === 'ws-flv' ? 'ws-flv' : 'flv'}
                       expanded={true}
@@ -454,21 +460,21 @@
                   {:else if selectedProtocol === 'wasm' && WasmPlayerComponent}
                     {@const WasmPlayer = WasmPlayerComponent}
                     <WasmPlayer
-                      cameraId={stream.stream_id}
-                      cameraName={stream.stream_id}
+                      cameraId={encodedStreamId}
+                      cameraName={stream.camera_name || stream.stream_id}
                       expanded={true}
                     />
                   {:else if selectedProtocol === 'fmp4' && FMP4PlayerComponent}
                     {@const FMP4Player = FMP4PlayerComponent}
                     <FMP4Player
-                      cameraId={stream.stream_id}
-                      cameraName={stream.stream_id}
+                      cameraId={encodedStreamId}
+                      cameraName={stream.camera_name || stream.stream_id}
                       expanded={true}
                     />
                   {:else}
                     <VideoPlayer
-                      cameraId={stream.stream_id}
-                      cameraName={stream.stream_id}
+                      cameraId={encodedStreamId}
+                      cameraName={stream.camera_name || stream.stream_id}
                       streamUrl={getPlayerURL(selectedProtocol) || getPlayerURL('hls')}
                       cameraProtocol={selectedProtocol}
                       protocol={selectedProtocol}

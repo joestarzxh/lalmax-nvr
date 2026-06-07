@@ -142,6 +142,7 @@ export {
   listFrames,
   loadFrameBlob,
   loadRecordingVideoBlob,
+  getRecordingPlaybackUrl,
   getStats,
   getStatsTrends,
   listArchives,
@@ -293,3 +294,18 @@ export {
 export type {
   AiDetectionSettings,
 } from './ai';
+
+// GB28181 — SIP device management
+export {
+  listGB28181Devices,
+  playGB28181Stream,
+  stopGB28181Stream,
+} from './gb28181';
+
+export type {
+  GB28181Device,
+  GB28181Channel,
+  GB28181DevicesResponse,
+  GB28181PlayRequest,
+  GB28181PlayResponse,
+} from './gb28181';

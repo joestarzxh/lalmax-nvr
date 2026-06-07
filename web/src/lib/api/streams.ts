@@ -25,6 +25,7 @@ export interface StreamInfo {
   camera_name?: string;
   source_type: string;
   active: boolean;
+  gb28181_playing?: boolean;
   publisher?: StreamSessionStatus;
   subscribers?: StreamSessionStatus[];
   video_codec?: string;

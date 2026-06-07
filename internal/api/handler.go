@@ -143,6 +143,12 @@ type Handler struct {
 	onvifProbeDevice  func(ctx context.Context, host string, port int, timeout time.Duration) (*onvif.DiscoveredDevice, error)
 	onvifNewClient    func(endpoint, username, password string) onvifDeviceClient
 	banMgr            BanManager
+	gb28181Svr        GB28181StreamStatus
+}
+
+// GB28181StreamStatus reports active GB28181 play sessions for stream status overlay.
+type GB28181StreamStatus interface {
+	IsStreamPlaying(streamID string) bool
 }
 
 func (h *Handler) SetConfigWatcher(w *config.Watcher) {
@@ -470,6 +476,10 @@ type BanManager interface {
 	Ban(ctx context.Context, streamID, reason string, expiresAt *time.Time) error
 	Unban(ctx context.Context, streamID string) error
 	ListBans(ctx context.Context) ([]storage.StreamBan, error)
+}
+
+func (h *Handler) SetGB28181Server(svr GB28181StreamStatus) {
+	h.gb28181Svr = svr
 }
 
 func (h *Handler) SetBanManager(mgr BanManager) {
