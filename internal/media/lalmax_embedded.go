@@ -262,15 +262,15 @@ func lalLogLevelFromString(level string) int {
 
 func lalLogSection(level int) map[string]any {
 	return map[string]any{
-		"level":                   level,
-		"filename":                "",
-		"is_to_stdout":            false,
-		"is_rotate_daily":         false,
-		"short_file_flag":         true,
-		"timestamp_flag":          true,
-		"timestamp_with_ms_flag":  true,
-		"level_flag":              true,
-		"assert_behavior":         1,
+		"level":                  level,
+		"filename":               "",
+		"is_to_stdout":           false,
+		"is_rotate_daily":        false,
+		"short_file_flag":        true,
+		"timestamp_flag":         true,
+		"timestamp_with_ms_flag": true,
+		"level_flag":             true,
+		"assert_behavior":        1,
 	}
 }
 
@@ -318,8 +318,27 @@ func ensureLalLogConfig(path string, logLevel string) error {
 
 func loadEmbeddedLalmaxConfig(cfg EmbeddedLalmaxConfig) (*lalmaxconfig.Config, error) {
 	if cfg.ConfigPath != "" {
-		// If config file exists, load it as-is (preserve user customizations)
+		// If config file exists, patch only the runtime-controlled protocol
+		// fields before loading it. This preserves customizations while keeping
+		// the lalmax listener config in sync with the NVR settings.
 		if _, err := os.Stat(cfg.ConfigPath); err == nil {
+			rtmpPort := cfg.RTMPPort
+			if rtmpPort == 0 {
+				rtmpPort = 1935
+			}
+			srtPort := cfg.SRTPort
+			if srtPort == 0 {
+				srtPort = 9000
+			}
+			if err := patchLalmaxConfig(
+				cfg.ConfigPath,
+				cfg.RTMPEnabled,
+				cfg.SRTEnabled,
+				fmt.Sprintf(":%d", rtmpPort),
+				fmt.Sprintf(":%d", srtPort),
+			); err != nil {
+				return nil, fmt.Errorf("sync lalmax protocol config: %w", err)
+			}
 			if err := ensureLalLogConfig(cfg.ConfigPath, cfg.LalLogLevel); err != nil {
 				slog.Warn("ensure lal log config", "path", cfg.ConfigPath, "error", err)
 			}
@@ -384,44 +403,56 @@ func patchLalmaxConfig(path string, rtmpEnabled, srtEnabled bool, rtmpAddr, srtA
 	}
 
 	// Patch lal section (rtmp)
+	lal := map[string]json.RawMessage{}
 	if lalRaw, ok := raw["lal"]; ok {
-		var lal map[string]json.RawMessage
-		if err := json.Unmarshal(lalRaw, &lal); err == nil {
-			if rmpRaw, ok := lal["rtmp"]; ok {
-				var rtmp map[string]any
-				if err := json.Unmarshal(rmpRaw, &rtmp); err == nil {
-					rtmp["enable"] = rtmpEnabled
-					rtmp["addr"] = rtmpAddr
-					if patched, err := json.Marshal(rtmp); err == nil {
-						lal["rtmp"] = patched
-					}
-				}
-			}
-			if patched, err := json.Marshal(lal); err == nil {
-				raw["lal"] = patched
-			}
+		if err := json.Unmarshal(lalRaw, &lal); err != nil {
+			return fmt.Errorf("parse lal config: %w", err)
 		}
 	}
+	rtmp := map[string]any{}
+	if rtmpRaw, ok := lal["rtmp"]; ok {
+		if err := json.Unmarshal(rtmpRaw, &rtmp); err != nil {
+			return fmt.Errorf("parse rtmp config: %w", err)
+		}
+	}
+	rtmp["enable"] = rtmpEnabled
+	rtmp["addr"] = rtmpAddr
+	patchedRTMP, err := json.Marshal(rtmp)
+	if err != nil {
+		return fmt.Errorf("marshal rtmp config: %w", err)
+	}
+	lal["rtmp"] = patchedRTMP
+	patchedLal, err := json.Marshal(lal)
+	if err != nil {
+		return fmt.Errorf("marshal lal config: %w", err)
+	}
+	raw["lal"] = patchedLal
 
 	// Patch lalmax section (srt_config)
+	lalmax := map[string]json.RawMessage{}
 	if maxRaw, ok := raw["lalmax"]; ok {
-		var max map[string]json.RawMessage
-		if err := json.Unmarshal(maxRaw, &max); err == nil {
-			if srtRaw, ok := max["srt_config"]; ok {
-				var srt map[string]any
-				if err := json.Unmarshal(srtRaw, &srt); err == nil {
-					srt["enable"] = srtEnabled
-					srt["addr"] = srtAddr
-					if patched, err := json.Marshal(srt); err == nil {
-						max["srt_config"] = patched
-					}
-				}
-			}
-			if patched, err := json.Marshal(max); err == nil {
-				raw["lalmax"] = patched
-			}
+		if err := json.Unmarshal(maxRaw, &lalmax); err != nil {
+			return fmt.Errorf("parse lalmax config: %w", err)
 		}
 	}
+	srt := map[string]any{}
+	if srtRaw, ok := lalmax["srt_config"]; ok {
+		if err := json.Unmarshal(srtRaw, &srt); err != nil {
+			return fmt.Errorf("parse srt config: %w", err)
+		}
+	}
+	srt["enable"] = srtEnabled
+	srt["addr"] = srtAddr
+	patchedSRT, err := json.Marshal(srt)
+	if err != nil {
+		return fmt.Errorf("marshal srt config: %w", err)
+	}
+	lalmax["srt_config"] = patchedSRT
+	patchedLalmax, err := json.Marshal(lalmax)
+	if err != nil {
+		return fmt.Errorf("marshal lalmax config: %w", err)
+	}
+	raw["lalmax"] = patchedLalmax
 
 	patched, err := json.MarshalIndent(raw, "", "  ")
 	if err != nil {
@@ -482,13 +513,13 @@ func patchLalmaxHLSConfig(path string, cfg EmbeddedLalmaxConfig) error {
 				idleTimeoutMs = 60000
 			}
 			hls := map[string]any{
-				"enable":                      cfg.HLSEnabled,
-				"fragment_duration_ms":        fragmentDurationMs,
-				"fragment_num":                fragmentNum,
-				"cleanup_mode":                cleanupMode,
-				"use_memory_as_disk_flag":     cfg.LalUseMemory,
-				"on_demand":                   cfg.HLSOnDemand,
-				"on_demand_idle_timeout_ms":   idleTimeoutMs,
+				"enable":                    cfg.HLSEnabled,
+				"fragment_duration_ms":      fragmentDurationMs,
+				"fragment_num":              fragmentNum,
+				"cleanup_mode":              cleanupMode,
+				"use_memory_as_disk_flag":   cfg.LalUseMemory,
+				"on_demand":                 cfg.HLSOnDemand,
+				"on_demand_idle_timeout_ms": idleTimeoutMs,
 			}
 			if existingRaw, ok := lal["hls"]; ok {
 				var existing map[string]any
@@ -521,12 +552,12 @@ func patchLalmaxHLSConfig(path string, cfg EmbeddedLalmaxConfig) error {
 				idleTimeoutMs = 60000
 			}
 			hls := map[string]any{
-				"enable":                      cfg.HLSEnabled,
-				"segment_count":               segmentCount,
-				"segment_duration":              segmentDuration,
-				"part_duration":               partDuration,
-				"on_demand":                   cfg.HLSOnDemand,
-				"on_demand_idle_timeout_ms":   idleTimeoutMs,
+				"enable":                    cfg.HLSEnabled,
+				"segment_count":             segmentCount,
+				"segment_duration":          segmentDuration,
+				"part_duration":             partDuration,
+				"on_demand":                 cfg.HLSOnDemand,
+				"on_demand_idle_timeout_ms": idleTimeoutMs,
 			}
 			if existingRaw, ok := fmp4["hls"]; ok {
 				var existing map[string]any
@@ -704,13 +735,13 @@ func embeddedConfigJSON(cfg EmbeddedLalmaxConfig) ([]byte, error) {
 			"fmp4_config": map[string]any{
 				"http": map[string]any{"enable": true},
 				"hls": map[string]any{
-					"enable":                      cfg.HLSEnabled,
-					"segment_count":               segmentCount,
-					"segment_duration":            segmentDuration,
-					"part_duration":               partDuration,
-					"low_latency":                 true,
-					"on_demand":                   cfg.HLSOnDemand,
-					"on_demand_idle_timeout_ms":   idleTimeoutMs,
+					"enable":                    cfg.HLSEnabled,
+					"segment_count":             segmentCount,
+					"segment_duration":          segmentDuration,
+					"part_duration":             partDuration,
+					"low_latency":               true,
+					"on_demand":                 cfg.HLSOnDemand,
+					"on_demand_idle_timeout_ms": idleTimeoutMs,
 				},
 			},
 			"logic_config": map[string]any{"gop_cache_num": 1},
@@ -732,14 +763,14 @@ func embeddedConfigJSON(cfg EmbeddedLalmaxConfig) ([]byte, error) {
 			"http_api":     map[string]any{"enable": false},
 			"httpts":       map[string]any{"enable": false},
 			"hls": map[string]any{
-				"enable":                      cfg.HLSEnabled,
-				"url_pattern":                 "/hls/",
-				"fragment_duration_ms":        cfg.LalFragmentDurationMs,
-				"fragment_num":                cfg.LalFragmentNum,
-				"cleanup_mode":                cleanupMode,
-				"use_memory_as_disk_flag":     cfg.LalUseMemory,
-				"on_demand":                   cfg.HLSOnDemand,
-				"on_demand_idle_timeout_ms":   idleTimeoutMs,
+				"enable":                    cfg.HLSEnabled,
+				"url_pattern":               "/hls/",
+				"fragment_duration_ms":      cfg.LalFragmentDurationMs,
+				"fragment_num":              cfg.LalFragmentNum,
+				"cleanup_mode":              cleanupMode,
+				"use_memory_as_disk_flag":   cfg.LalUseMemory,
+				"on_demand":                 cfg.HLSOnDemand,
+				"on_demand_idle_timeout_ms": idleTimeoutMs,
 			},
 			"record": map[string]any{"enable_flv": false},
 			"log":    lalLogSection(lalLogLevelFromString(cfg.LalLogLevel)),

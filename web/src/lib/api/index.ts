@@ -164,6 +164,23 @@ export type {
   ArchiveListResponse,
 } from './recordings';
 
+// Events — unified event center
+export {
+  listEvents,
+  getEvent,
+  acknowledgeEvent,
+  deleteEvent,
+} from './events';
+
+export type {
+  NvrEvent,
+  EventsResponse,
+  EventsParams,
+  EventSource,
+  EventSeverity,
+  EventStatus,
+} from './events';
+
 // Settings — cleanup, webdav, merge, features
 export {
   getSettings,

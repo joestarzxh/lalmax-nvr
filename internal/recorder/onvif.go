@@ -12,6 +12,7 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/base"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/event"
 	"github.com/lalmax-pro/lalmax-nvr/internal/metrics"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/onvif"
@@ -31,6 +32,7 @@ type ONVIFConfig struct {
 	DB                   RecordingDB
 	AudioEnabled         bool
 	FrameWatchdogTimeout time.Duration // default 30s (0 = use constant default)
+	EventBus             *event.EventBus
 }
 
 // ONVIFRecorder implements model.Recorder by resolving the RTSP stream URI
@@ -291,6 +293,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			DB:                   r.cfg.DB,
 			AudioEnabled:         r.cfg.AudioEnabled,
 			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
+			EventBus:             r.cfg.EventBus,
 		}
 		rec := NewH265Recorder(cfg, r.store, r.metrics)
 		rec.Hub = r.Hub
@@ -309,6 +312,7 @@ func (r *ONVIFRecorder) createDelegate(rtspURL string) model.Recorder {
 			DB:                   r.cfg.DB,
 			AudioEnabled:         r.cfg.AudioEnabled,
 			FrameWatchdogTimeout: r.cfg.FrameWatchdogTimeout,
+			EventBus:             r.cfg.EventBus,
 		}
 		rec := NewH264Recorder(cfg, r.store, r.metrics)
 		rec.Hub = r.Hub

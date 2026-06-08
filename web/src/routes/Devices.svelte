@@ -29,6 +29,7 @@
 
   // Push streams state
   let pushStreams = $state<StreamInfo[]>([]);
+  let pushCameras = $state<Camera[]>([]);
   let pushLoading = $state(false);
 
   // Discovery state
@@ -81,8 +82,21 @@
   }
 
   const ONVIF_TAB_PROTOCOLS = new Set(['onvif', 'rtsp', 'http', 'rtsp_h264', 'rtsp_h265', 'rtsp_mjpeg', 'http_jpeg']);
+  const PUSH_SOURCE_TYPES = new Set(['rtmp_push', 'srt_push', 'whip_push']);
+
+  function isPushSourceType(sourceType?: string): boolean {
+    return !!sourceType && PUSH_SOURCE_TYPES.has(sourceType);
+  }
+
+  function pushSourceLabel(sourceType?: string): string {
+    if (sourceType === 'rtmp_push') return 'RTMP 推流';
+    if (sourceType === 'srt_push') return 'SRT 推流';
+    if (sourceType === 'whip_push') return 'WHIP 推流';
+    return sourceType || '推流';
+  }
 
   function isOnvifTabCamera(camera: Camera): boolean {
+    if (isPushSourceType(camera.source_type)) return false;
     return ONVIF_TAB_PROTOCOLS.has(camera.protocol);
   }
 
@@ -114,10 +128,11 @@
   async function loadPushStreams() {
     pushLoading = true;
     try {
-      const res = await listStreams();
-      pushStreams = (res.streams || []).filter(s => 
-        !s.managed && s.source_type === 'push'
+      const [res, cameras] = await Promise.all([listStreams(), listCameras()]);
+      pushStreams = (res.streams || []).filter(s =>
+        !s.managed && isPushSourceType(s.source_type)
       );
+      pushCameras = (cameras || []).filter(c => isPushSourceType(c.source_type));
     } catch (e) {
       console.error('Failed to load push streams:', e);
     } finally {
@@ -391,14 +406,42 @@
           <RefreshCw class="w-6 h-6 animate-spin th-text-secondary" />
           <span class="ml-2 th-text-secondary">加载中...</span>
         </div>
-      {:else if pushStreams.length === 0}
+      {:else if pushStreams.length === 0 && pushCameras.length === 0}
         <div class="flex flex-col items-center justify-center py-12 th-bg-secondary rounded-lg">
           <Radio class="w-12 h-12 th-text-tertiary mb-4" />
           <p class="text-lg th-text-secondary">暂无推流</p>
-          <p class="text-sm th-text-tertiary mt-1">使用 RTMP 或 SRT 推流后将显示在这里，可在「推流设备」页面升级为摄像头</p>
+          <p class="text-sm th-text-tertiary mt-1">使用 RTMP、SRT 或 WHIP 推流后将显示在这里，可在流详情页升级为摄像头</p>
         </div>
       {:else}
         <div class="grid gap-4">
+          {#each pushCameras as camera}
+            <div class="th-bg-secondary rounded-lg border th-border p-4">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <div class="p-2 rounded-lg {camera.enabled ? 'bg-purple-100' : 'bg-gray-100'}">
+                    <Radio class="w-5 h-5 {camera.enabled ? 'text-purple-600' : 'text-gray-400'}" />
+                  </div>
+                  <div>
+                    <h3 class="font-semibold th-text-primary">{camera.name}</h3>
+                    <p class="text-sm th-text-secondary">
+                      {pushSourceLabel(camera.source_type)} · 已升级为摄像头
+                      {#if camera.encoding}
+                        · {camera.encoding}
+                      {/if}
+                    </p>
+                  </div>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="px-2 py-1 text-xs rounded-full {camera.enabled ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}">
+                    {camera.enabled ? '启用' : '禁用'}
+                  </span>
+                  <a href="#/live/{camera.id}" class="btn btn-sm btn-secondary">
+                    详情
+                  </a>
+                </div>
+              </div>
+            </div>
+          {/each}
           {#each pushStreams as stream}
             <div class="th-bg-secondary rounded-lg border th-border p-4">
               <div class="flex items-center justify-between">
@@ -414,7 +457,7 @@
                         · {stream.video_codec}
                       {/if}
                       {#if stream.source_type}
-                        · 来源: {stream.source_type}
+                        · {pushSourceLabel(stream.source_type)}
                       {/if}
                     </p>
                   </div>

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
+	"github.com/lalmax-pro/lalmax-nvr/internal/event"
 	"github.com/lalmax-pro/lalmax-nvr/internal/health"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/merge"
@@ -46,6 +47,7 @@ type CameraUpdate struct {
 	ProfileToken   *string
 	StreamEncoding *string
 	Transcoding    *config.CameraTranscodingConfig
+	AudioEnabled   *bool
 }
 
 type CameraManager struct {
@@ -58,6 +60,7 @@ type CameraManager struct {
 	mergeMgr             *merge.MergeManager           // segment merge manager (nil = no merge)
 	transcodeMgr         *transcoding.TranscodeManager // transcoding manager (nil = no transcoding)
 	healthMgr            *health.Manager               // health monitoring (nil when disabled)
+	eventBus             *event.EventBus
 	mediaEngine          media.Engine
 	onvifProfileResolver func(context.Context, config.CameraConfig) ([]onvif.DeviceProfile, error)
 	onvifStreamResolver  func(context.Context, config.CameraConfig) (string, error)
@@ -98,6 +101,11 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		eventSubscribers: make(map[string]onvif.EventSubscriber),
 		pausedRecorders:  make(map[string]bool),
 	}
+}
+
+// SetEventBus injects the application event bus used by recorders.
+func (cm *CameraManager) SetEventBus(bus *event.EventBus) {
+	cm.eventBus = bus
 }
 
 func cameraRTSPTransport(cam config.CameraConfig) string {
@@ -199,6 +207,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				SegmentDur:    segDur,
 				DB:            cm.db,
 				AudioEnabled:  cam.AudioEnabled,
+				EventBus:      cm.eventBus,
 			}
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h264Cfg.FrameWatchdogTimeout = d
@@ -219,6 +228,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				SegmentDur:    segDur,
 				DB:            cm.db,
 				AudioEnabled:  cam.AudioEnabled,
+				EventBus:      cm.eventBus,
 			}
 			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 				h265Cfg.FrameWatchdogTimeout = d
@@ -233,6 +243,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 				SegmentDur:     segDur,
 				SampleInterval: cam.SampleInterval,
 				DB:             cm.db,
+				EventBus:       cm.eventBus,
 			}
 			rec = recorder.NewMJPEGRecorder(mjpegCfg, cm.store, cm.metrics)
 		default:
@@ -251,6 +262,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			Username:   cam.Username,
 			Password:   cam.Password,
 			DB:         cm.db,
+			EventBus:   cm.eventBus,
 		}
 		rec = recorder.NewHTTPJPEGRecorder(httpJpegCfg, cm.store, cm.metrics)
 	case string(model.ProtoONVIF):
@@ -264,6 +276,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 					SegmentDur:    segDur,
 					DB:            cm.db,
 					AudioEnabled:  cam.AudioEnabled,
+					EventBus:      cm.eventBus,
 				}
 				if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 					h264Cfg.FrameWatchdogTimeout = d
@@ -278,6 +291,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 					SegmentDur:    segDur,
 					DB:            cm.db,
 					AudioEnabled:  cam.AudioEnabled,
+					EventBus:      cm.eventBus,
 				}
 				if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 					h265Cfg.FrameWatchdogTimeout = d
@@ -320,6 +334,7 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			SegmentDur:     segDur,
 			DB:             cm.db,
 			AudioEnabled:   cam.AudioEnabled,
+			EventBus:       cm.eventBus,
 		}
 		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 			onvifCfg.FrameWatchdogTimeout = d
@@ -446,6 +461,7 @@ func (cm *CameraManager) probeONVIFEncodingAndBuildURL(ctx context.Context, cam 
 			SegmentDur:   segDur,
 			DB:           cm.db,
 			AudioEnabled: cam.AudioEnabled,
+			EventBus:     cm.eventBus,
 		}
 		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 			h264Cfg.FrameWatchdogTimeout = d
@@ -458,6 +474,7 @@ func (cm *CameraManager) probeONVIFEncodingAndBuildURL(ctx context.Context, cam 
 			SegmentDur:   segDur,
 			DB:           cm.db,
 			AudioEnabled: cam.AudioEnabled,
+			EventBus:     cm.eventBus,
 		}
 		if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
 			h265Cfg.FrameWatchdogTimeout = d
@@ -1111,6 +1128,10 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 		}
 		cam.StreamEncoding = *updates.StreamEncoding
 	}
+	if updates.AudioEnabled != nil && *updates.AudioEnabled != cam.AudioEnabled {
+		needsRestart = true
+		cam.AudioEnabled = *updates.AudioEnabled
+	}
 
 	if updates.Transcoding != nil {
 		cam.Transcoding = updates.Transcoding
@@ -1441,18 +1462,53 @@ func (cm *CameraManager) shouldStartMediaPull(cam config.CameraConfig) bool {
 	case string(model.ProtoONVIF):
 		return true
 	case string(model.ProtoRTSP):
-		// Skip relay pull for cameras that have a stream binding (promoted from lalmax streams).
-		// The stream is already in lalmax, so the recorder should connect to lal's RTSP server directly.
-		if cm.db != nil {
-			binding, _ := cm.db.GetStreamBinding(context.Background(), cam.ID)
-			if binding != nil {
-				return false
-			}
+		// Skip relay pull when the stream already lives in lalmax (RTMP/SRT push, bind, promote).
+		// The recorder connects to lal's RTSP output directly; a second pull would duplicate the in-stream.
+		if cm.hasExistingLalmaxStream(context.Background(), cam) {
+			return false
 		}
 		return cam.Encoding == string(model.FormatH264) || cam.Encoding == string(model.FormatH265)
 	default:
 		return false
 	}
+}
+
+func (cm *CameraManager) hasExistingLalmaxStream(ctx context.Context, cam config.CameraConfig) bool {
+	if cm.mediaEngine == nil {
+		return false
+	}
+	if cm.db != nil {
+		if binding, _ := cm.db.GetBindingByCameraID(ctx, cam.ID); binding != nil {
+			return true
+		}
+	}
+	if info, err := cm.mediaEngine.GetStream(ctx, cam.ID); err == nil && info != nil && info.Active {
+		return true
+	}
+	// Promoted push streams store lal's RTSP play URL as cam.URL.
+	playURL, err := cm.mediaEngine.BuildPlayURL(ctx, media.PlayURLRequest{
+		StreamID: cam.ID,
+		AppName:  "live",
+		Protocol: "rtsp",
+	})
+	if err == nil && playURL != nil && playURL.URL != "" && cam.URL != "" {
+		if sameMediaURLPath(cam.URL, playURL.URL) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameMediaURLPath(a, b string) bool {
+	if a == b {
+		return true
+	}
+	au, errA := url.Parse(a)
+	bu, errB := url.Parse(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return au.Scheme == bu.Scheme && au.Path == bu.Path
 }
 
 func (cm *CameraManager) resolveMediaSourceURL(ctx context.Context, cam config.CameraConfig) (string, error) {

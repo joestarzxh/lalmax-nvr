@@ -198,7 +198,13 @@ func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		checks["storage"] = HealthCheck{Status: "error", Message: "storage not configured"}
 		allOK = false
 	} else {
-		total, used, err := h.store.GetDiskUsage()
+		var total, used int64
+		var err error
+		if h.readyzDiskUsage != nil {
+			total, used, err = h.readyzDiskUsage()
+		} else {
+			total, used, err = h.store.GetDiskUsage()
+		}
 		if err != nil {
 			checks["storage"] = HealthCheck{Status: "error", Message: err.Error()}
 			allOK = false
@@ -413,7 +419,7 @@ func (h *Handler) handleGetStreamingSettings(w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"default_protocol": h.config.Streaming.DefaultProtocol,
+		"default_protocol":      h.config.Streaming.DefaultProtocol,
 		"auto_stop_no_view_sec": h.config.Streaming.AutoStopNoViewSec,
 		"webrtc": map[string]any{
 			"enabled":      h.config.Streaming.WebRTC.Enabled != nil && *h.config.Streaming.WebRTC.Enabled,
@@ -607,13 +613,13 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 		if restarter, ok := h.mediaEngine.(media.Restarter); ok {
 			rtmpEnabled := h.config.RTMP.Enabled != nil && *h.config.RTMP.Enabled
 			srtEnabled := h.config.SRT.Enabled != nil && *h.config.SRT.Enabled
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer cancel()
-				if err := restarter.Restart(ctx, h.config.RTMP.Port, h.config.SRT.Port, rtmpEnabled, srtEnabled); err != nil {
-					logger.Warn("lalmax restart failed", "error", err)
-				}
-			}()
+			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+			defer cancel()
+			if err := restarter.Restart(ctx, h.config.RTMP.Port, h.config.SRT.Port, rtmpEnabled, srtEnabled); err != nil {
+				logger.Warn("lalmax restart failed", "error", err)
+				writeError(w, http.StatusInternalServerError, "lalmax restart failed")
+				return
+			}
 		}
 	}
 

@@ -389,6 +389,30 @@ func paginateStreamSummaries(items []streamSummary, limit, offset int) ([]stream
 	return items[offset:end], total
 }
 
+func pushSourceTypeFromProtocol(protocol string) string {
+	switch strings.ToLower(protocol) {
+	case "rtmp":
+		return "rtmp_push"
+	case "srt":
+		return "srt_push"
+	case "whip", "webrtc", "whip_push":
+		return "whip_push"
+	default:
+		return ""
+	}
+}
+
+// inferCustomizePushSource maps lal "customize" ingest sessions (WHIP/SRT via AddCustomizePubSession).
+func inferCustomizePushSource(info *media.StreamInfo, remoteAddr string) string {
+	if info != nil && strings.EqualFold(info.AudioCodec, "opus") {
+		return "whip_push"
+	}
+	if strings.TrimSpace(remoteAddr) == "" {
+		return "whip_push"
+	}
+	return "srt_push"
+}
+
 func inferStreamSourceType(info media.StreamInfo, managed bool) string {
 	if info.Publisher != nil {
 		if src := inferStreamSourceTypeFromProtocol(info.Publisher.Protocol); src == "gb28181" {
@@ -398,25 +422,67 @@ func inferStreamSourceType(info media.StreamInfo, managed bool) string {
 	if managed {
 		return "camera"
 	}
-	if info.Publisher == nil {
-		return "stream"
+	if info.Publisher != nil {
+		if src := pushSourceTypeFromProtocol(info.Publisher.Protocol); src != "" {
+			return src
+		}
+		if strings.EqualFold(info.Publisher.Protocol, "customize") {
+			return inferCustomizePushSource(&info, info.Publisher.Remote)
+		}
+		return inferStreamSourceTypeFromProtocol(info.Publisher.Protocol)
 	}
-	return inferStreamSourceTypeFromProtocol(info.Publisher.Protocol)
+	if info.VideoCodec != "" {
+		return inferCustomizePushSource(&info, "")
+	}
+	return "stream"
 }
 
 func inferStreamSourceTypeFromProtocol(protocol string) string {
+	if src := pushSourceTypeFromProtocol(protocol); src != "" {
+		return src
+	}
 	switch strings.ToLower(protocol) {
-	case "rtmp":
-		return "rtmp_push"
-	case "srt":
-		return "srt_push"
 	case "rtsp", "relay_pull", "pull":
 		return "relay_pull"
 	case "rtp", "gb28181", "ps":
 		return "gb28181"
+	case "customize":
+		return "stream"
 	default:
 		return "stream"
 	}
+}
+
+func (h *Handler) inferPromoteSourceType(ctx context.Context, streamID string, info *media.StreamInfo) string {
+	if info != nil && info.Publisher != nil {
+		if src := pushSourceTypeFromProtocol(info.Publisher.Protocol); src != "" {
+			return src
+		}
+		if strings.EqualFold(info.Publisher.Protocol, "customize") {
+			return inferCustomizePushSource(info, info.Publisher.Remote)
+		}
+		switch strings.ToLower(info.Publisher.Protocol) {
+		case "rtsp", "relay_pull", "pull":
+			return "relay_pull"
+		}
+	}
+	if info != nil && info.VideoCodec != "" {
+		return inferCustomizePushSource(info, "")
+	}
+	if h.db != nil {
+		histories, _, err := h.db.ListStreamHistory(ctx, streamID, 5, 0)
+		if err == nil {
+			for _, hist := range histories {
+				if src := pushSourceTypeFromProtocol(hist.Protocol); src != "" {
+					return src
+				}
+				if strings.EqualFold(hist.Protocol, "customize") {
+					return inferCustomizePushSource(info, hist.RemoteAddr)
+				}
+			}
+		}
+	}
+	return "rtmp_push"
 }
 
 func inferCameraManagementType(info media.StreamInfo) string {
@@ -424,8 +490,13 @@ func inferCameraManagementType(info media.StreamInfo) string {
 		return "camera"
 	}
 	switch strings.ToLower(info.Publisher.Protocol) {
-	case "rtmp", "srt":
+	case "rtmp", "srt", "whip", "webrtc", "whip_push":
 		return "promoted"
+	case "customize":
+		if inferCustomizePushSource(&info, info.Publisher.Remote) != "" {
+			return "promoted"
+		}
+		return "camera"
 	default:
 		return "camera"
 	}
@@ -809,15 +880,7 @@ func (h *Handler) handlePromoteStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sourceType := "rtmp_push"
-	if info.Publisher != nil {
-		switch strings.ToLower(info.Publisher.Protocol) {
-		case "srt":
-			sourceType = "srt_push"
-		case "rtsp", "relay_pull", "pull":
-			sourceType = "relay_pull"
-		}
-	}
+	sourceType := h.inferPromoteSourceType(r.Context(), streamID, info)
 
 	encoding := ""
 	if info.VideoCodec != "" {
@@ -854,13 +917,15 @@ func (h *Handler) handlePromoteStream(w http.ResponseWriter, r *http.Request) {
 
 	// Create camera config for CameraManager
 	cam := config.CameraConfig{
-		ID:       streamID,
-		Name:     req.Name,
-		Protocol: protocol,
-		Encoding: encoding,
-		URL:      cameraURL,
-		Enabled:  true,
+		ID:         streamID,
+		Name:       req.Name,
+		Protocol:   protocol,
+		Encoding:   encoding,
+		URL:        cameraURL,
+		Enabled:    true,
+		SourceType: sourceType,
 	}
+	config.ApplyCameraAudioDefault(&cam)
 
 	// If camera exists but is archived, unarchive and update it
 	if existingCam != nil && existingCam.Archived {
@@ -899,6 +964,13 @@ func (h *Handler) handlePromoteStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Record that this camera is backed by an existing lalmax stream group.
+	if err := h.db.BindStreamToCamera(r.Context(), streamID, streamID); err != nil {
+		logger.Error("create stream binding for promoted camera failed", "stream_id", streamID, "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to create stream binding")
+		return
+	}
+
 	// Update metadata if provided
 	if req.Description != "" || req.Location != "" {
 		if err := h.db.UpdateCameraMetadata(r.Context(), streamID, req.Description, req.Location, "", "", "", 0); err != nil {
@@ -926,31 +998,36 @@ func (h *Handler) handleDeleteStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := h.mediaEngine.GetStream(r.Context(), streamID)
+	ctx := r.Context()
+	info, err := h.mediaEngine.GetStream(ctx, streamID)
 	if err != nil {
 		logger.Error("get stream for delete failed", "stream_id", streamID, "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to get stream")
 		return
 	}
-	if info == nil {
+
+	if info != nil {
+		if info.Publisher != nil {
+			if err := h.mediaEngine.KickSession(ctx, info.Publisher.SessionID); err != nil {
+				logger.Error("kick publisher failed", "stream_id", streamID, "session_id", info.Publisher.SessionID, "err", err)
+				writeError(w, http.StatusInternalServerError, "failed to kick publisher")
+				return
+			}
+		}
+
+		if err := h.mediaEngine.StopPull(ctx, streamID); err != nil {
+			logger.Debug("stop pull failed (may not be a pull stream)", "stream_id", streamID, "err", err)
+		}
+	} else if ok, err := h.deleteOfflineStream(ctx, streamID); err != nil {
+		logger.Error("delete offline stream failed", "stream_id", streamID, "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to delete stream")
+		return
+	} else if !ok {
 		writeError(w, http.StatusNotFound, "stream not found")
 		return
 	}
 
-	if info.Publisher != nil {
-		if err := h.mediaEngine.KickSession(r.Context(), info.Publisher.SessionID); err != nil {
-			logger.Error("kick publisher failed", "stream_id", streamID, "session_id", info.Publisher.SessionID, "err", err)
-			writeError(w, http.StatusInternalServerError, "failed to kick publisher")
-			return
-		}
-	}
-
-	if err := h.mediaEngine.StopPull(r.Context(), streamID); err != nil {
-		logger.Debug("stop pull failed (may not be a pull stream)", "stream_id", streamID, "err", err)
-	}
-
-	// Clear stream history
-	if err := h.db.DeleteStreamHistory(r.Context(), streamID); err != nil {
+	if err := h.db.DeleteStreamHistory(ctx, streamID); err != nil {
 		logger.Warn("failed to clear stream history", "stream_id", streamID, "error", err)
 	}
 
@@ -958,6 +1035,43 @@ func (h *Handler) handleDeleteStream(w http.ResponseWriter, r *http.Request) {
 		"stream_id": streamID,
 		"status":    "deleted",
 	})
+}
+
+// deleteOfflineStream removes stream records that are visible in the list but no longer active in lalmax.
+func (h *Handler) deleteOfflineStream(ctx context.Context, streamID string) (bool, error) {
+	cam, err := h.db.GetCamera(ctx, streamID)
+	if err != nil {
+		return false, err
+	}
+	if cam != nil && !cam.Archived {
+		if err := h.archiveCameraRecord(ctx, streamID); err != nil {
+			return false, err
+		}
+		_ = h.db.UnbindStreamFromCamera(ctx, streamID)
+		if binding, err := h.db.GetBindingByCameraID(ctx, streamID); err != nil {
+			return false, err
+		} else if binding != nil {
+			_ = h.db.UnbindStreamFromCamera(ctx, binding.StreamID)
+		}
+		return true, nil
+	}
+
+	binding, err := h.db.GetStreamBinding(ctx, streamID)
+	if err != nil {
+		return false, err
+	}
+	if binding != nil {
+		if err := h.db.UnbindStreamFromCamera(ctx, streamID); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+
+	histories, _, err := h.db.ListStreamHistory(ctx, streamID, 1, 0)
+	if err != nil {
+		return false, err
+	}
+	return len(histories) > 0, nil
 }
 
 func (h *Handler) handleKickPublisher(w http.ResponseWriter, r *http.Request) {

@@ -23,7 +23,37 @@ type HealthEventsFilter struct {
 func (d *DB) InsertHealthEvent(ctx context.Context, event model.HealthEvent) error {
 	q := `INSERT INTO camera_health_events(camera_id, event_type, status, message, metadata, created_at) VALUES(?,?,?,?,?,?);`
 	_, err := d.db.ExecContext(ctx, q, event.CameraID, event.EventType, event.Status, event.Message, event.Metadata, formatTime(event.CreatedAt))
+	if err != nil {
+		return err
+	}
+
+	startedAt := event.CreatedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+	}
+	_, err = d.InsertEvent(ctx, model.Event{
+		CameraID:  event.CameraID,
+		Source:    model.EventSourceHealth,
+		Type:      event.EventType,
+		Severity:  healthEventSeverity(event.Status),
+		Status:    model.EventStatusOpen,
+		Message:   event.Message,
+		Metadata:  event.Metadata,
+		StartedAt: startedAt,
+		CreatedAt: startedAt,
+	})
 	return err
+}
+
+func healthEventSeverity(status string) string {
+	switch status {
+	case string(model.HealthStatusError):
+		return model.EventSeverityCritical
+	case string(model.HealthStatusWarning):
+		return model.EventSeverityWarning
+	default:
+		return model.EventSeverityInfo
+	}
 }
 
 // ListHealthEvents returns health events matching the filter, total count, and error.

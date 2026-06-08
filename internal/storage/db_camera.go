@@ -49,6 +49,10 @@ type CameraRow struct {
 	ArchiveRetentionDays    int        `json:"archive_retention_days"`
 	// Transcoding config injected from YAML at API response time
 	Transcoding *config.CameraTranscodingConfig `json:"transcoding,omitempty"`
+	// AudioEnabled is injected from camera config extras at API response time.
+	AudioEnabled bool `json:"audio_enabled,omitempty"`
+	// SourceType describes ingest origin (rtmp_push, srt_push, relay_pull, etc.).
+	SourceType string `json:"source_type,omitempty"`
 	// RecordingPaused is injected at API response time (not stored in DB)
 	RecordingPaused bool `json:"recording_paused"`
 }

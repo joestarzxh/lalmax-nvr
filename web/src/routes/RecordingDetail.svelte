@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte';
   import {
     getRecording,
+    getCamera,
     deleteRecording,
     downloadRecording as apiDownloadRecording,
     getRecordingPlaybackUrl,
@@ -11,7 +12,7 @@
   import type { ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import type { Recording } from '$lib/api';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
-  import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw } from 'lucide-svelte';
+  import { AlertTriangle, HelpCircle, SkipForward, Loader2, RefreshCw, Volume2, VolumeX } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import MjpegPlayer from '$lib/components/MjpegPlayer.svelte';
   import { showToast } from '$lib/toast';
@@ -25,6 +26,9 @@
   let mjpegPlayer: MjpegPlayer | undefined = $state();
   let videoSrc = $state('');
   let videoLoading = $state(false);
+  let videoEl: HTMLVideoElement | undefined = $state();
+  let isMuted = $state(false);
+  let cameraAudioEnabled = $state<boolean | null>(null);
   let downloadProgress = $state(0);
   let isDownloading = $state(false);
   let isTransitioning = $state(false);
@@ -39,6 +43,12 @@
     try {
       recording = await getRecording(currentId);
       if (recording) {
+        try {
+          const cam = await getCamera(recording.camera_id);
+          cameraAudioEnabled = cam?.audio_enabled ?? false;
+        } catch {
+          cameraAudioEnabled = null;
+        }
         if (recording.format === 'mjpeg') {
           await tick();
           if (mjpegPlayer) await mjpegPlayer.initPlayer();
@@ -104,6 +114,21 @@
   }
 
   function goBack() { window.location.hash = '#/recordings'; }
+
+  function toggleMute() {
+    isMuted = !isMuted;
+    if (videoEl) videoEl.muted = isMuted;
+  }
+
+  function bindVideo(node: HTMLVideoElement) {
+    videoEl = node;
+    node.muted = isMuted;
+    return {
+      destroy() {
+        if (videoEl === node) videoEl = undefined;
+      },
+    };
+  }
 
   async function handleDownload() {
     if (isDownloading || !recording) return;
@@ -236,18 +261,44 @@
               {#if videoLoading}
                 <div class="flex items-center justify-center h-64"><div class="spinner spinner-lg"></div></div>
               {:else if videoSrc}
-                <video controls preload="metadata" class="w-full max-h-[80vh]" src={videoSrc}
-                  onended={handleVideoEnded}>
-                  <track kind="captions" />
-                  {t('detail.videoUnsupported')}
-                </video>
+                <div class="relative group">
+                  <video
+                    use:bindVideo
+                    controls
+                    preload="metadata"
+                    class="w-full max-h-[80vh]"
+                    src={videoSrc}
+                    onended={handleVideoEnded}
+                  >
+                    <track kind="captions" />
+                    {t('detail.videoUnsupported')}
+                  </video>
+                  <button
+                    type="button"
+                    onclick={toggleMute}
+                    class="absolute bottom-14 right-3 p-2 rounded-md bg-black/60 text-white/80 hover:text-white hover:bg-black/80 transition-all opacity-0 group-hover:opacity-100 z-10"
+                    title={isMuted ? t('detail.unmute') : t('detail.mute')}
+                    aria-label={isMuted ? t('detail.unmute') : t('detail.mute')}
+                  >
+                    {#if isMuted}
+                      <VolumeX size={18} />
+                    {:else}
+                      <Volume2 size={18} />
+                    {/if}
+                  </button>
+                </div>
               {:else}
                 <div class="flex items-center justify-center h-64 th-text-muted">{t('detail.failedLoadVideo')}</div>
               {/if}
             </div>
-            <div class="flex items-center justify-between px-4 py-2 th-bg-secondary">
-              <span class="text-sm th-text-muted">{t('detail.playing')} <span class="font-mono th-text-primary">{recording.camera_id}</span></span>
-              <button onclick={navigateToNext} class="btn btn-ghost btn-sm flex items-center gap-1">
+            <div class="flex items-center justify-between px-4 py-2 th-bg-secondary gap-3">
+              <div class="min-w-0">
+                <span class="text-sm th-text-muted">{t('detail.playing')} <span class="font-mono th-text-primary">{recording.camera_id}</span></span>
+                {#if cameraAudioEnabled === false}
+                  <p class="text-xs th-text-muted mt-1">{t('detail.audioRecordingDisabled')}</p>
+                {/if}
+              </div>
+              <button onclick={navigateToNext} class="btn btn-ghost btn-sm flex items-center gap-1 shrink-0">
                 {t('detail.nextRecording')} <SkipForward size={16} />
               </button>
             </div>

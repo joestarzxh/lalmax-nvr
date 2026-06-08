@@ -1633,6 +1633,18 @@ func TestPromoteStream_Success(t *testing.T) {
 	require.Equal(t, "obs-stream-1", resp["camera_id"])
 	require.Equal(t, "rtmp_push", resp["source_type"])
 	require.Equal(t, "promoted", resp["status"])
+
+	binding, err := db.GetStreamBinding(context.Background(), "obs-stream-1")
+	require.NoError(t, err)
+	require.NotNil(t, binding)
+	require.Equal(t, "obs-stream-1", binding.CameraID)
+
+	rr = doRequest(t, h.Routes(), "GET", "/api/cameras", nil, "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var cameras []storage.CameraRow
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &cameras))
+	require.Len(t, cameras, 1)
+	require.Equal(t, "rtmp_push", cameras[0].SourceType)
 }
 
 func TestPromoteStream_StreamNotFound(t *testing.T) {
@@ -1761,6 +1773,45 @@ func TestPromoteStream_SRTStream(t *testing.T) {
 	require.Equal(t, "promoted", resp["status"])
 }
 
+func TestPromoteStream_WHIPCustomizeSession(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	engine := &stubMediaEngine{
+		stream: &media.StreamInfo{
+			StreamID:   "whip-stream-1",
+			AppName:    "live",
+			Active:     false,
+			VideoCodec: "h264",
+			AudioCodec: "opus",
+		},
+	}
+
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h.SetMediaEngine(engine)
+
+	body := `{"name": "WHIP Stream 1"}`
+	rr := doRequest(t, h.Routes(), "POST", "/api/streams/whip-stream-1/promote",
+		strings.NewReader(body), "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Equal(t, "whip-stream-1", resp["stream_id"])
+	require.Equal(t, "whip_push", resp["source_type"])
+	require.Equal(t, "promoted", resp["status"])
+
+	rr = doRequest(t, h.Routes(), "GET", "/api/cameras", nil, "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code)
+	var cameras []storage.CameraRow
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &cameras))
+	require.Len(t, cameras, 1)
+	require.Equal(t, "whip_push", cameras[0].SourceType)
+}
+
 func TestDeleteStream_Success(t *testing.T) {
 	t.Helper()
 	t.Parallel()
@@ -1808,6 +1859,71 @@ func TestDeleteStream_StreamNotFound(t *testing.T) {
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/streams/nonexistent", nil, "admin", "pass")
 	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+func TestDeleteStream_OfflineManagedCamera(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	seedCameraWithEncoding(t, db, "codex-test", "h264")
+	require.NoError(t, db.BindStreamToCamera(context.Background(), "codex-test", "codex-test"))
+
+	engine := &stubMediaEngine{stream: nil}
+
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h.SetMediaEngine(engine)
+
+	rr := doRequest(t, h.Routes(), "DELETE", "/api/streams/codex-test", nil, "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Equal(t, "codex-test", resp["stream_id"])
+	require.Equal(t, "deleted", resp["status"])
+
+	cam, err := db.GetCamera(context.Background(), "codex-test")
+	require.NoError(t, err)
+	require.NotNil(t, cam)
+	require.True(t, cam.Archived)
+
+	binding, err := db.GetStreamBinding(context.Background(), "codex-test")
+	require.NoError(t, err)
+	require.Nil(t, binding)
+}
+
+func TestDeleteStream_OfflineHistoryOnly(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	endedAt := time.Now().Add(-time.Hour)
+	require.NoError(t, db.InsertStreamHistory(context.Background(), &storage.StreamHistory{
+		StreamID:   "obs-room-1",
+		AppName:    "live",
+		Protocol:   "rtmp",
+		RemoteAddr: "10.0.0.8:1935",
+		SessionID:  "sess-obs-1",
+		StartedAt:  endedAt.Add(-10 * time.Minute),
+	}))
+	require.NoError(t, db.FinishStreamHistory(context.Background(), "sess-obs-1", endedAt, 1000, 2000))
+
+	engine := &stubMediaEngine{stream: nil}
+
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h.SetMediaEngine(engine)
+
+	rr := doRequest(t, h.Routes(), "DELETE", "/api/streams/obs-room-1", nil, "admin", "pass")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	histories, total, err := db.ListStreamHistory(context.Background(), "obs-room-1", 10, 0)
+	require.NoError(t, err)
+	require.Equal(t, 0, total)
+	require.Empty(t, histories)
 }
 
 func TestDeleteStream_RequiresMediaEngine(t *testing.T) {

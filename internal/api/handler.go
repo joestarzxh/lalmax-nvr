@@ -144,6 +144,8 @@ type Handler struct {
 	onvifNewClient    func(endpoint, username, password string) onvifDeviceClient
 	banMgr            BanManager
 	gb28181Svr        GB28181StreamStatus
+	// readyzDiskUsage overrides disk probing for /api/readyz (tests only).
+	readyzDiskUsage func() (total, used int64, err error)
 }
 
 // GB28181StreamStatus reports active GB28181 play sessions for stream status overlay.
@@ -205,6 +207,14 @@ func (h *Handler) Routes() http.Handler {
 				r.Delete("/", h.handleDeleteRecording)
 				r.Get("/download", h.handleDownloadRecording)
 				r.Get("/frames", h.handleListFrames)
+			})
+		})
+		r.Route("/api/events", func(r chi.Router) {
+			r.Get("/", h.handleListEvents)
+			r.Route("/{id}", func(r chi.Router) {
+				r.Get("/", h.handleGetEvent)
+				r.Delete("/", h.handleDeleteEvent)
+				r.Post("/ack", h.handleAcknowledgeEvent)
 			})
 		})
 		r.Route("/api/cameras", func(r chi.Router) {
@@ -408,7 +418,11 @@ func noopAuthMW() func(http.Handler) http.Handler {
 
 // noopHandler is a helper for creating a Handler without real auth.
 func noopHandler(db *storage.DB, store *storage.Manager) *Handler {
-	return NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h.readyzDiskUsage = func() (int64, int64, error) {
+		return 1_000_000_000_000, 100_000_000_000, nil
+	}
+	return h
 }
 
 // --- Test helper exported for handler_test.go ---

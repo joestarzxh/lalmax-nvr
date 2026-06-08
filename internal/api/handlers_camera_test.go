@@ -2,11 +2,13 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
 
@@ -42,6 +44,61 @@ func TestCameraRowForAPI_ONVIFNoEndpoint(t *testing.T) {
 	row := &storage.CameraRow{Protocol: "onvif", URL: "", ONVIFEndpoint: ""}
 	cameraRowForAPI(row)
 	require.Equal(t, "", row.URL)
+}
+
+func TestResolveCameraSourceType_FromBinding(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+
+	db, store := setupTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	require.NoError(t, db.UpsertCamera(ctx, "push-cam-1", "Push Cam", "rtsp", "h264", "rtsp://127.0.0.1:5544/live/push-cam-1", "", "", true, "", "", ""))
+	require.NoError(t, db.BindStreamToCamera(ctx, "push-cam-1", "push-cam-1"))
+
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	row := &storage.CameraRow{ID: "push-cam-1", Protocol: "rtsp"}
+	h.resolveCameraSourceType(ctx, row)
+	require.Equal(t, "rtmp_push", row.SourceType)
+}
+
+func TestInferCustomizePushSource_WHIP(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+
+	info := &media.StreamInfo{VideoCodec: "h264", AudioCodec: "opus"}
+	require.Equal(t, "whip_push", inferCustomizePushSource(info, ""))
+}
+
+func TestInferCustomizePushSource_SRT(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+
+	info := &media.StreamInfo{VideoCodec: "h265", AudioCodec: "aac"}
+	require.Equal(t, "srt_push", inferCustomizePushSource(info, "10.0.0.9:54321"))
+}
+
+func TestInferStreamSourceType_WHIPWithoutPublisher(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+
+	src := inferStreamSourceType(media.StreamInfo{
+		StreamID:   "whip-1",
+		VideoCodec: "h264",
+		AudioCodec: "opus",
+	}, false)
+	require.Equal(t, "whip_push", src)
+}
+
+func TestResolveCameraSourceType_PrefersStoredValue(t *testing.T) {
+	t.Helper()
+	t.Parallel()
+
+	h := NewHandler(nil, nil, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	row := &storage.CameraRow{ID: "push-cam-1", Protocol: "rtsp", SourceType: "srt_push"}
+	h.resolveCameraSourceType(context.Background(), row)
+	require.Equal(t, "srt_push", row.SourceType)
 }
 
 func TestIsONVIFAuthError(t *testing.T) {

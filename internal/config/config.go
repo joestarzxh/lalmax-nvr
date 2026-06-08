@@ -89,6 +89,7 @@ type CameraConfig struct {
 	Transcoding          *CameraTranscodingConfig `yaml:"transcoding,omitempty"`
 	Timelapse            *CameraTimelapseConfig   `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
 	AudioEnabled         bool                     `yaml:"audio_enabled"`
+	SourceType           string                   `yaml:"source_type,omitempty" json:"source_type,omitempty"`
 	HealthOverrides      HealthOverrides          `yaml:"health_overrides,omitempty"`
 	FrameWatchdogTimeout string                   `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
 	PullRetryNum         int                      `yaml:"pull_retry_num,omitempty"`         // -1=forever, 0=never, >0=limited (default -1 for pull cameras)
@@ -106,6 +107,39 @@ type HealthOverrides struct {
 	MinFPS                 int     `yaml:"min_fps,omitempty"`
 	OfflineThreshold       string  `yaml:"offline_threshold,omitempty"`
 	FreezeTimeout          string  `yaml:"freeze_timeout,omitempty"`
+}
+
+// CameraSupportsAudioRecording reports whether a camera can record AAC/G.711 into MP4 segments.
+func CameraSupportsAudioRecording(cam CameraConfig) bool {
+	enc := strings.ToLower(strings.TrimSpace(cam.Encoding))
+	switch cam.Protocol {
+	case "rtsp", "onvif", "xiaomi":
+	default:
+		return false
+	}
+	switch enc {
+	case "h264", "h265":
+		return true
+	case "", "mjpeg", "jpeg":
+		return false
+	default:
+		return false
+	}
+}
+
+// ApplyCameraAudioDefault enables audio recording for supported codecs unless explicitly disabled.
+func ApplyCameraAudioDefault(cam *CameraConfig) {
+	if cam == nil {
+		return
+	}
+	if cam.AudioEnabled && (cam.Encoding == "jpeg" || cam.Encoding == "mjpeg") {
+		slog.Warn("audio_enabled not supported for MJPEG/HTTP-JPEG cameras, disabling", "camera_id", cam.ID)
+		cam.AudioEnabled = false
+		return
+	}
+	if CameraSupportsAudioRecording(*cam) {
+		cam.AudioEnabled = true
+	}
 }
 
 func NormalizeRTSPTransport(transport string) string {
@@ -1078,11 +1112,7 @@ func (cfg *Config) ApplyDefaults() {
 				cam.Encoding = "h264"
 			}
 		}
-		// Reject audio_enabled for MJPEG/HTTP-JPEG cameras (no audio source)
-		if cam.AudioEnabled && (cam.Encoding == "jpeg" || cam.Encoding == "mjpeg") {
-			slog.Warn("audio_enabled not supported for MJPEG/HTTP-JPEG cameras, disabling", "camera_id", cam.ID)
-			cam.AudioEnabled = false
-		}
+		ApplyCameraAudioDefault(cam)
 
 		// Timelapse defaults
 		if cam.Timelapse != nil {

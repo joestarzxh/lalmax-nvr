@@ -36,6 +36,8 @@ export interface Camera {
   profile_token?: string;
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
+  audio_enabled?: boolean;
+  source_type?: string;
   recording_paused?: boolean;
 }
 
@@ -57,6 +59,7 @@ export interface CreateCameraRequest {
   profile_token?: string;
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
+  audio_enabled?: boolean;
 }
 
 export interface UpdateCameraRequest {
@@ -78,6 +81,7 @@ export interface UpdateCameraRequest {
   profile_token?: string;
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
+  audio_enabled?: boolean;
 }
 
 export interface DiscoveredDevice {

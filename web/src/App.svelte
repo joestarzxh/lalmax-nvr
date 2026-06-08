@@ -6,6 +6,7 @@
   import Login from './routes/Login.svelte';
   import Recordings from './routes/Recordings.svelte';
   import RecordingDetail from './routes/RecordingDetail.svelte';
+  import Events from './routes/Events.svelte';
   import Stats from './routes/Stats.svelte';
   import Settings from './routes/Settings.svelte';
   import Cameras from './routes/Cameras.svelte';
@@ -83,6 +84,10 @@
         return { route: 'recording-detail', params: { id: segments[1] } };
       }
       return { route: 'recordings', params: {} };
+    }
+
+    if (segments[0] === 'events') {
+      return { route: 'events', params: {} };
     }
 
     if (segments[0] === 'cameras') {
@@ -224,6 +229,8 @@
       <Recordings />
     {:else if currentRoute === 'recording-detail'}
       <RecordingDetail recordingId={params.id} />
+    {:else if currentRoute === 'events'}
+      <Events />
     {:else if currentRoute === 'cameras'}
       <Cameras />
     {:else if currentRoute === 'cameras-detail'}

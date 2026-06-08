@@ -22,10 +22,11 @@ import (
 )
 
 type stubMediaEngine struct {
-	startPulls []media.StartPullRequest
-	stopPulls  []string
-	startErr   error
-	stopErr    error
+	startPulls   []media.StartPullRequest
+	stopPulls    []string
+	startErr     error
+	stopErr      error
+	activeStreams map[string]bool
 }
 
 func (s *stubMediaEngine) Start(context.Context) error    { return nil }
@@ -51,8 +52,11 @@ func (s *stubMediaEngine) StopRTPReceive(context.Context, string) error {
 func (s *stubMediaEngine) KickSession(context.Context, string) error {
 	return errors.New("not implemented")
 }
-func (s *stubMediaEngine) GetStream(context.Context, string) (*media.StreamInfo, error) {
-	return nil, errors.New("not implemented")
+func (s *stubMediaEngine) GetStream(_ context.Context, streamID string) (*media.StreamInfo, error) {
+	if s.activeStreams != nil && s.activeStreams[streamID] {
+		return &media.StreamInfo{StreamID: streamID, AppName: "live", Active: true}, nil
+	}
+	return nil, nil
 }
 func (s *stubMediaEngine) ListStreams(context.Context) ([]media.StreamInfo, error) {
 	return nil, errors.New("not implemented")
@@ -795,6 +799,51 @@ func TestRestartRecorder_Disabled(t *testing.T) {
 	err := mgr.RestartRecorder(ctx, "cam-disabled")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "disabled")
+}
+
+func TestStartCamera_SkipsMediaPullForBoundLalmaxStream(t *testing.T) {
+	mgr, _, db, _ := newTestManager(t)
+	engine := &stubMediaEngine{}
+	mgr.SetMediaEngine(engine)
+
+	ctx := context.Background()
+	require.NoError(t, db.BindStreamToCamera(ctx, "cam-h264", "cam-h264"))
+
+	err := mgr.StartCamera(ctx, "cam-h264")
+	require.NoError(t, err)
+	assert.Empty(t, engine.startPulls)
+}
+
+func TestStartCamera_SkipsMediaPullForActiveLalmaxStream(t *testing.T) {
+	mgr, _, _, _ := newTestManager(t)
+	engine := &stubMediaEngine{activeStreams: map[string]bool{"cam-h264": true}}
+	mgr.SetMediaEngine(engine)
+
+	ctx := context.Background()
+	err := mgr.StartCamera(ctx, "cam-h264")
+	require.NoError(t, err)
+	assert.Empty(t, engine.startPulls)
+}
+
+func TestStartCamera_SkipsMediaPullForLalPlayURL(t *testing.T) {
+	mgr, _, _, configPath := newTestManager(t)
+	engine := &stubMediaEngine{}
+	mgr.SetMediaEngine(engine)
+
+	cfg := testConfig()
+	for i := range cfg.Cameras {
+		if cfg.Cameras[i].ID == "cam-h264" {
+			cfg.Cameras[i].URL = "rtsp://127.0.0.1/live/cam-h264"
+			break
+		}
+	}
+	require.NoError(t, config.Save(configPath, cfg))
+	mgr.cfg = cfg
+
+	ctx := context.Background()
+	err := mgr.StartCamera(ctx, "cam-h264")
+	require.NoError(t, err)
+	assert.Empty(t, engine.startPulls)
 }
 
 func TestStartCamera_StartsMediaPullForRTSP(t *testing.T) {

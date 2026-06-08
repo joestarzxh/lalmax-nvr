@@ -44,11 +44,17 @@ func (d *DB) ListCameraConfigs(ctx context.Context) ([]config.CameraConfig, erro
 		}
 		cam.RTSPTransport = config.NormalizeRTSPTransport(cam.RTSPTransport)
 		if extrasRaw.Valid {
-			extras, err := unmarshalCameraExtras(extrasRaw.String)
+			raw := extrasRaw.String
+			extras, err := unmarshalCameraExtras(raw)
 			if err != nil {
 				return nil, err
 			}
 			applyExtrasToCamera(&cam, extras)
+			if !extrasHasAudioEnabled(raw) {
+				config.ApplyCameraAudioDefault(&cam)
+			}
+		} else {
+			config.ApplyCameraAudioDefault(&cam)
 		}
 		row := CameraRow{
 			MergeEnabled:            nullBoolToPtr(mergeEnabled),

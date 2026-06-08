@@ -25,7 +25,7 @@
     flv: false,
     hls: false,
   });
-  let bestProtocol = $state('llhls');
+  let bestProtocol = $state('webrtc');
 
   $effect(() => {
     // LL-HLS: hls.js bundled — always available
@@ -45,11 +45,11 @@
       capabilities.hls = false;
     }
 
-    // Auto-select best available: LL-HLS > WebRTC > FLV > HLS
-    if (capabilities.llhls) {
-      bestProtocol = 'llhls';
-    } else if (capabilities.webrtc) {
+    // Auto-select best available: WebRTC > LL-HLS > FLV > HLS
+    if (capabilities.webrtc) {
       bestProtocol = 'webrtc';
+    } else if (capabilities.llhls) {
+      bestProtocol = 'llhls';
     } else if (capabilities.flv) {
       bestProtocol = 'flv';
     } else {

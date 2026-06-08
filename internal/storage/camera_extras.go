@@ -11,7 +11,7 @@ type cameraExtras struct {
 	Timelapse            *config.CameraTimelapseConfig   `json:"timelapse,omitempty"`
 	Transcoding          *config.CameraTranscodingConfig `json:"transcoding,omitempty"`
 	HealthOverrides      config.HealthOverrides          `json:"health_overrides,omitempty"`
-	AudioEnabled         bool                            `json:"audio_enabled,omitempty"`
+	AudioEnabled         *bool                           `json:"audio_enabled,omitempty"`
 	SubStreamURL         string                          `json:"sub_stream_url,omitempty"`
 	SnapshotURL          string                          `json:"snapshot_url,omitempty"`
 	SampleInterval       int                             `json:"sample_interval,omitempty"`
@@ -20,14 +20,14 @@ type cameraExtras struct {
 	PullRetryNum         int                             `json:"pull_retry_num,omitempty"`
 	DID                  string                          `json:"did,omitempty"`
 	Vendor               string                          `json:"vendor,omitempty"`
+	SourceType           string                          `json:"source_type,omitempty"`
 }
 
 func extrasFromCameraConfig(cam config.CameraConfig) cameraExtras {
-	return cameraExtras{
+	extras := cameraExtras{
 		Timelapse:            cam.Timelapse,
 		Transcoding:          cam.Transcoding,
 		HealthOverrides:      cam.HealthOverrides,
-		AudioEnabled:         cam.AudioEnabled,
 		SubStreamURL:         cam.SubStreamURL,
 		SnapshotURL:          cam.SnapshotURL,
 		SampleInterval:       cam.SampleInterval,
@@ -36,14 +36,22 @@ func extrasFromCameraConfig(cam config.CameraConfig) cameraExtras {
 		PullRetryNum:         cam.PullRetryNum,
 		DID:                  cam.DID,
 		Vendor:               cam.Vendor,
+		SourceType:           cam.SourceType,
 	}
+	if config.CameraSupportsAudioRecording(cam) {
+		v := cam.AudioEnabled
+		extras.AudioEnabled = &v
+	}
+	return extras
 }
 
 func applyExtrasToCamera(cam *config.CameraConfig, extras cameraExtras) {
 	cam.Timelapse = extras.Timelapse
 	cam.Transcoding = extras.Transcoding
 	cam.HealthOverrides = extras.HealthOverrides
-	cam.AudioEnabled = extras.AudioEnabled
+	if extras.AudioEnabled != nil {
+		cam.AudioEnabled = *extras.AudioEnabled
+	}
 	cam.SubStreamURL = extras.SubStreamURL
 	cam.SnapshotURL = extras.SnapshotURL
 	cam.SampleInterval = extras.SampleInterval
@@ -52,6 +60,7 @@ func applyExtrasToCamera(cam *config.CameraConfig, extras cameraExtras) {
 	cam.PullRetryNum = extras.PullRetryNum
 	cam.DID = extras.DID
 	cam.Vendor = extras.Vendor
+	cam.SourceType = extras.SourceType
 }
 
 func mergeConfigFromRow(row CameraRow) *config.MergeConfig {
@@ -98,4 +107,16 @@ func unmarshalCameraExtras(raw string) (cameraExtras, error) {
 		return cameraExtras{}, err
 	}
 	return extras, nil
+}
+
+func extrasHasAudioEnabled(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	var meta map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+		return false
+	}
+	_, ok := meta["audio_enabled"]
+	return ok
 }

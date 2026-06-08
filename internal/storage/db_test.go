@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/stretchr/testify/require"
 )
@@ -894,7 +895,7 @@ func TestMigrationV5ToV6_OnvifColumns(t *testing.T) {
 	var version string
 	err := db.db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key='schema_version'").Scan(&version)
 	require.NoError(t, err)
-	require.Equal(t, "18", version)
+	require.Equal(t, "19", version)
 }
 
 func TestInsertRecordingWithRetry_Success(t *testing.T) {
@@ -1230,4 +1231,29 @@ func TestEscapeLike(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestListCameraConfigs_DefaultsAudioEnabledForLegacyH264(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	db, err := New(filepath.Join(dir, "test_audio_default.db"))
+	require.NoError(t, err)
+	ctx := context.Background()
+	require.NoError(t, db.Init(ctx))
+	defer db.Close()
+
+	require.NoError(t, db.UpsertCamera(ctx, "cam1", "Camera 1", "rtsp", "h264", "rtsp://localhost:554/stream", "", "", true, "", "", ""))
+
+	configs, err := db.ListCameraConfigs(ctx)
+	require.NoError(t, err)
+	require.Len(t, configs, 1)
+	require.True(t, configs[0].AudioEnabled)
+
+	disabled := false
+	require.NoError(t, db.SaveCameraExtras(ctx, config.CameraConfig{
+		ID: "cam1", Protocol: "rtsp", Encoding: "h264", AudioEnabled: disabled,
+	}))
+	configs, err = db.ListCameraConfigs(ctx)
+	require.NoError(t, err)
+	require.False(t, configs[0].AudioEnabled)
 }

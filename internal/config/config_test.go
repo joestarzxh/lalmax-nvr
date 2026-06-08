@@ -1116,12 +1116,12 @@ func TestAutoRemediationValidation(t *testing.T) {
 	})
 }
 
-func TestAudioEnabledDefaultFalse(t *testing.T) {
+func TestAudioEnabledDefaultTrueForH264(t *testing.T) {
 	cfg := &Config{Cameras: []CameraConfig{{
 		ID: "c1", Protocol: "rtsp", Encoding: "h264", URL: "rtsp://192.168.1.10/stream",
 	}}}
 	cfg.ApplyDefaults()
-	require.False(t, cfg.Cameras[0].AudioEnabled, "audio_enabled should default to false")
+	require.True(t, cfg.Cameras[0].AudioEnabled, "audio_enabled should default to true for H.264 recorders")
 }
 
 func TestAudioEnabledRejectedForMJPEG(t *testing.T) {

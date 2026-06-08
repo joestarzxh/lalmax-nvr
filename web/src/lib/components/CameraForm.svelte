@@ -71,6 +71,7 @@
   let formSerialNumber = $state('');
   let formRetentionDays = $state(0);
   let formStreamEncoding = $state('');
+  let formAudioEnabled = $state(false);
   // Transcoding config
   let formTranscodingEnabled = $state(false);
   let formTranscodingCodec = $state('h264');
@@ -139,6 +140,7 @@
     formSerialNumber = '';
     formRetentionDays = 0;
     formStreamEncoding = '';
+    formAudioEnabled = false;
     formTranscodingEnabled = false;
     formTranscodingCodec = 'h264';
     formTranscodingPreset = 'ultrafast';
@@ -168,6 +170,7 @@
     formSerialNumber = camera.serial_number || '';
     formRetentionDays = camera.retention_days || 0;
     formStreamEncoding = camera.stream_encoding || '';
+    formAudioEnabled = camera.audio_enabled ?? false;
     formTranscodingEnabled = camera.transcoding?.enabled ?? false;
     formTranscodingCodec = !h265Available ? 'h264' : (camera.transcoding?.target_codec || 'h264');
     formTranscodingPreset = camera.transcoding?.preset || 'ultrafast';
@@ -209,6 +212,13 @@
     } else {
       delete validationErrors[field];
     }
+  }
+
+  function supportsAudioRecording(): boolean {
+    if (formProtocol === 'xiaomi') return true;
+    if (formProtocol === 'onvif') return formEncoding !== 'mjpeg';
+    if (formProtocol === 'rtsp') return formEncoding === 'h264' || formEncoding === 'h265';
+    return false;
   }
 
   function validate(): boolean {
@@ -265,6 +275,7 @@
             preset: formTranscodingPreset,
             bitrate: formTranscodingBitrate,
           },
+          audio_enabled: supportsAudioRecording() ? formAudioEnabled : false,
         };
         if (formUsername && formUsername !== editingCamera.username) {
           data.username = formUsername;
@@ -304,6 +315,7 @@
             preset: formTranscodingPreset,
             bitrate: formTranscodingBitrate,
           },
+          audio_enabled: supportsAudioRecording() ? formAudioEnabled : false,
         };
         if (formUsername) data.username = formUsername;
         if (formPassword) data.password = formPassword;
@@ -475,6 +487,16 @@
       <input id="cam-enabled" type="checkbox" class="accent-[var(--color-accent)]" bind:checked={formEnabled} />
       <label for="cam-enabled" class="th-text-secondary text-sm">{t('cameras.enabledToggle')}</label>
     </div>
+
+    {#if supportsAudioRecording()}
+      <div class="md:col-span-2 flex items-start gap-2">
+        <input id="cam-audio" type="checkbox" class="accent-[var(--color-accent)] mt-0.5" bind:checked={formAudioEnabled} />
+        <div>
+          <label for="cam-audio" class="th-text-secondary text-sm">{t('cameras.audioEnabled')}</label>
+          <p class="th-text-muted text-xs mt-1">{t('cameras.audioEnabledHint')}</p>
+        </div>
+      </div>
+    {/if}
 
     <!-- Description -->
     <div class="md:col-span-2">

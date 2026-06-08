@@ -25,6 +25,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/cleanup"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
+	"github.com/lalmax-pro/lalmax-nvr/internal/event"
 	"github.com/lalmax-pro/lalmax-nvr/internal/ftp"
 	"github.com/lalmax-pro/lalmax-nvr/internal/gb28181"
 	"github.com/lalmax-pro/lalmax-nvr/internal/health"
@@ -353,12 +354,14 @@ type App struct {
 	authMW  func(http.Handler) http.Handler
 
 	// Managers
-	mergeMgr    *merge.MergeManager
-	camMgr      *camera.CameraManager
-	media       *media.Runtime
-	mediaEngine media.Engine
-	cleanupMgr  *cleanup.CleanupManager
-	healthMgr   *health.Manager
+	mergeMgr     *merge.MergeManager
+	camMgr       *camera.CameraManager
+	media        *media.Runtime
+	mediaEngine  media.Engine
+	cleanupMgr   *cleanup.CleanupManager
+	healthMgr    *health.Manager
+	eventBus     *event.EventBus
+	eventArchive *event.Archiver
 
 	// Optional network services (nil when disabled)
 	mqttClient   *mqtt.Client
@@ -413,6 +416,8 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		db.Close()
 		return nil, fmt.Errorf("sync cameras from storage: %w", err)
 	}
+	a.eventBus = event.NewEventBus(128)
+	a.eventArchive = event.NewArchiver(a.eventBus, db)
 
 	// Step 2: Metrics
 	a.metrics = metrics.NewMetrics()
@@ -521,6 +526,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 
 	// Step 6: Camera manager
 	a.camMgr = camera.NewCameraManager(cfg, store, db, configPath, a.metrics, a.mergeMgr, a.transcodeMgr)
+	a.camMgr.SetEventBus(a.eventBus)
 	// Step 6.5: Health manager (after camera manager, before streaming)
 	a.healthMgr = health.NewManager(cfg.Health, db)
 	if a.healthMgr != nil {
@@ -830,6 +836,10 @@ func (a *App) Start() error {
 		if err := a.healthMgr.Start(ctx); err != nil {
 			slog.Error("health manager", "error", err)
 		}
+	}
+
+	if a.eventArchive != nil {
+		go a.eventArchive.Start(ctx)
 	}
 
 	// Start merge manager

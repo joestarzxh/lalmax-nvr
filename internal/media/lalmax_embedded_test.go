@@ -69,6 +69,69 @@ func TestPatchLalmaxHLSConfig_PreservesUnrelatedFields(t *testing.T) {
 	require.True(t, llHls["low_latency"].(bool))
 }
 
+func TestLoadEmbeddedLalmaxConfig_SyncsProtocolSettingsForExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lalmax.conf.json")
+
+	raw, err := embeddedConfigJSON(EmbeddedLalmaxConfig{
+		RTMPPort:    1935,
+		RTMPEnabled: false,
+		SRTPort:     9000,
+		SRTEnabled:  false,
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, raw, 0o644))
+
+	_, err = loadEmbeddedLalmaxConfig(EmbeddedLalmaxConfig{
+		ConfigPath:  path,
+		RTMPPort:    1936,
+		RTMPEnabled: true,
+		SRTPort:     9001,
+		SRTEnabled:  true,
+	})
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal(data, &parsed))
+
+	lal := parsed["lal"].(map[string]any)
+	rtmp := lal["rtmp"].(map[string]any)
+	require.True(t, rtmp["enable"].(bool))
+	require.Equal(t, ":1936", rtmp["addr"])
+
+	lalmax := parsed["lalmax"].(map[string]any)
+	srt := lalmax["srt_config"].(map[string]any)
+	require.True(t, srt["enable"].(bool))
+	require.Equal(t, ":9001", srt["addr"])
+}
+
+func TestPatchLalmaxConfig_CreatesMissingProtocolSections(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lalmax.conf.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"lal":{},"lalmax":{}}`), 0o644))
+
+	require.NoError(t, patchLalmaxConfig(path, true, true, ":1935", ":9000"))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal(data, &parsed))
+
+	lal := parsed["lal"].(map[string]any)
+	rtmp := lal["rtmp"].(map[string]any)
+	require.True(t, rtmp["enable"].(bool))
+	require.Equal(t, ":1935", rtmp["addr"])
+
+	lalmax := parsed["lalmax"].(map[string]any)
+	srt := lalmax["srt_config"].(map[string]any)
+	require.True(t, srt["enable"].(bool))
+	require.Equal(t, ":9000", srt["addr"])
+}
+
 func TestEnsureLalLogConfig_AddsLogWhenMissing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lalmax.conf.json")

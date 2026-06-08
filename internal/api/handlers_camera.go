@@ -32,6 +32,69 @@ func cameraRowForAPI(row *storage.CameraRow) {
 	}
 }
 
+func (h *Handler) injectCameraConfigFields(row *storage.CameraRow) {
+	if row == nil {
+		return
+	}
+	if h.camMgr != nil {
+		if cam := h.camMgr.GetCameraConfig(row.ID); cam != nil {
+			row.AudioEnabled = cam.AudioEnabled
+			row.SourceType = cam.SourceType
+			if cam.Transcoding != nil {
+				row.Transcoding = cam.Transcoding
+			}
+			return
+		}
+	}
+	if h.config != nil {
+		for _, cam := range h.config.Cameras {
+			if cam.ID == row.ID {
+				row.AudioEnabled = cam.AudioEnabled
+				row.SourceType = cam.SourceType
+				if cam.Transcoding != nil {
+					row.Transcoding = cam.Transcoding
+				}
+				return
+			}
+		}
+	}
+}
+
+func (h *Handler) resolveCameraSourceType(ctx context.Context, row *storage.CameraRow) {
+	if row == nil || row.SourceType != "" {
+		return
+	}
+	switch row.Protocol {
+	case "rtmp_push", "srt_push", "whip_push", "relay_pull":
+		row.SourceType = row.Protocol
+		return
+	}
+	if h.db == nil {
+		return
+	}
+	binding, err := h.db.GetBindingByCameraID(ctx, row.ID)
+	if err != nil || binding == nil {
+		return
+	}
+	if binding.StreamID != row.ID {
+		return
+	}
+	histories, _, err := h.db.ListStreamHistory(ctx, row.ID, 5, 0)
+	if err == nil {
+		for _, hist := range histories {
+			if src := pushSourceTypeFromProtocol(hist.Protocol); src != "" {
+				row.SourceType = src
+				return
+			}
+			if strings.EqualFold(hist.Protocol, "customize") {
+				row.SourceType = inferCustomizePushSource(nil, hist.RemoteAddr)
+				return
+			}
+		}
+	}
+	row.SourceType = "rtmp_push"
+}
+
 func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 	cameras, err := h.db.ListCameras(r.Context())
 	if err != nil {
@@ -87,19 +150,9 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// Inject per-camera transcoding config from config (not stored in DB)
-	if h.config != nil {
-		for i := range cameras {
-			for _, cam := range h.config.Cameras {
-				if cam.ID == cameras[i].ID && cam.Transcoding != nil {
-					cameras[i].Transcoding = cam.Transcoding
-					break
-				}
-			}
-		}
-	}
-	// For ONVIF cameras, show onvif_endpoint as url for unified frontend handling
 	for i := range cameras {
+		h.injectCameraConfigFields(&cameras[i])
+		h.resolveCameraSourceType(r.Context(), &cameras[i])
 		cameraRowForAPI(&cameras[i])
 	}
 	writeJSON(w, http.StatusOK, cameras)
@@ -139,6 +192,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		ProfileToken   string `json:"profile_token"`
 		StreamEncoding string `json:"stream_encoding"`
 		Encoding       string `json:"encoding"`
+		AudioEnabled   *bool  `json:"audio_enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -243,6 +297,11 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	} else {
 		cam.Enabled = true
 	}
+	if body.AudioEnabled != nil {
+		cam.AudioEnabled = *body.AudioEnabled
+	} else {
+		config.ApplyCameraAudioDefault(&cam)
+	}
 
 	if h.camMgr == nil {
 		writeError(w, http.StatusInternalServerError, "camera manager not available")
@@ -275,6 +334,8 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			row.LastSeen = lastSeen
 		}
+		h.injectCameraConfigFields(row)
+		h.resolveCameraSourceType(r.Context(), row)
 		cameraRowForAPI(row)
 		writeJSON(w, http.StatusCreated, row)
 	} else {
@@ -310,15 +371,8 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		row.LastSeen = lastSeen
 	}
-	// Inject per-camera transcoding config
-	if h.config != nil {
-		for _, cam := range h.config.Cameras {
-			if cam.ID == id && cam.Transcoding != nil {
-				row.Transcoding = cam.Transcoding
-				break
-			}
-		}
-	}
+	h.injectCameraConfigFields(row)
+	h.resolveCameraSourceType(r.Context(), row)
 	cameraRowForAPI(row)
 	writeJSON(w, http.StatusOK, row)
 }
@@ -349,6 +403,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		ProfileToken   *string                         `json:"profile_token"`
 		StreamEncoding *string                         `json:"stream_encoding"`
 		Transcoding    *config.CameraTranscodingConfig `json:"transcoding"`
+		AudioEnabled   *bool                           `json:"audio_enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -397,6 +452,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		ProfileToken:   body.ProfileToken,
 		StreamEncoding: body.StreamEncoding,
 		Transcoding:    body.Transcoding,
+		AudioEnabled:   body.AudioEnabled,
 	}
 	if body.RTSPTransport != nil && !config.IsValidRTSPTransport(*body.RTSPTransport) {
 		writeError(w, http.StatusBadRequest, "rtsp_transport must be tcp or udp")
@@ -449,15 +505,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			row.LastSeen = lastSeen
 		}
-		// Inject per-camera transcoding config
-		if h.config != nil {
-			for _, cam := range h.config.Cameras {
-				if cam.ID == id && cam.Transcoding != nil {
-					row.Transcoding = cam.Transcoding
-					break
-				}
-			}
-		}
+		h.injectCameraConfigFields(row)
 		cameraRowForAPI(row)
 		writeJSON(w, http.StatusOK, row)
 	} else {
@@ -469,7 +517,6 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	ctx := r.Context()
 
-	// Verify camera exists in DB
 	cam, err := h.db.GetCamera(ctx, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get camera")
@@ -479,51 +526,47 @@ func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "camera not found")
 		return
 	}
-	// Already archived — idempotent success
 	if cam.Archived {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "archived"})
 		return
 	}
 
-	// Archive the camera: stops recorder, merges segments, marks archived in DB, removes from config.
-	// This preserves the camera row and recordings for the archive view.
+	if err := h.archiveCameraRecord(ctx, id); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to archive camera")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "archived"})
+}
+
+// archiveCameraRecord stops recording and archives a camera in DB/config.
+func (h *Handler) archiveCameraRecord(ctx context.Context, id string) error {
 	if h.camMgr != nil {
-		// Check if camera is managed (in config). Orphaned DB-only cameras skip the
-		// CameraManager mutex entirely to avoid blocking on merge/stop operations.
 		if h.camMgr.GetCameraConfig(id) != nil {
 			if err := h.camMgr.ArchiveCamera(ctx, id); err != nil {
 				logger.Warn("failed to archive camera via manager, archiving in DB", "camera_id", id, "error", err)
 				if dbErr := h.db.ArchiveCameraDB(ctx, id); dbErr != nil {
-					writeError(w, http.StatusInternalServerError, "failed to archive camera")
-					return
+					return dbErr
 				}
 				if _, recErr := h.db.ArchiveAllRecordings(ctx, id); recErr != nil {
 					logger.Warn("failed to archive recordings", "camera_id", id, "error", recErr)
 				}
 			}
-		} else {
-			// Orphaned camera (not in config) — archive directly in DB, no mutex needed.
-			logger.Info("archiving orphaned camera directly in DB", "camera_id", id)
-			if dbErr := h.db.ArchiveCameraDB(ctx, id); dbErr != nil {
-				writeError(w, http.StatusInternalServerError, "failed to archive camera")
-				return
-			}
-			if _, recErr := h.db.ArchiveAllRecordings(ctx, id); recErr != nil {
-				logger.Warn("failed to archive recordings", "camera_id", id, "error", recErr)
-			}
+			return nil
 		}
-	} else {
-		// No camera manager — mark archived in DB directly
-		if err := h.db.ArchiveCameraDB(ctx, id); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to archive camera")
-			return
-		}
-		if _, err := h.db.ArchiveAllRecordings(ctx, id); err != nil {
-			logger.Warn("failed to archive recordings", "camera_id", id, "error", err)
-		}
+		logger.Info("archiving orphaned camera directly in DB", "camera_id", id)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "archived"})
+	if h.db == nil {
+		return nil
+	}
+	if err := h.db.ArchiveCameraDB(ctx, id); err != nil {
+		return err
+	}
+	if _, err := h.db.ArchiveAllRecordings(ctx, id); err != nil {
+		logger.Warn("failed to archive recordings", "camera_id", id, "error", err)
+	}
+	return nil
 }
 
 func (h *Handler) handlePermanentDeleteCamera(w http.ResponseWriter, r *http.Request) {

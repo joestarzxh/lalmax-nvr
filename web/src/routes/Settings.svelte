@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras, getStreamingSettings, updateStreamingSettings, getAiSettings, saveAiSettings, detectAiBackend, getGB28181Settings, updateGB28181Settings, reloadConfig, checkConfigChange, regenerateLalmaxConfig, getHLSSettings, updateHLSSettings } from '$lib/api';
+  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras, getStreamingSettings, updateStreamingSettings, getAiSettings, saveAiSettings, detectAiBackend, getGB28181Settings, updateGB28181Settings, reloadConfig, checkConfigChange, regenerateLalmaxConfig, getHLSSettings, updateHLSSettings, getLocalNetworkInterfaces } from '$lib/api';
   import { getTranscodingCheck, getTranscodingStatus, getFFmpegStatus, downloadFFmpeg, retryDownload, getTranscodingSettings, updateTranscodingSettings } from '$lib/api/transcoding';
   import type { SelfCheckResult, DownloadStatus, HardwareCapabilities, ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
-  import type { SettingsConfig, FeatureFlags, StorageStats, Camera, StreamingConfig, GB28181Config, HLSConfig } from '$lib/api';
+  import type { SettingsConfig, FeatureFlags, StorageStats, Camera, StreamingConfig, GB28181Config, HLSConfig, NetworkInterface } from '$lib/api';
   import { getItemsPerPage, setItemsPerPage, getAutoRefresh, setAutoRefresh } from '../lib/preferences';
   import { t } from '$lib/i18n';
   import { AlertCircle, AlertTriangle, Settings as SettingsIcon, RefreshCw, CircleDot, Download, Cpu, ChevronDown, ChevronUp, RotateCw } from 'lucide-svelte';
@@ -265,6 +265,43 @@ function getAffectedCameraCount(protocol: string): number {
     originalFeatureFlags = { ...featureFlags };
   }
 
+  function extractIPv4Address(address: string): string | null {
+    const ip = address.split('/')[0]?.trim();
+    if (!ip || ip === '0.0.0.0' || ip.startsWith('127.') || ip.startsWith('169.254.')) {
+      return null;
+    }
+    if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip)) {
+      return null;
+    }
+    const parts = ip.split('.').map(Number);
+    if (parts.some(part => part < 0 || part > 255)) {
+      return null;
+    }
+    return ip;
+  }
+
+  function getPreferredInterfaceIP(interfaces: NetworkInterface[]): string {
+    const connected = interfaces.filter(iface => iface.is_up && !iface.is_loopback);
+    const candidates = connected.length > 0 ? connected : interfaces;
+    for (const iface of candidates) {
+      for (const address of iface.addresses || []) {
+        const ip = extractIPv4Address(address);
+        if (ip) return ip;
+      }
+    }
+    return '';
+  }
+
+  async function getDefaultGB28181IP(): Promise<string> {
+    try {
+      const data = await getLocalNetworkInterfaces();
+      return getPreferredInterfaceIP(data.interfaces || []);
+    } catch (e) {
+      console.warn('Failed to load local network interfaces:', e);
+      return '';
+    }
+  }
+
   async function loadSettings() {
     loading = true;
     error = '';
@@ -330,6 +367,13 @@ function getAffectedCameraCount(protocol: string): number {
         gb28181Id = gb28181Cfg.id ?? '';
         gb28181Password = gb28181Cfg.password ?? '';
         gb28181MediaIp = gb28181Cfg.media_ip ?? '';
+        if (!gb28181Host || !gb28181MediaIp) {
+          const defaultIP = await getDefaultGB28181IP();
+          if (defaultIP) {
+            if (!gb28181Host) gb28181Host = defaultIP;
+            if (!gb28181MediaIp) gb28181MediaIp = defaultIP;
+          }
+        }
       } catch (e) {
         console.warn('Failed to load GB28181 settings:', e);
       }

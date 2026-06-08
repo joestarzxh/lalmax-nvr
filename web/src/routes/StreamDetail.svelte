@@ -156,6 +156,7 @@
       case 'gb28181': return t('streams.sourceGB28181');
       case 'rtmp_push': return t('streams.sourceRTMPPush');
       case 'srt_push': return t('streams.sourceSRTPush');
+      case 'whip_push': return t('streams.sourceWHIPPush');
       case 'relay_pull': return t('streams.sourceRelayPull');
       default: return t('streams.sourceStream');
     }

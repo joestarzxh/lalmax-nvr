@@ -362,6 +362,32 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='18' WHERE key='schema_version'")
 
+	// Migration v18 → v19: unified NVR event center.
+	eventsSQL := `CREATE TABLE IF NOT EXISTS events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		camera_id TEXT NOT NULL DEFAULT '',
+		source TEXT NOT NULL,
+		type TEXT NOT NULL,
+		severity TEXT NOT NULL DEFAULT 'info',
+		status TEXT NOT NULL DEFAULT 'open',
+		message TEXT DEFAULT '',
+		metadata TEXT DEFAULT '{}',
+		recording_id TEXT DEFAULT '',
+		snapshot_path TEXT DEFAULT '',
+		started_at DATETIME NOT NULL,
+		ended_at DATETIME,
+		acknowledged_at DATETIME,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);`
+	if _, err := d.db.ExecContext(ctx, eventsSQL); err != nil {
+		return err
+	}
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_events_camera_time ON events(camera_id, started_at DESC)")
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_events_source_type ON events(source, type)")
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_events_status ON events(status)")
+	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_events_recording ON events(recording_id)")
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='19' WHERE key='schema_version'")
+
 	return nil
 
 }

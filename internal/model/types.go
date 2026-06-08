@@ -100,6 +100,38 @@ type RecordingFilter struct {
 	Archived  *bool  // nil = all, true = archived only, false = not archived
 }
 
+// Event represents a product-level NVR event persisted for search and playback.
+type Event struct {
+	ID             int64      `json:"id"`
+	CameraID       string     `json:"camera_id"`
+	Source         string     `json:"source"`
+	Type           string     `json:"type"`
+	Severity       string     `json:"severity"`
+	Status         string     `json:"status"`
+	Message        string     `json:"message"`
+	Metadata       string     `json:"metadata"`
+	RecordingID    string     `json:"recording_id,omitempty"`
+	SnapshotPath   string     `json:"snapshot_path,omitempty"`
+	StartedAt      time.Time  `json:"started_at"`
+	EndedAt        *time.Time `json:"ended_at,omitempty"`
+	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+}
+
+const (
+	EventSourceHealth   = "health"
+	EventSourceRecorder = "recorder"
+	EventSourceAI       = "ai"
+	EventSourceMQTT     = "mqtt"
+
+	EventSeverityInfo     = "info"
+	EventSeverityWarning  = "warning"
+	EventSeverityCritical = "critical"
+
+	EventStatusOpen         = "open"
+	EventStatusAcknowledged = "acknowledged"
+)
+
 type RecorderStatus string
 
 // CameraErrorDetail represents a camera error with type classification and message.
@@ -227,11 +259,11 @@ type AudioFrame struct {
 
 // ValidEncodingsForProtocol maps transport protocol to supported encodings
 var ValidEncodingsForProtocol = map[string][]string{
-	string(ProtoRTSP):   {string(FormatH264), string(FormatH265), string(FormatMJPEG)},
-	string(ProtoHTTP):   {string(EncJPEG)},
-	string(ProtoONVIF):    {string(FormatH264), string(FormatH265)},
-	string(ProtoXiaomi):   {string(FormatH264), string(FormatH265)},
-	string(ProtoGB28181):  {string(FormatH264), string(FormatH265)},
+	string(ProtoRTSP):    {string(FormatH264), string(FormatH265), string(FormatMJPEG)},
+	string(ProtoHTTP):    {string(EncJPEG)},
+	string(ProtoONVIF):   {string(FormatH264), string(FormatH265)},
+	string(ProtoXiaomi):  {string(FormatH264), string(FormatH265)},
+	string(ProtoGB28181): {string(FormatH264), string(FormatH265)},
 }
 
 // ParseLegacyProtocol splits old combined protocol strings (e.g. "rtsp_h264") into separate protocol and encoding
