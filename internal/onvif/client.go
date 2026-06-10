@@ -22,13 +22,15 @@ var logger = slog.Default().With("component", "onvif-client")
 
 // Client wraps an onvif-go Client for ONVIF device operations.
 type Client struct {
-	endpoint string
-	username string
-	password string
-	client   *onvifgo.Client
-	mu       sync.Mutex
-	soapMu   sync.Mutex // serializes SOAP requests (many cameras mishandle concurrent HTTP)
-	ready    bool
+	endpoint     string
+	ptzEndpoint  string // PTZ service endpoint (may differ from device endpoint)
+	username     string
+	password     string
+	client       *onvifgo.Client
+	http         *http.Client // lazy-init HTTP client with DisableKeepAlives
+	mu           sync.Mutex
+	soapMu       sync.Mutex // serializes SOAP requests (many cameras mishandle concurrent HTTP)
+	ready        bool
 }
 
 // newONVIFHTTPClient returns an HTTP client tuned for embedded ONVIF devices.
@@ -82,6 +84,11 @@ func (c *Client) Connect(ctx context.Context) error {
 
 	c.client = onvifClient
 	c.ready = true
+
+	// Derive PTZ service endpoint for raw SOAP fallback.
+	// Most cameras serve PTZ on the same host with /onvif/ptz_service path.
+	c.ptzEndpoint = strings.Replace(c.endpoint, "/device_service", "/ptz_service", 1)
+
 	logger.Info("connected to ONVIF device", "endpoint", c.endpoint)
 	return nil
 }
@@ -262,13 +269,17 @@ func (c *Client) getRawProfiles(ctx context.Context) ([]DeviceProfile, error) {
 }
 
 func (c *Client) doAuthenticatedSOAPRequest(ctx context.Context, soapBody string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, strings.NewReader(soapBody))
+	return c.doAuthenticatedSOAPRequestTo(ctx, c.endpoint, soapBody)
+}
+
+func (c *Client) doAuthenticatedSOAPRequestTo(ctx context.Context, endpoint, soapBody string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(soapBody))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("send request: %w", err)
 	}
@@ -300,7 +311,7 @@ func (c *Client) doBasicSOAPRequest(ctx context.Context, soapBody string) ([]byt
 	}
 	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
 	req.SetBasicAuth(c.username, c.password)
-	return executeSOAPRequest(req)
+	return c.executeSOAPRequest(req)
 }
 
 func (c *Client) doDigestSOAPRequest(ctx context.Context, soapBody, challenge string) ([]byte, error) {
@@ -310,11 +321,19 @@ func (c *Client) doDigestSOAPRequest(ctx context.Context, soapBody, challenge st
 	}
 	req.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
 	req.Header.Set("Authorization", buildDigestAuthHeader(req, challenge, c.username, c.password))
-	return executeSOAPRequest(req)
+	return c.executeSOAPRequest(req)
 }
 
-func executeSOAPRequest(req *http.Request) ([]byte, error) {
-	resp, err := http.DefaultClient.Do(req)
+func (c *Client) httpClient() *http.Client {
+	if c.http != nil {
+		return c.http
+	}
+	c.http = newONVIFHTTPClient()
+	return c.http
+}
+
+func (c *Client) executeSOAPRequest(req *http.Request) ([]byte, error) {
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("send authenticated request: %w", err)
 	}
@@ -394,6 +413,152 @@ func randomHex(size int) string {
 	return hex.EncodeToString(b)
 }
 
+// --- Raw PTZ SOAP fallback methods ---
+// These use doAuthenticatedSOAPRequest which handles HTTP Basic/Digest auth.
+// They serve as fallbacks when the onvif-go library's WS-Security auth gets HTTP 401.
+
+func (c *Client) ptzSOAPFallbackEndpoint() string {
+	if c.ptzEndpoint != "" {
+		return c.ptzEndpoint
+	}
+	return c.endpoint
+}
+
+func (c *Client) rawContinuousMove(ctx context.Context, profileToken string, pan, tilt, zoom float64) error {
+	soapBody := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+ xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"
+ xmlns:tt="http://www.onvif.org/ver10/schema">
+  <s:Body>
+    <tptz:ContinuousMove>
+      <tptz:ProfileToken>%s</tptz:ProfileToken>
+      <tptz:Velocity>
+        <tt:PanTilt x="%f" y="%f"/>
+        <tt:Zoom x="%f"/>
+      </tptz:Velocity>
+      <tptz:Timeout>PT10S</tptz:Timeout>
+    </tptz:ContinuousMove>
+  </s:Body>
+</s:Envelope>`, profileToken, pan, tilt, zoom)
+	_, err := c.doAuthenticatedSOAPRequestTo(ctx, c.ptzSOAPFallbackEndpoint(), soapBody)
+	return err
+}
+
+func (c *Client) rawAbsoluteMove(ctx context.Context, profileToken string, pan, tilt, zoom float64) error {
+	soapBody := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+ xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"
+ xmlns:tt="http://www.onvif.org/ver10/schema">
+  <s:Body>
+    <tptz:AbsoluteMove>
+      <tptz:ProfileToken>%s</tptz:ProfileToken>
+      <tptz:Position>
+        <tt:PanTilt x="%f" y="%f"/>
+        <tt:Zoom x="%f"/>
+      </tptz:Position>
+    </tptz:AbsoluteMove>
+  </s:Body>
+</s:Envelope>`, profileToken, pan, tilt, zoom)
+	_, err := c.doAuthenticatedSOAPRequestTo(ctx, c.ptzSOAPFallbackEndpoint(), soapBody)
+	return err
+}
+
+func (c *Client) rawRelativeMove(ctx context.Context, profileToken string, pan, tilt, zoom float64) error {
+	soapBody := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+ xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl"
+ xmlns:tt="http://www.onvif.org/ver10/schema">
+  <s:Body>
+    <tptz:RelativeMove>
+      <tptz:ProfileToken>%s</tptz:ProfileToken>
+      <tptz:Translation>
+        <tt:PanTilt x="%f" y="%f"/>
+        <tt:Zoom x="%f"/>
+      </tptz:Translation>
+    </tptz:RelativeMove>
+  </s:Body>
+</s:Envelope>`, profileToken, pan, tilt, zoom)
+	_, err := c.doAuthenticatedSOAPRequestTo(ctx, c.ptzSOAPFallbackEndpoint(), soapBody)
+	return err
+}
+
+func (c *Client) rawStop(ctx context.Context, profileToken string) error {
+	soapBody := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+ xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl">
+  <s:Body>
+    <tptz:Stop>
+      <tptz:ProfileToken>%s</tptz:ProfileToken>
+      <tptz:PanTilt>true</tptz:PanTilt>
+      <tptz:Zoom>true</tptz:Zoom>
+    </tptz:Stop>
+  </s:Body>
+</s:Envelope>`, profileToken)
+	_, err := c.doAuthenticatedSOAPRequestTo(ctx, c.ptzSOAPFallbackEndpoint(), soapBody)
+	return err
+}
+
+func (c *Client) rawGetPresets(ctx context.Context, profileToken string) ([]PTZPreset, error) {
+	soapBody := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+ xmlns:tptz="http://www.onvif.org/ver20/ptz/wsdl">
+  <s:Body>
+    <tptz:GetPresets>
+      <tptz:ProfileToken>%s</tptz:ProfileToken>
+    </tptz:GetPresets>
+  </s:Body>
+</s:Envelope>`, profileToken)
+
+	body, err := c.doAuthenticatedSOAPRequestTo(ctx, c.ptzSOAPFallbackEndpoint(), soapBody)
+	if err != nil {
+		return nil, err
+	}
+
+	var envelope struct {
+		Body struct {
+			GetPresetsResponse struct {
+				Presets []struct {
+					Token       string `xml:"token,attr"`
+					Name        string `xml:"Name"`
+					PTZPosition *struct {
+						PanTilt *struct {
+							X float64 `xml:"x,attr"`
+							Y float64 `xml:"y,attr"`
+						} `xml:"PanTilt"`
+						Zoom *struct {
+							X float64 `xml:"x,attr"`
+						} `xml:"Zoom"`
+					} `xml:"PTZPosition"`
+				} `xml:"Preset"`
+			} `xml:"GetPresetsResponse"`
+		} `xml:"Body"`
+	}
+	if err := xml.Unmarshal(body, &envelope); err != nil {
+		return nil, fmt.Errorf("parse presets response: %w", err)
+	}
+
+	result := make([]PTZPreset, 0, len(envelope.Body.GetPresetsResponse.Presets))
+	for _, p := range envelope.Body.GetPresetsResponse.Presets {
+		preset := PTZPreset{
+			Token: p.Token,
+			Name:  p.Name,
+		}
+		if p.PTZPosition != nil {
+			pos := PTZVector{}
+			if p.PTZPosition.PanTilt != nil {
+				pos.Pan = p.PTZPosition.PanTilt.X
+				pos.Tilt = p.PTZPosition.PanTilt.Y
+			}
+			if p.PTZPosition.Zoom != nil {
+				pos.Zoom = p.PTZPosition.Zoom.X
+			}
+			preset.Position = pos
+		}
+		result = append(result, preset)
+	}
+	return result, nil
+}
+
 // GetCapabilities retrieves device capabilities (PTZ, streaming, etc.).
 func (c *Client) GetCapabilities(ctx context.Context) (*DeviceCapabilities, error) {
 	if !c.ready {
@@ -461,7 +626,7 @@ func (c *Client) NewPTZController(profileToken string) PTZController {
 	if c.client == nil {
 		return nil
 	}
-	return newSerializedPTZController(&c.soapMu, c.client, profileToken)
+	return newSerializedPTZController(&c.soapMu, c.client, profileToken, c)
 }
 
 // NewImagingController creates an ImagingController backed by this client's onvif-go connection.

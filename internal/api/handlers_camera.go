@@ -599,6 +599,9 @@ func (h *Handler) permanentlyDeleteCamera(ctx context.Context, cameraID string) 
 	}
 
 	if h.db != nil {
+		if err := h.db.RemoveGroupChannelsByDeviceID(ctx, cameraID); err != nil {
+			logger.Warn("failed to remove camera from groups", "camera_id", cameraID, "error", err)
+		}
 		if _, err := h.db.DeleteRecordingsByCamera(ctx, cameraID); err != nil {
 			return err
 		}
@@ -659,6 +662,16 @@ func isONVIFAuthError(err error) bool {
 		strings.Contains(msg, "authentication error") ||
 		strings.Contains(msg, "requires authentication information") ||
 		strings.Contains(msg, "401")
+}
+
+func isONVIFNotSupported(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not supported") ||
+		strings.Contains(msg, "unsupported") ||
+		strings.Contains(msg, "action not supported")
 }
 
 func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {

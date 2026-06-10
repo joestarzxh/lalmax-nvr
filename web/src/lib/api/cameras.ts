@@ -1,7 +1,7 @@
 /**
  * Camera API — CRUD, ONVIF discovery, PTZ, protocols, per-camera merge config
  */
-import { apiRequest, getAuthHeader, API_BASE } from './client';
+import { apiRequest, getAuthHeader, getAuthToken, API_BASE } from './client';
 
 // --- Types ---
 
@@ -354,11 +354,6 @@ export async function testConnection(
     body: JSON.stringify(data),
     signal,
   });
-}
-
-// Snapshot URL helper (returns JPEG from camera snapshot endpoint)
-export function getSnapshotUrl(cameraId: string): string {
-  return `${API_BASE}/cameras/${cameraId}/snapshot`;
 }
 
 // --- Per-camera merge config ---
@@ -790,4 +785,61 @@ export async function updateTimelapseConfig(
     body: JSON.stringify(config),
     signal,
   });
+}
+
+// --- Snapshot ---
+
+export interface SnapshotInfo {
+  camera_id: string;
+  path: string;
+  size: number;
+  mod_time: string;
+  url: string;
+}
+
+/**
+ * Get snapshot URL for a camera (includes auth token for <img> tags)
+ */
+export function getSnapshotUrl(cameraId: string): string {
+  const token = getAuthToken();
+  const encodedId = encodeURIComponent(cameraId);
+  const base = `${API_BASE}/snapshots/${encodedId}`;
+  return token ? `${base}?token=${token}` : base;
+}
+
+/**
+ * Get latest snapshot info
+ */
+export async function getSnapshotInfo(
+  cameraId: string,
+  signal?: AbortSignal
+): Promise<SnapshotInfo> {
+  return apiRequest<SnapshotInfo>(`/snapshots/${cameraId}/latest`, { signal });
+}
+
+/**
+ * Take an immediate snapshot
+ */
+export async function takeSnapshot(
+  cameraId: string,
+  signal?: AbortSignal
+): Promise<Blob> {
+  const url = `${API_BASE}/snapshots/${cameraId}/take`;
+  const headers: HeadersInit = {};
+  const authHeader = getAuthHeader();
+  if (authHeader) {
+    headers['Authorization'] = authHeader;
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to take snapshot: ${response.status}`);
+  }
+
+  return response.blob();
 }

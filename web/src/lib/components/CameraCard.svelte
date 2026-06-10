@@ -1,9 +1,9 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
-  import { normalizeProtocol, enableCamera, disableCamera } from '$lib/api';
+  import { normalizeProtocol, enableCamera, disableCamera, getSnapshotUrl } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
-  import { Pencil, Play, Pause, Square, RotateCw, Eye, MoreVertical, Archive, Trash2 } from 'lucide-svelte';
+  import { Pencil, Play, Pause, Square, RotateCw, Eye, MoreVertical, Archive, Trash2, Image } from 'lucide-svelte';
 
   interface Props {
     camera: Camera;
@@ -20,6 +20,7 @@
     onpause?: (camera: Camera) => void;
     onresume?: (camera: Camera) => void;
     recordingPaused?: boolean;
+    showSnapshot?: boolean;
   }
 
   let {
@@ -37,6 +38,7 @@
     onpause,
     onresume,
     recordingPaused = false,
+    showSnapshot = true,
   }: Props = $props();
 
   let menuOpen = $state(false);
@@ -127,190 +129,209 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
-  class="card camera-card border th-border p-4 transition-all {variant === 'disabled' ? 'is-disabled' : ''} {menuOpen ? 'is-menu-open' : ''}"
+  class="card camera-card border th-border transition-all {variant === 'disabled' ? 'is-disabled' : ''} {menuOpen ? 'is-menu-open' : ''}"
 >
-  <!-- Top: Name + Status -->
-  <div class="flex items-start justify-between gap-2 mb-3">
-    <div class="min-w-0 flex-1">
-      {#if editingName}
-        <input
-          type="text"
-          class="input py-1 px-2 text-sm w-full"
-          bind:value={nameInput}
-          onkeydown={(e) => {
-            if (e.key === 'Enter') saveName();
-            if (e.key === 'Escape') cancelEditName();
-          }}
-          onblur={saveName}
-        />
-      {:else}
-        <button
-          class="font-medium th-text-primary hover:underline cursor-pointer flex items-center gap-1.5 text-left"
-          onclick={startEditName}
-          title={t('cameras.editName')}
-        >
-          <span class="truncate">{camera.name}</span>
-          <Pencil size={12} class="th-text-tertiary shrink-0" />
-        </button>
-      {/if}
+  <!-- Snapshot Preview -->
+  {#if showSnapshot && camera.enabled}
+    <div class="snapshot-preview">
+      <img
+        src="{getSnapshotUrl(camera.id)}&_t={Date.now()}"
+        alt={camera.name}
+        class="snapshot-img"
+        loading="lazy"
+        onerror={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+      />
+      <div class="snapshot-overlay">
+        <Image size={16} class="text-white/60" />
+      </div>
     </div>
-    <div class="shrink-0 flex items-center gap-1.5">
-      {#if health}
-        <div class="relative group" title={health.last_event?.message || health.status}>
-          <span class="inline-block h-2.5 w-2.5 rounded-full {getHealthColor(health.status)}"></span>
-          <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10">
-            <div class="bg-gray-900 text-white text-xs rounded py-1 px-2 whitespace-nowrap shadow-lg">
-              <div class="font-medium capitalize">{health.status}</div>
-              {#if health.last_event}
-                <div class="text-gray-400">{health.last_event.message}</div>
-              {/if}
-            </div>
-          </div>
-        </div>
-      {/if}
-      {#if camera.error_type === 'tutk_incompatible'}
-        <span class="badge badge-error" title={camera.error_detail || ''}>
-          {t('cameras.tutkCardBadge')}
-        </span>
-      {/if}
-      {#if variant === 'disabled'}
-        <span class="badge badge-neutral">{t('cameras.status.disabled')}</span>
-      {:else if isRecordingPaused || camera.status === 'paused'}
-        <span class="badge badge-warning">{t('cameras.statusPaused')}</span>
-      {:else if camera.status === 'recording'}
-        <span class="badge badge-success">{t('cameras.statusRecording')}</span>
-      {:else if camera.status === 'error'}
-        <span class="badge badge-error">{t('cameras.statusError')}</span>
-      {:else if camera.status === 'reconnecting'}
-        <span class="badge badge-warning">{t('cameras.statusReconnecting')}</span>
-      {:else if camera.status === 'offline'}
-        <span class="badge badge-warning">{t('cameras.statusOffline') || 'Offline'}</span>
-      {:else}
-        <span class="badge badge-neutral">{t('cameras.statusStopped')}</span>
-      {/if}
-    </div>
-  </div>
+  {/if}
 
-  <!-- Middle: Protocol + Encoding + URL -->
-  <div class="space-y-1.5 mb-3">
-    <div class="flex items-center gap-2 flex-wrap">
-      <span class="text-xs font-medium th-text-secondary px-2 py-0.5 rounded th-bg-tertiary">{protocolLabel}</span>
-      {#if encodingLabel}
-        <span class="text-xs th-text-tertiary px-2 py-0.5 rounded th-bg-tertiary">{encodingLabel}</span>
-      {/if}
-    </div>
-    <p class="text-xs th-text-tertiary truncate font-mono" title={camera.url}>{camera.url}</p>
-  </div>
-
-  <!-- Bottom: Action bar -->
-  <div class="flex items-center justify-between pt-3 border-t th-border">
-    <!-- Toggle switch (left) -->
-    <button
-      type="button"
-      class="toggle-switch {camera.enabled ? 'is-on' : ''}"
-      onclick={handleToggle}
-      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleToggle(); } }}
-      role="switch"
-      aria-checked={camera.enabled}
-      aria-label={camera.enabled ? t('cameras.action.disable') : t('cameras.action.enable')}
-    >
-      <span class="toggle-thumb"></span>
-    </button>
-
-    <!-- Action buttons (right) -->
-    <div class="flex items-center gap-1">
-      {#if variant !== 'disabled'}
-        {#if camera.status === 'recording' || camera.status === 'reconnecting' || camera.status === 'paused' || isRecordingPaused}
-          <button
-            class="btn btn-ghost px-2 py-1 text-sm"
-            onclick={() => onstop(camera)}
-            title={t('cameras.stop')}
-          >
-            <Square size={14} />
-          </button>
+  <!-- Content -->
+  <div class="p-4">
+    <!-- Top: Name + Status -->
+    <div class="flex items-start justify-between gap-2 mb-3">
+      <div class="min-w-0 flex-1">
+        {#if editingName}
+          <input
+            type="text"
+            class="input py-1 px-2 text-sm w-full"
+            bind:value={nameInput}
+            onkeydown={(e) => {
+              if (e.key === 'Enter') saveName();
+              if (e.key === 'Escape') cancelEditName();
+            }}
+            onblur={saveName}
+          />
         {:else}
           <button
-            class="btn btn-ghost px-2 py-1 text-sm"
-            onclick={() => onstart(camera)}
-            title={t('cameras.start')}
+            class="font-medium th-text-primary hover:underline cursor-pointer flex items-center gap-1.5 text-left"
+            onclick={startEditName}
+            title={t('cameras.editName')}
           >
-            <Play size={14} />
+            <span class="truncate">{camera.name}</span>
+            <Pencil size={12} class="th-text-tertiary shrink-0" />
           </button>
         {/if}
-
-        {#if (camera.status === 'recording' || camera.status === 'reconnecting') && !isRecordingPaused}
-          <button
-            class="btn btn-ghost px-2 py-1 text-sm"
-            onclick={() => onpause?.(camera)}
-            title={t('cameras.pauseRecording')}
-          >
-            <Pause size={14} />
-          </button>
-        {/if}
-
-        {#if isRecordingPaused}
-          <button
-            class="btn btn-ghost px-2 py-1 text-sm"
-            onclick={() => onresume?.(camera)}
-            title={t('cameras.resumeRecording')}
-          >
-            <Play size={14} />
-          </button>
-        {/if}
-
-        {#if camera.status === 'recording' || camera.status === 'paused' || camera.status === 'error' || camera.status === 'reconnecting' || isRecordingPaused}
-          <button
-            class="btn btn-ghost px-2 py-1 text-sm"
-            onclick={() => onrestart(camera)}
-            title={t('cameras.restart')}
-          >
-            <RotateCw size={14} />
-          </button>
-        {/if}
-      {/if}
-
-      {#if isHls}
-        <a
-          href="#/live/{camera.id}"
-          class="btn btn-ghost px-2 py-1 text-sm"
-          title={t('cameras.live')}
-        >
-          <Eye size={14} />
-        </a>
-      {/if}
-
-      <!-- More menu -->
-      <div class="relative">
-        <button
-          class="btn btn-ghost px-2 py-1 text-sm"
-          onclick={toggleMenu}
-          title={t('cameras.moreActions')}
-        >
-          <MoreVertical size={14} />
-        </button>
-
-        {#if menuOpen}
-          <div class="dropdown-menu" role="menu" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
-            {#if isHls}
-              <a href="#/live/{camera.id}" class="dropdown-item" onclick={closeMenu}>
-                <Eye size={14} />
-                {t('cameras.live')}
-              </a>
-            {/if}
-            <button class="dropdown-item" onclick={() => { closeMenu(); onedit(camera); }}>
-              <Pencil size={14} />
-              {t('cameras.edit')}
-            </button>
-            <button class="dropdown-item dropdown-item--danger" onclick={() => { closeMenu(); ondelete(camera); }}>
-              <Archive size={14} />
-              {t('cameras.action.archive')}
-            </button>
-            <button class="dropdown-item dropdown-item--danger" onclick={() => { closeMenu(); onpermadelete(camera); }}>
-              <Trash2 size={14} />
-              {t('cameras.action.deletePermanent')}
-            </button>
+      </div>
+      <div class="shrink-0 flex items-center gap-1.5">
+        {#if health}
+          <div class="relative group" title={health.last_event?.message || health.status}>
+            <span class="inline-block h-2.5 w-2.5 rounded-full {getHealthColor(health.status)}"></span>
+            <div class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10">
+              <div class="bg-gray-900 text-white text-xs rounded py-1 px-2 whitespace-nowrap shadow-lg">
+                <div class="font-medium capitalize">{health.status}</div>
+                {#if health.last_event}
+                  <div class="text-gray-400">{health.last_event.message}</div>
+                {/if}
+              </div>
+            </div>
           </div>
         {/if}
+        {#if camera.error_type === 'tutk_incompatible'}
+          <span class="badge badge-error" title={camera.error_detail || ''}>
+            {t('cameras.tutkCardBadge')}
+          </span>
+        {/if}
+        {#if variant === 'disabled'}
+          <span class="badge badge-neutral">{t('cameras.status.disabled')}</span>
+        {:else if isRecordingPaused || camera.status === 'paused'}
+          <span class="badge badge-warning">{t('cameras.statusPaused')}</span>
+        {:else if camera.status === 'recording'}
+          <span class="badge badge-success">{t('cameras.statusRecording')}</span>
+        {:else if camera.status === 'error'}
+          <span class="badge badge-error">{t('cameras.statusError')}</span>
+        {:else if camera.status === 'reconnecting'}
+          <span class="badge badge-warning">{t('cameras.statusReconnecting')}</span>
+        {:else if camera.status === 'offline'}
+          <span class="badge badge-warning">{t('cameras.statusOffline') || 'Offline'}</span>
+        {:else}
+          <span class="badge badge-neutral">{t('cameras.statusStopped')}</span>
+        {/if}
+      </div>
+    </div>
+
+    <!-- Middle: Protocol + Encoding + URL -->
+    <div class="space-y-1.5 mb-3">
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-xs font-medium th-text-secondary px-2 py-0.5 rounded th-bg-tertiary">{protocolLabel}</span>
+        {#if encodingLabel}
+          <span class="text-xs th-text-tertiary px-2 py-0.5 rounded th-bg-tertiary">{encodingLabel}</span>
+        {/if}
+      </div>
+      <p class="text-xs th-text-tertiary truncate font-mono" title={camera.url}>{camera.url}</p>
+    </div>
+
+    <!-- Bottom: Action bar -->
+    <div class="flex items-center justify-between pt-3 border-t th-border">
+      <!-- Toggle switch (left) -->
+      <button
+        type="button"
+        class="toggle-switch {camera.enabled ? 'is-on' : ''}"
+        onclick={handleToggle}
+        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleToggle(); } }}
+        role="switch"
+        aria-checked={camera.enabled}
+        aria-label={camera.enabled ? t('cameras.action.disable') : t('cameras.action.enable')}
+      >
+        <span class="toggle-thumb"></span>
+      </button>
+
+      <!-- Action buttons (right) -->
+      <div class="flex items-center gap-1">
+        {#if variant !== 'disabled'}
+          {#if camera.status === 'recording' || camera.status === 'reconnecting' || camera.status === 'paused' || isRecordingPaused}
+            <button
+              class="btn btn-ghost px-2 py-1 text-sm"
+              onclick={() => onstop(camera)}
+              title={t('cameras.stop')}
+            >
+              <Square size={14} />
+            </button>
+          {:else}
+            <button
+              class="btn btn-ghost px-2 py-1 text-sm"
+              onclick={() => onstart(camera)}
+              title={t('cameras.start')}
+            >
+              <Play size={14} />
+            </button>
+          {/if}
+
+          {#if (camera.status === 'recording' || camera.status === 'reconnecting') && !isRecordingPaused}
+            <button
+              class="btn btn-ghost px-2 py-1 text-sm"
+              onclick={() => onpause?.(camera)}
+              title={t('cameras.pauseRecording')}
+            >
+              <Pause size={14} />
+            </button>
+          {/if}
+
+          {#if isRecordingPaused}
+            <button
+              class="btn btn-ghost px-2 py-1 text-sm"
+              onclick={() => onresume?.(camera)}
+              title={t('cameras.resumeRecording')}
+            >
+              <Play size={14} />
+            </button>
+          {/if}
+
+          {#if camera.status === 'recording' || camera.status === 'paused' || camera.status === 'error' || camera.status === 'reconnecting' || isRecordingPaused}
+            <button
+              class="btn btn-ghost px-2 py-1 text-sm"
+              onclick={() => onrestart(camera)}
+              title={t('cameras.restart')}
+            >
+              <RotateCw size={14} />
+            </button>
+          {/if}
+        {/if}
+
+        {#if isHls}
+          <a
+            href="#/live/{camera.id}"
+            class="btn btn-ghost px-2 py-1 text-sm"
+            title={t('cameras.live')}
+          >
+            <Eye size={14} />
+          </a>
+        {/if}
+
+        <!-- More menu -->
+        <div class="relative">
+          <button
+            class="btn btn-ghost px-2 py-1 text-sm"
+            onclick={toggleMenu}
+            title={t('cameras.moreActions')}
+          >
+            <MoreVertical size={14} />
+          </button>
+
+          {#if menuOpen}
+            <div class="dropdown-menu" role="menu" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
+              {#if isHls}
+                <a href="#/live/{camera.id}" class="dropdown-item" onclick={closeMenu}>
+                  <Eye size={14} />
+                  {t('cameras.live')}
+                </a>
+              {/if}
+              <button class="dropdown-item" onclick={() => { closeMenu(); onedit(camera); }}>
+                <Pencil size={14} />
+                {t('cameras.edit')}
+              </button>
+              <button class="dropdown-item dropdown-item--danger" onclick={() => { closeMenu(); ondelete(camera); }}>
+                <Archive size={14} />
+                {t('cameras.action.archive')}
+              </button>
+              <button class="dropdown-item dropdown-item--danger" onclick={() => { closeMenu(); onpermadelete(camera); }}>
+                <Trash2 size={14} />
+                {t('cameras.action.deletePermanent')}
+              </button>
+            </div>
+          {/if}
+        </div>
       </div>
     </div>
   </div>
@@ -321,6 +342,7 @@
     display: flex;
     flex-direction: column;
     position: relative;
+    overflow: visible;
   }
 
   .camera-card.is-menu-open {
@@ -334,6 +356,41 @@
   .camera-card.is-disabled .dropdown-item:not(.dropdown-item--danger),
   .camera-card.is-disabled .btn:not(.toggle-switch) {
     pointer-events: none;
+  }
+
+  /* Snapshot preview */
+  .snapshot-preview {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    background: var(--bg-secondary);
+  }
+
+  .snapshot-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.2s ease;
+  }
+
+  .snapshot-preview:hover .snapshot-img {
+    transform: scale(1.05);
+  }
+
+  .snapshot-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.2);
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+
+  .snapshot-preview:hover .snapshot-overlay {
+    opacity: 1;
   }
 
   /* Toggle switch — matches Settings.svelte pattern */
