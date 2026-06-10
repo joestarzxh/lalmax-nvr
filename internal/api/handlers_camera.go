@@ -365,6 +365,16 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// For GB28181 cameras, check if the stream is active in lalmax
+	if row.Protocol == "gb28181" && h.mediaEngine != nil {
+		streamInfo, err := h.mediaEngine.GetStream(r.Context(), id)
+		if err == nil && streamInfo != nil && streamInfo.Active {
+			row.Status = model.StatusRecording
+		} else if row.Status == model.StatusError {
+			// If recorder doesn't exist but stream could be active, set to offline instead of error
+			row.Status = model.StatusOffline
+		}
+	}
 	// Inject last_seen from DB
 	lastSeen, err := h.db.GetLastRecordingTime(r.Context(), id)
 	if err == nil {
