@@ -7,7 +7,6 @@ import (
 	"net/http"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/wsstream"
-	"github.com/go-chi/chi/v5"
 )
 
 // --- WebSocket streaming endpoint ---
@@ -16,7 +15,7 @@ import (
 // It upgrades the HTTP connection to a WebSocket and streams binary-encoded
 // video frames (CodecInfo first, then VideoFrame messages).
 func (h *Handler) handleStreamWS(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := getCameraID(r)
 
 	if h.wsMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "WebSocket streaming not available")

@@ -37,6 +37,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/mqtt"
 	"github.com/lalmax-pro/lalmax-nvr/internal/rtmp"
+	"github.com/lalmax-pro/lalmax-nvr/internal/recorder"
 	"github.com/lalmax-pro/lalmax-nvr/internal/srt"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 	"github.com/lalmax-pro/lalmax-nvr/internal/streamhistory"
@@ -362,6 +363,7 @@ type App struct {
 	healthMgr    *health.Manager
 	eventBus     *event.EventBus
 	eventArchive *event.Archiver
+	recSched     *recorder.RecordingScheduler
 
 	// Optional network services (nil when disabled)
 	mqttClient   *mqtt.Client
@@ -576,12 +578,13 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 				slog.Warn("GB28181 enabled but id is empty, skipping. Set gb28181.id in config to enable")
 			} else {
 				gbCfg := &gb28181.Config{
-					Enabled:  true,
-					Host:     cfg.GB28181.Host,
-					Port:     cfg.GB28181.Port,
-					ID:       cfg.GB28181.ID,
-					Password: cfg.GB28181.Password,
-					MediaIP:  cfg.GB28181.MediaIP,
+					Enabled:   true,
+					Host:      cfg.GB28181.Host,
+					Port:      cfg.GB28181.Port,
+					ID:        cfg.GB28181.ID,
+					Password:  cfg.GB28181.Password,
+					MediaIP:   cfg.GB28181.MediaIP,
+					MediaPort: cfg.GB28181.MediaPort,
 				}
 				if err := gbCfg.Validate(); err != nil {
 					db.Close()
@@ -590,7 +593,11 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 				gbCfg.ApplyDefaults()
 				gbSvr, _ := gb28181.NewServer(gbCfg, engine, db)
 				a.gb28181Svr = gbSvr
-				slog.Info("GB28181 SIP server started", "port", cfg.GB28181.Port, "id", cfg.GB28181.ID)
+				if cfg.GB28181.MediaPort > 0 {
+					slog.Info("GB28181 SIP server started (single port mode)", "port", cfg.GB28181.Port, "media_port", cfg.GB28181.MediaPort, "id", cfg.GB28181.ID)
+				} else {
+					slog.Info("GB28181 SIP server started (multi port mode)", "port", cfg.GB28181.Port, "id", cfg.GB28181.ID)
+				}
 			}
 		}
 	}
@@ -653,6 +660,50 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 	return a, nil
 }
 
+// RestartGB28181 restarts the GB28181 SIP server with new configuration.
+func (a *App) RestartGB28181(ctx context.Context, cfg *config.GB28181Config) error {
+	// Dispose old server
+	if a.gb28181Svr != nil {
+		a.gb28181Svr.Stop()
+		a.gb28181Svr = nil
+	}
+
+	// If disabled, just stop
+	enabled := cfg.Enabled != nil && *cfg.Enabled
+	if !enabled {
+		slog.Info("GB28181 disabled")
+		return nil
+	}
+
+	// Validate config
+	if cfg.ID == "" {
+		slog.Warn("GB28181 enabled but id is empty, skipping")
+		return nil
+	}
+
+	// Convert config
+	gbCfg := &gb28181.Config{
+		Enabled:   enabled,
+		Host:      cfg.Host,
+		Port:      cfg.Port,
+		ID:        cfg.ID,
+		Password:  cfg.Password,
+		MediaIP:   cfg.MediaIP,
+		MediaPort: cfg.MediaPort,
+	}
+	if err := gbCfg.Validate(); err != nil {
+		return fmt.Errorf("gb28181 config: %w", err)
+	}
+	gbCfg.ApplyDefaults()
+
+	// Create new server
+	gbSvr, _ := gb28181.NewServer(gbCfg, a.mediaEngine, a.db)
+	a.gb28181Svr = gbSvr
+
+	slog.Info("GB28181 SIP server restarted", "port", cfg.Port, "id", cfg.ID)
+	return nil
+}
+
 // buildRouter constructs the chi router with all routes mounted.
 func (a *App) buildRouter() http.Handler {
 	cfg := a.cfg
@@ -665,6 +716,7 @@ func (a *App) buildRouter() http.Handler {
 	if a.gb28181Svr != nil {
 		handler.SetGB28181Server(a.gb28181Svr)
 	}
+	handler.SetGB28181Restarter(a)
 	handler.SetFLVManager(a.media.FLV())
 	handler.SetWSManager(a.media.WS())
 	handler.SetHealthManager(a.healthMgr)
@@ -789,18 +841,32 @@ func (a *App) buildRouter() http.Handler {
 	})
 
 	// GB28181 API routes (authenticated)
-	if a.gb28181Svr != nil {
-		gbHandler := api.NewGB28181Handler(a.gb28181Svr, a.camMgr, a.db, a.mediaEngine)
-		r.Group(func(r chi.Router) {
-			r.Use(a.authMW)
-			r.Get("/api/gb28181/devices", gbHandler.ListDevices)
-			r.Post("/api/gb28181/play", gbHandler.Play)
-			r.Post("/api/gb28181/stop", gbHandler.StopPlay)
-			r.Post("/api/gb28181/ptz", gbHandler.PTZControl)
-			r.Post("/api/gb28181/record_info", gbHandler.RecordInfo)
-			r.Post("/api/gb28181/playback", gbHandler.Playback)
-		})
-	}
+	// Always register routes, handler will return empty data if GB28181 is not enabled
+	gbHandler := api.NewGB28181Handler(a.gb28181Svr, a.camMgr, a.db, a.mediaEngine)
+	r.Group(func(r chi.Router) {
+		r.Use(a.authMW)
+		// Core GB28181
+		r.Get("/api/gb28181/devices", gbHandler.ListDevices)
+		r.Post("/api/gb28181/play", gbHandler.Play)
+		r.Post("/api/gb28181/stop", gbHandler.StopPlay)
+		r.Post("/api/gb28181/ptz", gbHandler.PTZControl)
+		r.Post("/api/gb28181/record_info", gbHandler.RecordInfo)
+		r.Post("/api/gb28181/playback", gbHandler.Playback)
+		// Platform cascading
+		r.Get("/api/gb28181/platforms", gbHandler.ListPlatforms)
+		r.Post("/api/gb28181/platforms", gbHandler.AddPlatform)
+		r.Delete("/api/gb28181/platforms", gbHandler.DeletePlatform)
+		// Broadcast/Talk
+		r.Post("/api/gb28181/broadcast/start", gbHandler.StartBroadcast)
+		r.Post("/api/gb28181/broadcast/stop", gbHandler.StopBroadcast)
+		r.Get("/api/gb28181/talk/ws", gbHandler.HandleTalkWS)
+		// Alarm
+		r.Get("/api/gb28181/alarms", gbHandler.ListAlarms)
+		// Download
+		r.Post("/api/gb28181/download/start", gbHandler.StartDownload)
+		r.Post("/api/gb28181/download/stop", gbHandler.StopDownload)
+		r.Get("/api/gb28181/downloads", gbHandler.ListDownloads)
+	})
 
 	// Static UI — serve from embedded filesystem
 	staticContent, err := fs.Sub(ui.StaticFS, "static")
@@ -830,6 +896,10 @@ func (a *App) Start() error {
 			slog.Error("camera manager", "error", err)
 		}
 	}()
+
+	// Start recording scheduler (recording plans)
+	a.recSched = recorder.NewRecordingScheduler(a.db)
+	a.recSched.Start(ctx, a.camMgr.PauseRecording, a.camMgr.ResumeRecording)
 
 	// Start health manager (optional, after camera manager)
 	if a.healthMgr != nil {
@@ -1053,6 +1123,12 @@ func (a *App) Stop() error {
 		if a.transcodeMgr != nil {
 			log.Info("stopping transcode manager")
 			a.transcodeMgr.Stop()
+		}
+
+		// 7.9. Recording scheduler
+		if a.recSched != nil {
+			log.Info("stopping recording scheduler")
+			a.recSched.Stop()
 		}
 
 		log.Info("stopping camera manager")

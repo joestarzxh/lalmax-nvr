@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
@@ -345,7 +344,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := getCameraID(r)
 	row, err := h.db.GetCamera(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get camera")
@@ -382,7 +381,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "camera manager not available")
 		return
 	}
-	id := chi.URLParam(r, "id")
+	id := getCameraID(r)
 
 	var body struct {
 		Name           *string                         `json:"name"`
@@ -514,7 +513,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleDeleteCamera(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := getCameraID(r)
 	ctx := r.Context()
 
 	cam, err := h.db.GetCamera(ctx, id)
@@ -570,7 +569,7 @@ func (h *Handler) archiveCameraRecord(ctx context.Context, id string) error {
 }
 
 func (h *Handler) handlePermanentDeleteCamera(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := getCameraID(r)
 	ctx := r.Context()
 
 	cam, err := h.db.GetCamera(ctx, id)
@@ -620,7 +619,7 @@ func (h *Handler) permanentlyDeleteCamera(ctx context.Context, cameraID string) 
 }
 
 func (h *Handler) handleCameraRecordingStats(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := getCameraID(r)
 	count, totalSize, err := h.db.GetCameraRecordingStats(r.Context(), id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get camera stats")
@@ -630,7 +629,7 @@ func (h *Handler) handleCameraRecordingStats(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *Handler) handleStartCamera(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := getCameraID(r)
 	if h.camMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "camera manager not available")
 		return
@@ -675,7 +674,7 @@ func isONVIFNotSupported(err error) bool {
 }
 
 func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := getCameraID(r)
 	if h.camMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "camera manager not available")
 		return
@@ -693,7 +692,7 @@ func (h *Handler) handleStopCamera(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handlePauseRecording(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := getCameraID(r)
 	if h.camMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "camera manager not available")
 		return
@@ -711,7 +710,7 @@ func (h *Handler) handlePauseRecording(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleResumeRecording(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := getCameraID(r)
 	if h.camMgr == nil {
 		writeError(w, http.StatusServiceUnavailable, "camera manager not available")
 		return

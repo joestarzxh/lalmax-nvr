@@ -83,19 +83,17 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Camera health aggregation (influences overall status)
-	if h.healthMgr != nil {
-		camHealth := h.aggregateCameraHealth(r)
-		resp.Cameras = camHealth
-		if camHealth != nil {
-			if camHealth.Error > 0 {
-				hasWarning = true // any camera in error = degraded
-			}
-			if camHealth.Reconnecting > 0 {
-				hasWarning = true // any reconnecting = degraded
-			}
-			if camHealth.Total > 0 && camHealth.Offline > camHealth.Total/2 {
-				hasError = true // majority offline = error
-			}
+	camHealth := h.aggregateCameraHealth(r)
+	resp.Cameras = camHealth
+	if camHealth != nil {
+		if camHealth.Error > 0 {
+			hasWarning = true // any camera in error = degraded
+		}
+		if camHealth.Reconnecting > 0 {
+			hasWarning = true // any reconnecting = degraded
+		}
+		if camHealth.Total > 0 && camHealth.Offline > camHealth.Total/2 {
+			hasError = true // majority offline = error
 		}
 	}
 
@@ -119,12 +117,7 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // aggregateCameraHealth builds a CameraHealthSummary from the health manager and camera DB.
 func (h *Handler) aggregateCameraHealth(r *http.Request) *CameraHealthSummary {
-	allHealth := h.healthMgr.GetAllHealth()
-	if allHealth == nil {
-		allHealth = map[string]*model.CameraHealth{}
-	}
-
-	// Build camera name lookup from DB
+	allHealth := h.cameraHealthWithConfiguredCameras(r)
 	nameLookup := map[string]string{}
 	if h.db != nil {
 		cameras, err := h.db.ListCameras(r.Context())
@@ -163,15 +156,46 @@ func (h *Handler) aggregateCameraHealth(r *http.Request) *CameraHealthSummary {
 // handleHealthCameras returns full camera health map with scores.
 // Public endpoint — no auth required.
 func (h *Handler) handleHealthCameras(w http.ResponseWriter, r *http.Request) {
-	if h.healthMgr == nil {
-		writeJSON(w, http.StatusOK, map[string]*model.CameraHealth{})
-		return
+	writeJSON(w, http.StatusOK, h.cameraHealthWithConfiguredCameras(r))
+}
+
+func (h *Handler) cameraHealthWithConfiguredCameras(r *http.Request) map[string]*model.CameraHealth {
+	health := map[string]*model.CameraHealth{}
+	if h.healthMgr != nil {
+		for id, ch := range h.healthMgr.GetAllHealth() {
+			if ch != nil {
+				health[id] = ch
+			}
+		}
 	}
-	health := h.healthMgr.GetAllHealth()
-	if health == nil {
-		health = map[string]*model.CameraHealth{}
+	if h.db == nil {
+		return health
 	}
-	writeJSON(w, http.StatusOK, health)
+
+	cameras, err := h.db.ListCameras(r.Context())
+	if err != nil {
+		return health
+	}
+	for _, cam := range cameras {
+		if _, ok := health[cam.ID]; ok {
+			continue
+		}
+		status := string(model.HealthStatusUnknown)
+		score := 50
+		factors := []string{"not_monitored"}
+		if !cam.Enabled {
+			status = string(model.StatusStopped)
+			score = 100
+			factors = []string{"disabled"}
+		}
+		health[cam.ID] = &model.CameraHealth{
+			CameraID:     cam.ID,
+			LatestStatus: status,
+			Score:        score,
+			ScoreFactors: factors,
+		}
+	}
+	return health
 }
 
 func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
@@ -883,12 +907,13 @@ func (h *Handler) handleGetGB28181Settings(w http.ResponseWriter, r *http.Reques
 
 	enabled := h.config.GB28181.Enabled != nil && *h.config.GB28181.Enabled
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled":  enabled,
-		"host":     h.config.GB28181.Host,
-		"port":     h.config.GB28181.Port,
-		"id":       h.config.GB28181.ID,
-		"password": h.config.GB28181.Password,
-		"media_ip": h.config.GB28181.MediaIP,
+		"enabled":    enabled,
+		"host":       h.config.GB28181.Host,
+		"port":       h.config.GB28181.Port,
+		"id":         h.config.GB28181.ID,
+		"password":   h.config.GB28181.Password,
+		"media_ip":   h.config.GB28181.MediaIP,
+		"media_port": h.config.GB28181.MediaPort,
 	})
 }
 
@@ -899,12 +924,13 @@ func (h *Handler) handleUpdateGB28181Settings(w http.ResponseWriter, r *http.Req
 	}
 
 	var body struct {
-		Enabled  *bool   `json:"enabled"`
-		Host     *string `json:"host"`
-		Port     *int    `json:"port"`
-		ID       *string `json:"id"`
-		Password *string `json:"password"`
-		MediaIP  *string `json:"media_ip"`
+		Enabled   *bool   `json:"enabled"`
+		Host      *string `json:"host"`
+		Port      *int    `json:"port"`
+		ID        *string `json:"id"`
+		Password  *string `json:"password"`
+		MediaIP   *string `json:"media_ip"`
+		MediaPort *int    `json:"media_port"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -912,31 +938,67 @@ func (h *Handler) handleUpdateGB28181Settings(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Track whether config changed (requires GB28181 restart)
+	needRestart := false
+
 	if body.Enabled != nil {
 		if h.config.GB28181.Enabled == nil {
 			h.config.GB28181.Enabled = new(bool)
 		}
+		if *h.config.GB28181.Enabled != *body.Enabled {
+			needRestart = true
+		}
 		*h.config.GB28181.Enabled = *body.Enabled
 	}
-	if body.Host != nil {
+	if body.Host != nil && *body.Host != h.config.GB28181.Host {
+		needRestart = true
 		h.config.GB28181.Host = *body.Host
 	}
-	if body.Port != nil {
+	if body.Port != nil && *body.Port != h.config.GB28181.Port {
+		needRestart = true
 		h.config.GB28181.Port = *body.Port
 	}
-	if body.ID != nil {
+	if body.ID != nil && *body.ID != h.config.GB28181.ID {
+		needRestart = true
 		h.config.GB28181.ID = *body.ID
 	}
-	if body.Password != nil {
+	if body.Password != nil && *body.Password != h.config.GB28181.Password {
+		needRestart = true
 		h.config.GB28181.Password = *body.Password
 	}
-	if body.MediaIP != nil {
+	if body.MediaIP != nil && *body.MediaIP != h.config.GB28181.MediaIP {
+		needRestart = true
 		h.config.GB28181.MediaIP = *body.MediaIP
+	}
+	if body.MediaPort != nil && *body.MediaPort != h.config.GB28181.MediaPort {
+		needRestart = true
+		h.config.GB28181.MediaPort = *body.MediaPort
 	}
 
 	// Persist config to disk (with conflict detection)
 	if !h.saveConfig(w) {
 		return
+	}
+
+	// Restart GB28181 if config changed
+	if needRestart && h.gb28181Restarter != nil {
+		enabled := h.config.GB28181.Enabled != nil && *h.config.GB28181.Enabled
+		gbCfg := &config.GB28181Config{
+			Enabled:   &enabled,
+			Host:      h.config.GB28181.Host,
+			Port:      h.config.GB28181.Port,
+			ID:        h.config.GB28181.ID,
+			Password:  h.config.GB28181.Password,
+			MediaIP:   h.config.GB28181.MediaIP,
+			MediaPort: h.config.GB28181.MediaPort,
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		if err := h.gb28181Restarter.RestartGB28181(ctx, gbCfg); err != nil {
+			logger.Warn("GB28181 restart failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "GB28181 restart failed")
+			return
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})

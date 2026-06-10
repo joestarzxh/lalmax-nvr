@@ -144,6 +144,8 @@ type Handler struct {
 	onvifNewClient    func(endpoint, username, password string) onvifDeviceClient
 	banMgr            BanManager
 	gb28181Svr        GB28181StreamStatus
+	gb28181Restarter  GB28181Restarter
+	snapshotMgr       *camera.SnapshotManager
 	// readyzDiskUsage overrides disk probing for /api/readyz (tests only).
 	readyzDiskUsage func() (total, used int64, err error)
 }
@@ -151,6 +153,11 @@ type Handler struct {
 // GB28181StreamStatus reports active GB28181 play sessions for stream status overlay.
 type GB28181StreamStatus interface {
 	IsStreamPlaying(streamID string) bool
+}
+
+// GB28181Restarter restarts the GB28181 SIP server with new configuration.
+type GB28181Restarter interface {
+	RestartGB28181(ctx context.Context, cfg *config.GB28181Config) error
 }
 
 func (h *Handler) SetConfigWatcher(w *config.Watcher) {
@@ -355,8 +362,41 @@ func (h *Handler) Routes() http.Handler {
 			r.Post("/disable", h.handleDisableAI)
 			r.Get("/events", h.handleAIEvents)
 		})
+		// Snapshot endpoints
+		r.Route("/api/snapshots", func(r chi.Router) {
+			r.Get("/{camera_id}", h.handleGetSnapshot)
+			r.Get("/{camera_id}/latest", h.handleGetLatestSnapshot)
+			r.Post("/{camera_id}/take", h.handleTakeSnapshot)
+		})
 		// Telemetry
 		r.With(telemetryRateLimiter()).Post("/api/telemetry", h.HandleTelemetry)
+		// Device Groups
+		r.Route("/api/groups", func(r chi.Router) {
+			r.Get("/", h.handleListGroups)
+			r.Post("/", h.handleCreateGroup)
+			r.Get("/tree", h.handleGetGroupTree)
+			r.Route("/{id}", func(r chi.Router) {
+				r.Get("/", h.handleGetGroup)
+				r.Put("/", h.handleUpdateGroup)
+				r.Delete("/", h.handleDeleteGroup)
+				r.Get("/channels", h.handleListGroupChannels)
+				r.Post("/channels", h.handleAddGroupChannel)
+				r.Delete("/channels", h.handleRemoveGroupChannel)
+			})
+		})
+		// Recording Plans
+		r.Route("/api/recording-plans", func(r chi.Router) {
+			r.Get("/", h.handleListRecordingPlans)
+			r.Post("/", h.handleCreateRecordingPlan)
+			r.Route("/{id}", func(r chi.Router) {
+				r.Get("/", h.handleGetRecordingPlan)
+				r.Put("/", h.handleUpdateRecordingPlan)
+				r.Delete("/", h.handleDeleteRecordingPlan)
+				r.Put("/channels", h.handleSetPlanChannels)
+				r.Post("/channels", h.handleAddPlanChannel)
+				r.Delete("/channels/{camera_id}", h.handleRemovePlanChannel)
+			})
+		})
 	})
 
 	return r
@@ -496,6 +536,14 @@ func (h *Handler) SetGB28181Server(svr GB28181StreamStatus) {
 	h.gb28181Svr = svr
 }
 
+func (h *Handler) SetGB28181Restarter(r GB28181Restarter) {
+	h.gb28181Restarter = r
+}
+
+func (h *Handler) SetSnapshotManager(mgr *camera.SnapshotManager) {
+	h.snapshotMgr = mgr
+}
+
 func (h *Handler) SetBanManager(mgr BanManager) {
 	h.banMgr = mgr
 }
@@ -530,6 +578,16 @@ type cameraSessionStatus struct {
 	BitrateKbits      int    `json:"bitrate_kbits,omitempty"`
 	ReadBitrateKbits  int    `json:"read_bitrate_kbits,omitempty"`
 	WriteBitrateKbits int    `json:"write_bitrate_kbits,omitempty"`
+}
+
+// getCameraID returns the URL-decoded camera ID from the request.
+// This handles IDs with colons (e.g., GB28181 device:channel) that get encoded as %3A.
+func getCameraID(r *http.Request) string {
+	id := chi.URLParam(r, "id")
+	if decoded, err := url.PathUnescape(id); err == nil {
+		return decoded
+	}
+	return id
 }
 
 func (h *Handler) mediaPlayURL(ctx context.Context, cameraID, protocol string) (*url.URL, error) {
@@ -660,7 +718,7 @@ func (h *Handler) applyHLSAvailability(protocols []ProtocolDetail) []ProtocolDet
 // It returns the available streaming protocols for a specific camera
 // based on its encoding and the registered stream handlers.
 func (h *Handler) handleCameraProtocols(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := getCameraID(r)
 
 	cam, err := h.db.GetCamera(r.Context(), id)
 	if err != nil {

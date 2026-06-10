@@ -74,7 +74,7 @@
   let showOnboarding = $state(false);
 
   let tabItems = $derived([
-    { id: 'active', label: t('cameras.tab.active'), icon: CameraIcon, count: cameras.filter(c => c.enabled).length },
+    { id: 'active', label: t('cameras.tab.active'), icon: CameraIcon, count: cameras.length },
     { id: 'archived', label: t('cameras.tab.archived'), icon: ArchiveIcon, count: archives.length },
   ]);
 
@@ -293,7 +293,7 @@
     error = '';
     try {
       const all = await listCameras();
-      cameras = all.filter(c => c.protocol !== 'gb28181');
+      cameras = all;
       pausedCameras = new Set(cameras.filter(c => c.recording_paused).map(c => c.id));
       const tutkCameras = cameras.filter(c => c.error_type === 'tutk_incompatible');
       if (tutkCameras.length === 1) {
@@ -462,7 +462,7 @@
   });
 </script>
 
-<div class="min-h-screen th-bg-primary pt-[68px]">
+<div class="min-h-screen th-bg-primary ">
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <!-- Page Header -->
     <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 gap-3">

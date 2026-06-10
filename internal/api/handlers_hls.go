@@ -2,9 +2,7 @@ package api
 
 import (
 	"errors"
-	"io"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/lalmax-pro/lalmax-nvr/internal/hls"
@@ -29,7 +27,7 @@ func subscribeHLS(hub *model.StreamHub, cameraID string, hlsMgr media.HLS, isH26
 }
 
 func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := getCameraID(r)
 	if h.config != nil && !h.config.IsHLSEnabled() {
 		writeError(w, http.StatusServiceUnavailable, "HLS is disabled")
 		return
@@ -287,7 +285,7 @@ func (h *Handler) handleHLSStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleStopHLSStream(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := getCameraID(r)
 
 	if h.hlsMgr == nil {
 		writeError(w, http.StatusInternalServerError, "HLS not available")
@@ -339,70 +337,10 @@ func getRecorderHub(rec model.Recorder) *model.StreamHub {
 // --- Snapshot endpoint ---
 
 func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
-	cameraID := chi.URLParam(r, "id")
-
-	// Find camera config to get SnapshotURL
-	var snapshotURL string
-	if h.config != nil {
-		for _, cam := range h.config.Cameras {
-			if cam.ID == cameraID {
-				snapshotURL = cam.SnapshotURL
-				break
-			}
-		}
-	}
-	if snapshotURL == "" {
-		http.Error(w, "Snapshot URL not configured", http.StatusNotFound)
+	cameraID := getCameraID(r)
+	if cameraID == "" {
+		writeError(w, http.StatusBadRequest, "camera id is required")
 		return
 	}
-
-	// Check cache (10 second TTL)
-	const cacheTTL = 10 * time.Second
-	h.snapshotMu.RLock()
-	cached, ok := h.snapshots[cameraID]
-	h.snapshotMu.RUnlock()
-
-	if ok && time.Since(cached.timestamp) < cacheTTL {
-		w.Header().Set("Content-Type", "image/jpeg")
-		w.Header().Set("Cache-Control", "max-age=5")
-		w.Write(cached.data)
-		return
-	}
-
-	// Fetch from camera
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(snapshotURL)
-	if err != nil {
-		// Return stale cache if available
-		if ok {
-			w.Header().Set("Content-Type", "image/jpeg")
-			w.Header().Set("X-Cache", "stale")
-			w.Write(cached.data)
-			return
-		}
-		logger.Warn("failed to fetch snapshot", "camera_id", cameraID, "error", err)
-		http.Error(w, "Failed to fetch snapshot", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "Camera returned error", http.StatusBadGateway)
-		return
-	}
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // 10MB max
-	if err != nil || len(data) == 0 {
-		http.Error(w, "Failed to read snapshot", http.StatusBadGateway)
-		return
-	}
-
-	// Update cache
-	h.snapshotMu.Lock()
-	h.snapshots[cameraID] = &snapshotCache{data: data, timestamp: time.Now()}
-	h.snapshotMu.Unlock()
-
-	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "max-age=5")
-	w.Write(data)
+	h.serveCameraSnapshot(w, r, cameraID)
 }

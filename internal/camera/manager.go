@@ -190,6 +190,50 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		if xr, ok := rec.(*xiaomi.XiaomiRecorder); ok {
 			xr.SetErrorReporter(cm)
 		}
+	case "gb28181":
+		// GB28181 streams are pulled via RTSP from lalmax
+		if recordingSourceURL != "" {
+			logger.Info("GB28181 recording via lalmax relay", "camera_id", cam.ID, "source_url", recordingSourceURL)
+		} else {
+			logger.Info("GB28181 recording via direct RTSP pull", "camera_id", cam.ID)
+		}
+		switch cam.Encoding {
+		case string(model.FormatH264), "": // Default to H264 if encoding unknown
+			h264Cfg := recorder.H264Config{
+				CameraID:      cam.ID,
+				RTSPURL:       firstNonEmpty(recordingSourceURL, cam.URL),
+				RTSPTransport: cameraRTSPTransport(cam),
+				Username:      cam.Username,
+				Password:      cam.Password,
+				SegmentDur:    segDur,
+				DB:            cm.db,
+				AudioEnabled:  cam.AudioEnabled,
+				EventBus:      cm.eventBus,
+			}
+			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
+				h264Cfg.FrameWatchdogTimeout = d
+			}
+			rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
+		case string(model.FormatH265):
+			h265Cfg := recorder.H265Config{
+				CameraID:      cam.ID,
+				RTSPURL:       firstNonEmpty(recordingSourceURL, cam.URL),
+				RTSPTransport: cameraRTSPTransport(cam),
+				Username:      cam.Username,
+				Password:      cam.Password,
+				SegmentDur:    segDur,
+				DB:            cm.db,
+				AudioEnabled:  cam.AudioEnabled,
+				EventBus:      cm.eventBus,
+			}
+			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
+				h265Cfg.FrameWatchdogTimeout = d
+			}
+			rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
+		default:
+			logger.Warn("unsupported encoding for GB28181 recording", "camera_id", cam.ID, "encoding", cam.Encoding)
+			return nil
+		}
 	case string(model.ProtoRTSP):
 		switch cam.Encoding {
 		case string(model.FormatH264):
