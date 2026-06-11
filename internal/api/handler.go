@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
+	"github.com/lalmax-pro/lalmax-nvr/internal/gb28181"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/merge"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
@@ -120,6 +121,7 @@ type Handler struct {
 	db                *storage.DB
 	store             *storage.Manager
 	authMW            func(http.Handler) http.Handler
+	multiUserMW       func(http.Handler) http.Handler
 	config            *config.Config
 	configWatcher     *config.Watcher
 	camMgr            *camera.CameraManager
@@ -145,6 +147,7 @@ type Handler struct {
 	banMgr            BanManager
 	gb28181Svr        GB28181StreamStatus
 	gb28181Restarter  GB28181Restarter
+	gb28181Server     *gb28181.Server
 	snapshotMgr       *camera.SnapshotManager
 	// readyzDiskUsage overrides disk probing for /api/readyz (tests only).
 	readyzDiskUsage func() (total, used int64, err error)
@@ -165,7 +168,7 @@ func (h *Handler) SetConfigWatcher(w *config.Watcher) {
 }
 
 func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr media.HLS, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
-	return &Handler{
+	h := &Handler{
 		db:               db,
 		store:            store,
 		authMW:           authMW,
@@ -182,6 +185,37 @@ func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler
 			return onvif.NewClient(endpoint, username, password)
 		},
 	}
+	// Default multi-user auth: wraps authMW and injects a super_admin user
+	// so RequireOperatePermission works without explicit SetMultiUserAuthMW.
+	h.SetMultiUserAuthMW(func(next http.Handler) http.Handler {
+		return authMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, _, _ := r.BasicAuth()
+			if user == "" {
+				if tok := r.URL.Query().Get("token"); tok != "" {
+					if decoded, err := base64.StdEncoding.DecodeString(tok); err == nil {
+						if parts := strings.SplitN(string(decoded), ":", 2); len(parts) == 2 {
+							user = parts[0]
+						}
+					}
+				}
+			}
+			if user == "" {
+				user = "admin"
+			}
+			ctx := context.WithValue(r.Context(), middleware.UserContextKey, &model.User{
+				ID:       1,
+				Username: user,
+				Role:     model.RoleSuperAdmin,
+				Enabled:  true,
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
+		}))
+	})
+	return h
+}
+
+func (h *Handler) SetMultiUserAuthMW(mw func(http.Handler) http.Handler) {
+	h.multiUserMW = mw
 }
 
 // Routes returns a chi.Router with all routes registered.
@@ -205,13 +239,17 @@ func (h *Handler) Routes() http.Handler {
 
 	// Protected routes
 	r.Group(func(r chi.Router) {
-		r.Use(h.authMW)
+		if h.multiUserMW != nil {
+			r.Use(h.multiUserMW)
+		} else {
+			r.Use(h.authMW)
+		}
 		r.Route("/api/recordings", func(r chi.Router) {
 			r.Get("/", h.handleListRecordings)
-			r.Post("/batch-delete", h.handleBatchDeleteRecordings)
+			r.With(middleware.RequireOperatePermission()).Post("/batch-delete", h.handleBatchDeleteRecordings)
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetRecording)
-				r.Delete("/", h.handleDeleteRecording)
+				r.With(middleware.RequireOperatePermission()).Delete("/", h.handleDeleteRecording)
 				r.Get("/download", h.handleDownloadRecording)
 				r.Get("/frames", h.handleListFrames)
 			})
@@ -220,19 +258,19 @@ func (h *Handler) Routes() http.Handler {
 			r.Get("/", h.handleListEvents)
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetEvent)
-				r.Delete("/", h.handleDeleteEvent)
+				r.With(middleware.RequireOperatePermission()).Delete("/", h.handleDeleteEvent)
 				r.Post("/ack", h.handleAcknowledgeEvent)
 			})
 		})
 		r.Route("/api/cameras", func(r chi.Router) {
 			r.Get("/", h.handleListCameras)
-			r.Post("/", h.handleCreateCamera)
-			r.Post("/test-connection", h.handleTestConnection)
+			r.With(middleware.RequireOperatePermission()).Post("/", h.handleCreateCamera)
+			r.With(middleware.RequireOperatePermission()).Post("/test-connection", h.handleTestConnection)
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", h.handleGetCamera)
-				r.Put("/", h.handleUpdateCamera)
-				r.Delete("/", h.handleDeleteCamera)
-				r.Delete("/permanent", h.handlePermanentDeleteCamera)
+				r.With(middleware.RequireOperatePermission()).Put("/", h.handleUpdateCamera)
+				r.With(middleware.RequireOperatePermission()).Delete("/", h.handleDeleteCamera)
+				r.With(middleware.RequireOperatePermission()).Delete("/permanent", h.handlePermanentDeleteCamera)
 				// WebSocket stream (must be before HLS catch-all /stream/*)
 				r.Get("/stream/ws", h.handleStreamWS)
 				// HTTP fMP4 stream (must be before HLS catch-all /stream/*)
@@ -252,32 +290,36 @@ func (h *Handler) Routes() http.Handler {
 				r.Post("/ptz/stop", h.handlePTZStop)
 				r.Get("/ptz/status", h.handlePTZStatus)
 				r.Get("/ptz/presets", h.handlePTZGetPresets)
-				r.Post("/ptz/presets", h.handlePTZCreatePreset)
-				r.Post("/ptz/presets/{token}/goto", h.handlePTZGoToPreset)
-				r.Delete("/ptz/presets/{token}", h.handlePTZDeletePreset)
+				r.With(middleware.RequireOperatePermission()).Post("/ptz/presets", h.handlePTZCreatePreset)
+				r.With(middleware.RequireOperatePermission()).Post("/ptz/presets/{token}/goto", h.handlePTZGoToPreset)
+				r.With(middleware.RequireOperatePermission()).Delete("/ptz/presets/{token}", h.handlePTZDeletePreset)
 				r.Get("/snapshot/uri", h.handleSnapshotGetUri)
 				r.Get("/imaging/settings", h.handleImagingGetSettings)
-				r.Put("/imaging/settings", h.handleImagingSetSettings)
+				r.With(middleware.RequireOperatePermission()).Put("/imaging/settings", h.handleImagingSetSettings)
 				r.Get("/imaging/options", h.handleImagingGetOptions)
 				// Device management
-				r.Post("/onvif/reboot", h.handleONVIFReboot)
+				r.With(middleware.RequireOperatePermission()).Post("/onvif/reboot", h.handleONVIFReboot)
 				r.Get("/onvif/network", h.handleONVIFGetNetwork)
-				r.Put("/onvif/network", h.handleONVIFSetNetwork)
+				r.With(middleware.RequireOperatePermission()).Put("/onvif/network", h.handleONVIFSetNetwork)
 				r.Get("/onvif/users", h.handleONVIFGetUsers)
-				r.Post("/onvif/users", h.handleONVIFCreateUsers)
-				r.Delete("/onvif/users", h.handleONVIFDeleteUsers)
-				r.Put("/onvif/users/{username}", h.handleONVIFSetUser)
+				r.With(middleware.RequireOperatePermission()).Post("/onvif/users", h.handleONVIFCreateUsers)
+				r.With(middleware.RequireOperatePermission()).Delete("/onvif/users", h.handleONVIFDeleteUsers)
+				r.With(middleware.RequireOperatePermission()).Put("/onvif/users/{username}", h.handleONVIFSetUser)
+				// ONVIF Recording
+				r.Get("/onvif/recordings", h.handleGetONVIFRecordings)
+				r.Get("/onvif/recordings/search", h.handleSearchONVIFRecordings)
+				r.Get("/onvif/replay/{token}", h.handleGetONVIFReplayURI)
 				r.Get("/snapshot", h.handleSnapshot)
-				r.Put("/merge-config", h.handleUpdateCameraMergeConfig)
-				r.Delete("/merge-config", h.handleDeleteCameraMergeConfig)
+				r.With(middleware.RequireOperatePermission()).Put("/merge-config", h.handleUpdateCameraMergeConfig)
+				r.With(middleware.RequireOperatePermission()).Delete("/merge-config", h.handleDeleteCameraMergeConfig)
 				r.Get("/stats", h.handleCameraRecordingStats)
 				// Per-camera timelapse configuration
 				r.Get("/timelapse", h.handleGetCameraTimelapse)
-				r.Put("/timelapse", h.handlePutCameraTimelapse)
-				r.Post("/start", h.handleStartCamera)
-				r.Post("/stop", h.handleStopCamera)
-				r.Post("/pause-recording", h.handlePauseRecording)
-				r.Post("/resume-recording", h.handleResumeRecording)
+				r.With(middleware.RequireOperatePermission()).Put("/timelapse", h.handlePutCameraTimelapse)
+				r.With(middleware.RequireOperatePermission()).Post("/start", h.handleStartCamera)
+				r.With(middleware.RequireOperatePermission()).Post("/stop", h.handleStopCamera)
+				r.With(middleware.RequireOperatePermission()).Post("/pause-recording", h.handlePauseRecording)
+				r.With(middleware.RequireOperatePermission()).Post("/resume-recording", h.handleResumeRecording)
 			})
 		})
 		r.Get("/api/stats", h.handleStats)
@@ -286,32 +328,32 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/network", h.handleGetNetworkInterfaces)
 		r.Get("/api/streams", h.handleListStreams)
 		r.Get("/api/streams/{stream_id}", h.handleGetStream)
-		r.Post("/api/streams/{stream_id}/bind-camera", h.handleBindCamera)
-		r.Post("/api/streams/{stream_id}/unbind-camera", h.handleUnbindCamera)
-		r.Post("/api/streams/{stream_id}/promote", h.handlePromoteStream)
-		r.Delete("/api/streams/{stream_id}", h.handleDeleteStream)
-		r.Post("/api/streams/{stream_id}/kick-publisher", h.handleKickPublisher)
-		r.Post("/api/streams/{stream_id}/ban", h.handleBanStream)
-		r.Delete("/api/streams/{stream_id}/ban", h.handleUnbanStream)
+		r.With(middleware.RequireOperatePermission()).Post("/api/streams/{stream_id}/bind-camera", h.handleBindCamera)
+		r.With(middleware.RequireOperatePermission()).Post("/api/streams/{stream_id}/unbind-camera", h.handleUnbindCamera)
+		r.With(middleware.RequireOperatePermission()).Post("/api/streams/{stream_id}/promote", h.handlePromoteStream)
+		r.With(middleware.RequireOperatePermission()).Delete("/api/streams/{stream_id}", h.handleDeleteStream)
+		r.With(middleware.RequireOperatePermission()).Post("/api/streams/{stream_id}/kick-publisher", h.handleKickPublisher)
+		r.With(middleware.RequireOperatePermission()).Post("/api/streams/{stream_id}/ban", h.handleBanStream)
+		r.With(middleware.RequireOperatePermission()).Delete("/api/streams/{stream_id}/ban", h.handleUnbanStream)
 		r.Get("/api/streams/bans", h.handleListBans)
 		r.Get("/api/streams/history", h.handleListStreamHistory)
 		r.Delete("/api/streams/history/{stream_id}", h.handleDeleteStreamHistory)
 		r.Get("/api/settings", h.handleGetSettings)
-		r.Put("/api/settings", h.handleUpdateSettings)
+		r.With(middleware.RequireOperatePermission()).Put("/api/settings", h.handleUpdateSettings)
 		r.Get("/api/settings/merge", h.handleGetMergeSettings)
-		r.Put("/api/settings/merge", h.handleUpdateMergeSettings)
+		r.With(middleware.RequireOperatePermission()).Put("/api/settings/merge", h.handleUpdateMergeSettings)
 		r.Get("/api/settings/streaming", h.handleGetStreamingSettings)
-		r.Put("/api/settings/streaming", h.handleUpdateStreamingSettings)
+		r.With(middleware.RequireOperatePermission()).Put("/api/settings/streaming", h.handleUpdateStreamingSettings)
 		r.Get("/api/settings/transcoding", h.handleGetTranscodingSettings)
-		r.Put("/api/settings/transcoding", h.handleUpdateTranscodingSettings)
+		r.With(middleware.RequireOperatePermission()).Put("/api/settings/transcoding", h.handleUpdateTranscodingSettings)
 		r.Get("/api/settings/gb28181", h.handleGetGB28181Settings)
-		r.Put("/api/settings/gb28181", h.handleUpdateGB28181Settings)
+		r.With(middleware.RequireOperatePermission()).Put("/api/settings/gb28181", h.handleUpdateGB28181Settings)
 		r.Get("/api/settings/hls", h.handleGetHLSSettings)
-		r.Put("/api/settings/hls", h.handleUpdateHLSSettings)
-		r.Post("/api/settings/lalmax/regenerate", h.handleRegenerateLalmaxConfig)
-		r.Post("/api/config/reload", h.handleReloadConfig)
+		r.With(middleware.RequireOperatePermission()).Put("/api/settings/hls", h.handleUpdateHLSSettings)
+		r.With(middleware.RequireOperatePermission()).Post("/api/settings/lalmax/regenerate", h.handleRegenerateLalmaxConfig)
+		r.With(middleware.RequireOperatePermission()).Post("/api/config/reload", h.handleReloadConfig)
 		r.Get("/api/config/check", h.handleCheckConfigChange)
-		r.Post("/api/backup", h.handleBackup)
+		r.With(middleware.RequireOperatePermission()).Post("/api/backup", h.handleBackup)
 		r.Get("/api/backups", h.handleListBackups)
 		r.Post("/api/onvif/discover", h.handleONVIFDiscover)
 		r.Get("/api/onvif/discover/{ip}", h.handleONVIFDeviceDetail)
@@ -320,15 +362,26 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/merge/pending", h.handleMergePending)
 		r.Get("/api/protocols", h.handleProtocols)
 		r.Get("/api/features", h.handleGetFeatures)
-		r.Put("/api/features", h.handleUpdateFeatures)
+		r.With(middleware.RequireOperatePermission()).Put("/api/features", h.handleUpdateFeatures)
+		// User management (super_admin only)
+		r.Route("/api/users", func(r chi.Router) {
+			r.Use(middleware.RequireOperatePermission())
+			r.Get("/", h.handleListUsers)
+			r.Post("/", h.handleCreateUser)
+			r.Route("/{id}", func(r chi.Router) {
+				r.Get("/", h.handleGetUser)
+				r.Put("/", h.handleUpdateUser)
+				r.Delete("/", h.handleDeleteUser)
+			})
+		})
 		// Archive endpoints
 		r.Route("/api/archives", func(r chi.Router) {
 			r.Get("/", h.handleListArchives)
-			r.Post("/{cameraID}/restore", h.handleRestoreArchiveGroup)
+			r.With(middleware.RequireOperatePermission()).Post("/{cameraID}/restore", h.handleRestoreArchiveGroup)
 			r.Get("/{cameraID}/recordings", h.handleListArchiveRecordings)
-			r.Delete("/{cameraID}", h.handleDeleteArchiveGroup)
-			r.Delete("/{cameraID}/recordings/{recordingID}", h.handleDeleteArchiveRecording)
-			r.Put("/{cameraID}/retention", h.handleSetArchiveRetention)
+			r.With(middleware.RequireOperatePermission()).Delete("/{cameraID}", h.handleDeleteArchiveGroup)
+			r.With(middleware.RequireOperatePermission()).Delete("/{cameraID}/recordings/{recordingID}", h.handleDeleteArchiveRecording)
+			r.With(middleware.RequireOperatePermission()).Put("/{cameraID}/retention", h.handleSetArchiveRetention)
 		})
 		// Xiaomi cloud auth and device discovery
 		r.Route("/api/xiaomi", func(r chi.Router) {
@@ -462,6 +515,18 @@ func noopHandler(db *storage.DB, store *storage.Manager) *Handler {
 	h.readyzDiskUsage = func() (int64, int64, error) {
 		return 1_000_000_000_000, 100_000_000_000, nil
 	}
+	// Inject a super_admin user so RequireOperatePermission works in tests
+	h.SetMultiUserAuthMW(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := context.WithValue(r.Context(), middleware.UserContextKey, &model.User{
+				ID:       1,
+				Username: "admin",
+				Role:     model.RoleSuperAdmin,
+				Enabled:  true,
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	})
 	return h
 }
 
@@ -478,7 +543,21 @@ func TestHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passw
 		GetUsername: func() string { return username },
 		GetHash:     func() string { return passwordHash },
 	}, "")
-	return NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
+	// Set up multi-user middleware that injects a super_admin user after auth succeeds
+	h.SetMultiUserAuthMW(func(next http.Handler) http.Handler {
+		return authMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Auth already passed (middleware returned 200), inject super_admin user
+			ctx := context.WithValue(r.Context(), middleware.UserContextKey, &model.User{
+				ID:       1,
+				Username: username,
+				Role:     model.RoleSuperAdmin,
+				Enabled:  true,
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
+		}))
+	})
+	return h
 }
 
 // extractDIDFromURL parses the DID from a xiaomi:// URL.
@@ -534,6 +613,10 @@ type BanManager interface {
 
 func (h *Handler) SetGB28181Server(svr GB28181StreamStatus) {
 	h.gb28181Svr = svr
+}
+
+func (h *Handler) SetGB28181ServerInstance(svr *gb28181.Server) {
+	h.gb28181Server = svr
 }
 
 func (h *Handler) SetGB28181Restarter(r GB28181Restarter) {

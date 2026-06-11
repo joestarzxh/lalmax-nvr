@@ -15,17 +15,19 @@
   import { createSnapshotManager } from '$lib/snapshot';
   import { createReconnectCoordinator } from '$lib/reconnect-coordinator.svelte';
 
-  type GridLayout = 1 | 4 | 9 | 16;
-  const LAYOUT_OPTIONS: GridLayout[] = [1, 4, 9, 16];
+  type GridLayout = 1 | 4 | 6 | 9 | 16;
+  const LAYOUT_OPTIONS: GridLayout[] = [1, 4, 6, 9, 16];
   const GRID_COLS_CLASS: Record<GridLayout, string> = {
     1: 'grid-cols-1',
     4: 'grid-cols-2',
+    6: 'grid-cols-3',
     9: 'grid-cols-3',
     16: 'grid-cols-4',
   };
   const GRID_EXPAND_CLASS: Record<GridLayout, string> = {
     1: 'col-span-1 row-span-1',
     4: 'col-span-2 row-span-2',
+    6: 'col-span-3 row-span-3',
     9: 'col-span-3 row-span-3',
     16: 'col-span-4 row-span-4',
   };
@@ -294,11 +296,15 @@
         ? GRID_EXPAND_CLASS[gridLayout]
         : 'hidden';
     }
+    // 6-screen: first slot spans 2x2
+    if (gridLayout === 6 && slotIndex === 0) {
+      return 'col-span-2 row-span-2';
+    }
     return '';
   }
 
   function getCellMinHeight(layout: GridLayout): string {
-    const rows = Math.sqrt(layout);
+    const rows = layout === 6 ? 3 : Math.sqrt(layout);
     return `calc((100vh - 168px) / ${rows})`;
   }
 
@@ -502,7 +508,7 @@
   });
 </script>
 
-<div class="min-h-screen th-bg-primary pt-[68px]">
+<div class="min-h-screen th-bg-primary">
   <main class="mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6" style="max-width: 100%;">
 
     <!-- Header -->
@@ -558,7 +564,7 @@
             {@const assigned = cameraId ? cameraById.get(cameraId) : null}
             <button
               type="button"
-              class="slot-config rounded-lg border th-border p-2 min-h-[72px] text-left w-full {editingSlotIndex === slotIndex ? 'slot-config-active' : ''}"
+              class="slot-config rounded-lg border th-border p-2 min-h-[72px] text-left w-full {editingSlotIndex === slotIndex ? 'slot-config-active' : ''} {pendingGridLayout === 6 && slotIndex === 0 ? 'col-span-2 row-span-2' : ''}"
               onclick={() => { editingSlotIndex = slotIndex; }}
             >
               <div class="flex items-center justify-between gap-2 mb-1.5">
@@ -935,4 +941,44 @@
     background: var(--bg-secondary);
   }
 
+  /* Responsive grid adjustments */
+  @media (max-width: 767px) {
+    :global(.grid-cols-2),
+    :global(.grid-cols-3),
+    :global(.grid-cols-4) {
+      grid-template-columns: 1fr !important;
+    }
+    
+    :global(.col-span-2),
+    :global(.col-span-3),
+    :global(.col-span-4) {
+      grid-column: span 1 !important;
+    }
+    
+    :global(.row-span-2),
+    :global(.row-span-3),
+    :global(.row-span-4) {
+      grid-row: span 1 !important;
+    }
+  }
+
+  @media (min-width: 768px) and (max-width: 1023px) {
+    :global(.grid-cols-3) {
+      grid-template-columns: repeat(2, 1fr) !important;
+    }
+    
+    :global(.grid-cols-4) {
+      grid-template-columns: repeat(2, 1fr) !important;
+    }
+    
+    :global(.col-span-3),
+    :global(.col-span-4) {
+      grid-column: span 2 !important;
+    }
+    
+    :global(.row-span-3),
+    :global(.row-span-4) {
+      grid-row: span 2 !important;
+    }
+  }
 </style>

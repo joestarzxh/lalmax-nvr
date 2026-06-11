@@ -230,6 +230,11 @@
     onwheel={handleWheel}
     onmousedown={handleMouseDown}
     tabindex="0"
+    role="slider"
+    aria-label="Timeline"
+    aria-valuemin={0}
+    aria-valuemax={100}
+    aria-valuenow={0}
   >
     {#each visibleRecordings as recording (recording.id)}
       <button

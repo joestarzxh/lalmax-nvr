@@ -8,6 +8,9 @@ VERSION="${VERSION:-dev}"
 COMMIT="${COMMIT:-}"
 DATE="${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 
+# Suppress Node.js deprecation warnings (e.g., module.register)
+export NODE_OPTIONS="${NODE_OPTIONS:-} --no-deprecation"
+
 # Cross-compilation: auto-detect or override via GOOS/GOARCH
 # Examples:
 #   ./scripts/build.sh                        # build for current platform
@@ -52,7 +55,7 @@ if [[ -f "${ROOT_DIR}/web/package.json" ]] && command -v npm >/dev/null 2>&1; th
 fi
 
 CGO_ENABLED="${CGO_ENABLED}" GOOS="${TARGET_OS}" GOARCH="${TARGET_ARCH}" \
-  GOCACHE="${GOCACHE}" GOMODCACHE="${GOMODCACHE}" go build \
+  go build \
   -ldflags "-s -w -X main.appVersion=${VERSION}" \
   -o "${OUTPUT_BIN}" \
   ./cmd/lalmax-nvr

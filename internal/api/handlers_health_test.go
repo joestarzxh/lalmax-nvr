@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/health"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/stretchr/testify/require"
-	"github.com/lalmax-pro/lalmax-nvr/internal/health"
 )
 
 // --- mock HealthManager ---
@@ -346,7 +346,9 @@ func TestHealth_CameraAggregation_NilManager(t *testing.T) {
 
 	var body HealthResponse
 	parseJSON(t, rr, &body)
-	require.Nil(t, body.Cameras)
+	require.NotNil(t, body.Cameras)
+	require.Equal(t, 0, body.Cameras.Total)
+	require.Empty(t, body.Cameras.Details)
 }
 
 func TestHealth_CameraAggregation_EmptyHealth(t *testing.T) {
@@ -441,6 +443,30 @@ func TestHealthCameras_NilHealth(t *testing.T) {
 	require.Equal(t, map[string]*model.CameraHealth{}, resp)
 }
 
+func TestHealthCameras_IncludesConfiguredCamerasWithoutHealthData(t *testing.T) {
+	t.Parallel()
+	db, store := setupTestDB(t)
+	t.Cleanup(func() { db.Close() })
+	require.NoError(t, db.UpsertCamera(context.Background(), "cam-1", "Camera 1", "rtsp_h264", "", "rtsp://127.0.0.1/live", "", "", true, "", "", ""))
+	require.NoError(t, db.UpsertCamera(context.Background(), "cam-2", "Camera 2", "rtsp_h264", "", "rtsp://127.0.0.1/live2", "", "", false, "", "", ""))
+
+	h := TestHandler(db, store)
+	h.healthMgr = &mockHealthManager{allHealth: nil}
+
+	rr := doRequest(t, h.Routes(), "GET", "/api/health/cameras", nil, "", "")
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var resp map[string]*model.CameraHealth
+	parseJSON(t, rr, &resp)
+	require.Len(t, resp, 2)
+	require.Equal(t, "unknown", resp["cam-1"].LatestStatus)
+	require.Equal(t, 50, resp["cam-1"].Score)
+	require.Equal(t, []string{"not_monitored"}, resp["cam-1"].ScoreFactors)
+	require.Equal(t, "stopped", resp["cam-2"].LatestStatus)
+	require.Equal(t, 100, resp["cam-2"].Score)
+	require.Equal(t, []string{"disabled"}, resp["cam-2"].ScoreFactors)
+}
+
 func TestHealthCameras_PublicEndpoint(t *testing.T) {
 	t.Parallel()
 	// Verify /api/health/cameras is accessible without auth
@@ -462,7 +488,7 @@ func TestHealthCameras_PublicEndpoint(t *testing.T) {
 // --- mock StabilityProvider ---
 
 type mockStabilityProvider struct {
-	allStability   map[string]*health.StabilityData
+	allStability    map[string]*health.StabilityData
 	cameraStability map[string]*health.StabilityData
 }
 

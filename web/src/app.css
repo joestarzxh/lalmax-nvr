@@ -460,3 +460,174 @@
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
+
+/* ================================================================
+   RESPONSIVE UTILITIES
+   ================================================================ */
+
+/* Responsive visibility */
+.hidden-mobile {
+  display: block;
+}
+
+.visible-mobile {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .hidden-mobile {
+    display: none !important;
+  }
+  .visible-mobile {
+    display: block !important;
+  }
+}
+
+/* Responsive flex direction */
+@media (max-width: 767px) {
+  .flex-mobile-col {
+    flex-direction: column;
+  }
+}
+
+/* Responsive width */
+@media (max-width: 767px) {
+  .w-full-mobile {
+    width: 100% !important;
+  }
+}
+
+/* Responsive padding */
+@media (max-width: 767px) {
+  .px-responsive {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+}
+
+/* Responsive grid */
+@media (max-width: 767px) {
+  .grid-mobile-1 {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  .grid-tablet-2 {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}
+
+/* Responsive text */
+@media (max-width: 767px) {
+  .text-sm-mobile {
+    font-size: 0.75rem;
+  }
+  .text-base-mobile {
+    font-size: 0.875rem;
+  }
+}
+
+/* Responsive card */
+@media (max-width: 767px) {
+  .card-responsive {
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+  .card-responsive:hover {
+    transform: none;
+  }
+}
+
+/* Responsive table - card layout on mobile */
+@media (max-width: 767px) {
+  .table-responsive thead {
+    display: none;
+  }
+  .table-responsive tbody tr {
+    display: block;
+    margin-bottom: 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+  .table-responsive td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .table-responsive td:last-child {
+    border-bottom: none;
+  }
+  .table-responsive td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-right: 1rem;
+  }
+}
+
+/* Responsive sidebar content shift */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .sidebar-aware-content {
+    margin-left: 64px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .sidebar-aware-content {
+    margin-left: 240px;
+  }
+}
+
+/* Responsive modal/dialog */
+@media (max-width: 767px) {
+  .modal-responsive {
+    width: calc(100% - 2rem);
+    max-height: calc(100vh - 2rem);
+    margin: 1rem;
+  }
+}
+
+/* Touch-friendly targets */
+@media (pointer: coarse) {
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* Responsive overflow handling */
+.overflow-x-responsive {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Responsive flex wrap */
+.flex-wrap-responsive {
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Responsive spacing */
+@media (max-width: 767px) {
+  .gap-mobile-sm {
+    gap: 0.5rem;
+  }
+  .space-y-mobile > * + * {
+    margin-top: 0.5rem;
+  }
+}
+
+/* Safe area for notched devices */
+@supports (padding-top: env(safe-area-inset-top)) {
+  .safe-area-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}

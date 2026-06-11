@@ -775,6 +775,13 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Capabilities: map[string]bool{"hls": true, "ptz": true, "snapshot": false, "discovery": true, "auth": true},
 		},
 		{
+			ID:           "gb28181",
+			Label:        "GB28181",
+			Encodings:    []string{"h264", "h265"},
+			BuiltIn:      true,
+			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
+		},
+		{
 			ID:           "xiaomi",
 			Label:        "Xiaomi",
 			Encodings:    []string{"h264", "h265"},
@@ -906,12 +913,23 @@ func (h *Handler) handleGetGB28181Settings(w http.ResponseWriter, r *http.Reques
 	}
 
 	enabled := h.config.GB28181.Enabled != nil && *h.config.GB28181.Enabled
+	
+	// Use default values if empty
+	id := h.config.GB28181.ID
+	if id == "" {
+		id = "34020000002000000001"
+	}
+	password := h.config.GB28181.Password
+	if password == "" {
+		password = "12345678"
+	}
+	
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":    enabled,
 		"host":       h.config.GB28181.Host,
 		"port":       h.config.GB28181.Port,
-		"id":         h.config.GB28181.ID,
-		"password":   h.config.GB28181.Password,
+		"id":         id,
+		"password":   password,
 		"media_ip":   h.config.GB28181.MediaIP,
 		"media_port": h.config.GB28181.MediaPort,
 	})

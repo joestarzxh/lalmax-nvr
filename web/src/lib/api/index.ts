@@ -14,6 +14,7 @@ export {
   getSystemStats,
   getLocalNetworkInterfaces,
   getAuthHeader,
+  getAuthToken,
   API_BASE,
   apiRequest,
   apiRequestBlob,
@@ -48,7 +49,6 @@ export {
   pauseRecording,
   resumeRecording,
   getDashboardCameras,
-  getSnapshotUrl,
   testConnection,
   getMergeConfig,
   updateMergeConfig,
@@ -89,6 +89,10 @@ export {
   // Timelapse
   getTimelapseConfig,
   updateTimelapseConfig,
+  // Snapshot
+  getSnapshotUrl,
+  getSnapshotInfo,
+  takeSnapshot,
 } from './cameras';
 export type {
   CameraTranscodingConfig,
@@ -130,6 +134,8 @@ export type {
   // Timelapse
   TimelapseConfig,
   CameraRecordingStats,
+  // Snapshot
+  SnapshotInfo,
 } from './cameras';
 // Recordings — list, download, frames, stats, archives
 export {
@@ -317,6 +323,17 @@ export {
   listGB28181Devices,
   playGB28181Stream,
   stopGB28181Stream,
+  listGB28181Platforms,
+  addGB28181Platform,
+  deleteGB28181Platform,
+  startBroadcast,
+  stopBroadcast,
+  listGB28181Alarms,
+  startDownload,
+  stopDownload,
+  listGB28181Downloads,
+  queryDeviceRecords,
+  startDevicePlayback,
 } from './gb28181';
 
 export type {
@@ -325,4 +342,73 @@ export type {
   GB28181DevicesResponse,
   GB28181PlayRequest,
   GB28181PlayResponse,
+  GB28181Platform,
+  GB28181PlatformsResponse,
+  AddPlatformRequest,
+  GB28181Alarm,
+  GB28181AlarmsResponse,
+  GB28181Download,
+  GB28181DownloadsResponse,
+  DeviceRecordItem,
+  DeviceRecordResponse,
+  QueryDeviceRecordRequest,
+  PlaybackRequest,
+  PlaybackResponse,
 } from './gb28181';
+
+// Groups — device grouping management
+export {
+  listDeviceGroups,
+  getDeviceGroup,
+  getDeviceGroupTree,
+  createDeviceGroup,
+  updateDeviceGroup,
+  deleteDeviceGroup,
+  listGroupChannels,
+  addGroupChannel,
+  removeGroupChannel,
+} from './groups';
+
+export type {
+  DeviceGroup,
+  DeviceGroupTreeNode,
+  DeviceGroupChannelDetail,
+  CreateGroupRequest,
+  UpdateGroupRequest,
+  AddGroupChannelRequest,
+  RemoveGroupChannelRequest,
+} from './groups';
+
+// Recording Plans
+export {
+  listRecordingPlans,
+  getRecordingPlan,
+  createRecordingPlan,
+  updateRecordingPlan,
+  deleteRecordingPlan,
+  setPlanChannels,
+  addPlanChannel,
+  removePlanChannel,
+} from './recording-plans';
+
+export type {
+  RecordingPlan,
+  RecordingPlanTimeRange,
+  RecordingPlanChannel,
+  CreateRecordingPlanRequest,
+} from './recording-plans';
+
+// Users — user management
+export {
+  listUsers,
+  getUser,
+  createUser,
+  updateUser,
+  deleteUser,
+} from './users';
+
+export type {
+  User,
+  CreateUserRequest,
+  UpdateUserRequest,
+} from './users';

@@ -2,18 +2,18 @@
   import { onMount, onDestroy } from 'svelte';
   import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities } from '$lib/api';
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo } from '$lib/api';
-  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity } from 'lucide-svelte';
+  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Mic, MicOff } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
   import FlvPlayer from '../components/FlvPlayer.svelte';
-  // WasmPlayer is lazy-loaded to keep main bundle small (~180 KB WebCodecs/AI deps)
   import ProtocolSwitcher from '../components/ProtocolSwitcher.svelte';
   import type { StreamingProtocol } from '../components/ProtocolSwitcher.svelte';
   import SnapshotButton from '../components/SnapshotButton.svelte';
   import ImagingPanel from '$lib/components/ImagingPanel.svelte';
   import PresetManager from '$lib/components/PresetManager.svelte';
   import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
+  import TalkButton from '../components/TalkButton.svelte';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
 
@@ -37,6 +37,9 @@
   // Lazy-loaded FMP4Player component
   let FMP4PlayerComponent = $state<any>(null);
   let fmp4PlayerLoading = $state(false);
+
+  // Right panel state
+  let activeRightPanel = $state<'ptz' | 'imaging' | 'presets' | 'events'>('ptz');
 
   async function loadWasmPlayer() {
     if (WasmPlayerComponent || wasmPlayerLoading) return;
@@ -70,9 +73,6 @@
   // ONVIF capabilities
   let deviceCaps = $state<DeviceCapabilitiesInfo | null>(null);
   let capsLoading = $state(false);
-  let showImaging = $state(false);
-  let showPresets = $state(false);
-  let showEvents = $state(false);
 
   function isHlsSupported(cam: Camera): boolean {
     return getProtocolCapabilities(cam.protocol, protocolsMap).hls;
@@ -84,6 +84,10 @@
 
   function isOnvifCamera(cam: Camera): boolean {
     return normalizeProtocol(cam.protocol) === 'onvif';
+  }
+
+  function isGB28181Camera(cam: Camera): boolean {
+    return normalizeProtocol(cam.protocol) === 'gb28181';
   }
 
   async function loadCapabilities() {
@@ -116,7 +120,7 @@
   }
 
   function goBack() {
-    window.location.hash = '#/cameras';
+    window.location.hash = '#/devices';
   }
 
   function toggleFullscreen() {
@@ -139,7 +143,6 @@
   function handleProtocolChange(protocol: StreamingProtocol) {
     switchingProtocol = true;
     streamingProtocol = protocol;
-    // Brief delay to show switching state, then mount new player
     setTimeout(() => { switchingProtocol = false; }, 100);
   }
 
@@ -174,21 +177,22 @@
     return '';
   }
 
-  // Preload WasmPlayer when user selects 'wasm' protocol
+  // Check if PTZ should be shown
+  let showPtz = $derived(camera && (isGB28181Camera(camera) || (isOnvifCamera(camera) && (!deviceCaps || deviceCaps.ptz))));
+  let showTalk = $derived(camera && isGB28181Camera(camera));
+
   $effect(() => {
     if (streamingProtocol === 'wasm') {
       loadWasmPlayer();
     }
   });
 
-  // Preload FMP4Player when user selects 'fmp4' protocol
   $effect(() => {
     if (streamingProtocol === 'fmp4') {
       loadFMP4Player();
     }
   });
 
-  // Fetch capabilities when camera loads
   $effect(() => {
     if (camera && isOnvifCamera(camera)) {
       loadCapabilities();
@@ -204,7 +208,6 @@
 
     loadCamera();
     document.addEventListener('fullscreenchange', handleFullscreenChange);
-    // Load protocol capabilities
     listProtocols().then(list => {
       if (list && list.length > 0) protocolsMap = buildProtocolsMap(list);
     }).catch((e) => { console.warn('Failed to load protocols:', e); });
@@ -215,8 +218,8 @@
   });
 </script>
 
-<div class="min-h-screen th-bg-primary pt-[68px]">
-  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="min-h-screen th-bg-primary">
+  <main class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
     <!-- Loading state -->
     {#if loading}
       <div class="flex justify-center items-center h-64">
@@ -238,231 +241,228 @@
         </div>
       </div>
     {:else if camera}
-      <div class="space-y-4">
-        <!-- Header with camera name -->
-        <div class="flex items-center gap-3 flex-wrap">
-          <button onclick={goBack} class="btn btn-ghost btn-sm flex items-center gap-1">
-            <ArrowLeft size={16} />
-            {t('nav.cameras')}
-          </button>
-          <h2 class="text-xl font-bold th-text-primary truncate">
-            {camera.name || camera.id}
-          </h2>
-          <span class="badge badge-neutral">{protocolsMap.get(camera.protocol)?.label || camera.protocol}</span>
+      <!-- Header -->
+      <div class="flex items-center gap-3 mb-4">
+        <button onclick={goBack} class="btn btn-ghost btn-sm flex items-center gap-1">
+          <ArrowLeft size={16} />
+          {t('nav.cameras')}
+        </button>
+        <h2 class="text-xl font-bold th-text-primary truncate">
+          {camera.name || camera.id}
+        </h2>
+        <span class="badge badge-neutral">{protocolsMap.get(camera.protocol)?.label || camera.protocol}</span>
 
-          <!-- ONVIF controls shown for all ONVIF cameras -->
-          {#if isOnvifCamera(camera)}
-            <SnapshotButton cameraId={camera.id} />
-          {/if}
-
-          {#if isHlsSupported(camera)}
-            <div class="flex-1"></div>
-            <!-- Protocol Switcher -->
-            <ProtocolSwitcher
-              cameraId={camera.id}
-              cameraEncoding={camera.encoding || camera.stream_encoding || ''}
-              selected={streamingProtocol}
-              onchange={handleProtocolChange}
-              onprotocolsloaded={handleProtocolsLoaded}
-            />
-            <button onclick={toggleFullscreen} class="btn btn-ghost btn-sm flex items-center gap-1">
-              {#if isFullscreen}
-                <Minimize size={16} />
-              {:else}
-                <Maximize size={16} />
-              {/if}
-            </button>
-          {/if}
-        </div>
+        {#if isOnvifCamera(camera)}
+          <SnapshotButton cameraId={camera.id} />
+        {/if}
 
         {#if isHlsSupported(camera)}
-          <!-- Player container -->
-          <div
-            class="card border th-border overflow-hidden"
-            style="max-height: 80vh;"
-            bind:this={playerContainer}
-            onshrink={() => goBack()}
-          >
-            {#if switchingProtocol}
-              <!-- Switching state -->
-              <div class="relative w-full bg-black" style="aspect-ratio: 16/9;">
-                <div class="absolute inset-0 flex items-center justify-center">
+          <div class="flex-1"></div>
+          <ProtocolSwitcher
+            cameraId={camera.id}
+            cameraEncoding={camera.encoding || camera.stream_encoding || ''}
+            selected={streamingProtocol}
+            onchange={handleProtocolChange}
+            onprotocolsloaded={handleProtocolsLoaded}
+          />
+          <button onclick={toggleFullscreen} class="btn btn-ghost btn-sm flex items-center gap-1">
+            {#if isFullscreen}
+              <Minimize size={16} />
+            {:else}
+              <Maximize size={16} />
+            {/if}
+          </button>
+        {/if}
+      </div>
+
+      {#if isHlsSupported(camera)}
+        <!-- Main content: Player + Controls -->
+        <div class="live-layout flex gap-4" style="height: calc(100vh - 180px);">
+          <!-- Left: Player -->
+          <div class="live-player flex-1 min-w-0">
+            <div
+              class="card border th-border overflow-hidden h-full"
+              bind:this={playerContainer}
+            >
+              {#if switchingProtocol}
+                <div class="relative w-full h-full bg-black flex items-center justify-center">
                   <div class="flex items-center gap-2">
                     <div class="w-3 h-3 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
                     <span class="text-white/50 text-xs">{t('live.protocol.switching')}</span>
                   </div>
                 </div>
-              </div>
-            {:else if streamingProtocol === 'wasm'}
-
-              {#if WasmPlayerComponent}
-                {@const WasmPlayer = WasmPlayerComponent}
-                <WasmPlayer
-                  cameraId={camera.id}
-                  cameraName={camera.name || camera.id}
-                  expanded={true}
-                  onFallbackNeeded={handleWasmFallback}
-                />
-                <div class="relative w-full bg-black" style="aspect-ratio: 16/9;">
-                  <div class="absolute inset-0 flex items-center justify-center">
+              {:else if streamingProtocol === 'wasm'}
+                {#if WasmPlayerComponent}
+                  {@const WasmPlayer = WasmPlayerComponent}
+                  <WasmPlayer
+                    cameraId={camera.id}
+                    cameraName={camera.name || camera.id}
+                    expanded={true}
+                    onFallbackNeeded={handleWasmFallback}
+                  />
+                {:else if wasmPlayerLoading}
+                  <div class="relative w-full h-full bg-black flex items-center justify-center">
                     <div class="flex flex-col items-center gap-2">
                       <div class="w-4 h-4 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
                       <span class="text-white/50 text-xs">{t('live.loadingWasmPlayer')}</span>
                     </div>
                   </div>
-                </div>
-              {:else}
-                <div class="relative w-full bg-black" style="aspect-ratio: 16/9;">
-                  <div class="absolute inset-0 flex items-center justify-center">
+                {:else}
+                  <div class="relative w-full h-full bg-black flex items-center justify-center">
                     <div class="flex flex-col items-center gap-2">
                       <AlertCircle size={20} class="text-red-400/60" />
                       <span class="text-white/50 text-xs">{t('live.wasmPlayerLoadError')}</span>
                       <button class="text-xs text-white/40 underline" onclick={loadWasmPlayer}>{t('live.retry') || 'Retry'}</button>
                     </div>
                   </div>
-                </div>
-              {/if}
-
-            {:else if streamingProtocol === 'fmp4'}
-              {#if FMP4PlayerComponent}
-                {@const FMP4Player = FMP4PlayerComponent}
-                <FMP4Player
-                  cameraId={camera.id}
-                  cameraName={camera.name || camera.id}
-                  expanded={true}
-                  onFallbackNeeded={() => handleProtocolChange('hls')}
-                />
-              {:else if fmp4PlayerLoading}
-                <div class="relative w-full bg-black" style="aspect-ratio: 16/9;">
-                  <div class="absolute inset-0 flex items-center justify-center">
+                {/if}
+              {:else if streamingProtocol === 'fmp4'}
+                {#if FMP4PlayerComponent}
+                  {@const FMP4Player = FMP4PlayerComponent}
+                  <FMP4Player
+                    cameraId={camera.id}
+                    cameraName={camera.name || camera.id}
+                    expanded={true}
+                    onFallbackNeeded={() => handleProtocolChange('hls')}
+                  />
+                {:else if fmp4PlayerLoading}
+                  <div class="relative w-full h-full bg-black flex items-center justify-center">
                     <div class="flex flex-col items-center gap-2">
                       <div class="w-4 h-4 border-2 border-white/30 border-t-white/80 rounded-full animate-spin"></div>
                       <span class="text-white/50 text-xs">Loading fMP4 player...</span>
                     </div>
                   </div>
-                </div>
-              {:else}
-                <div class="relative w-full bg-black" style="aspect-ratio: 16/9;">
-                  <div class="absolute inset-0 flex items-center justify-center">
+                {:else}
+                  <div class="relative w-full h-full bg-black flex items-center justify-center">
                     <div class="flex flex-col items-center gap-2">
                       <AlertCircle size={20} class="text-red-400/60" />
                       <span class="text-white/50 text-xs">Failed to load fMP4 player</span>
                       <button class="text-xs text-white/40 underline" onclick={loadFMP4Player}>Retry</button>
                     </div>
                   </div>
+                {/if}
+              {:else if streamingProtocol === 'webrtc'}
+                <WebRTCPlayer
+                  cameraId={camera.id}
+                  cameraName={camera.name || camera.id}
+                  expanded={true}
+                />
+              {:else if streamingProtocol === 'flv' || streamingProtocol === 'ws-flv'}
+                <FlvPlayer
+                  cameraId={camera.id}
+                  cameraName={camera.name || camera.id}
+                  streamUrl={getStreamPlayURL(streamingProtocol)}
+                  protocol={streamingProtocol === 'ws-flv' ? 'ws-flv' : 'flv'}
+                  expanded={true}
+                />
+              {:else}
+                <VideoPlayer
+                  cameraId={camera.id}
+                  cameraName={camera.name || camera.id}
+                  streamUrl={getStreamPlayURL(streamingProtocol)}
+                  cameraProtocol={camera.protocol}
+                  protocol={streamingProtocol}
+                  expanded={true}
+                />
+              {/if}
+            </div>
+          </div>
+
+          <!-- Right: Controls Panel -->
+          {#if showPtz || showTalk}
+            <div class="live-controls w-80 flex-shrink-0 flex flex-col gap-3 overflow-y-auto">
+              <!-- Talk Button (GB28181 only) -->
+              {#if showTalk}
+                <div class="card border th-border p-4">
+                  <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
+                    <Mic size={16} />
+                    {t('live.talk.title') || '语音对讲'}
+                  </h3>
+                  <TalkButton
+                    deviceId={camera.id.split('_')[0] || camera.id}
+                    channelId={camera.id.split('_')[1] || '0'}
+                  />
                 </div>
               {/if}
 
-            {:else if streamingProtocol === 'webrtc'}
-              <WebRTCPlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                expanded={true}
-              />
-            {:else if streamingProtocol === 'flv' || streamingProtocol === 'ws-flv'}
-              <FlvPlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                streamUrl={getStreamPlayURL(streamingProtocol)}
-                protocol={streamingProtocol === 'ws-flv' ? 'ws-flv' : 'flv'}
-                expanded={true}
-              />
-            {:else}
-              <VideoPlayer
-                cameraId={camera.id}
-                cameraName={camera.name || camera.id}
-                streamUrl={getStreamPlayURL(streamingProtocol)}
-                cameraProtocol={camera.protocol}
-                protocol={streamingProtocol}
-                expanded={true}
-              />
-            {/if}
-          </div>
-        {:else}
-          <!-- Unsupported protocol -->
-          <div class="card p-12 text-center">
-            <div class="th-text-muted mb-4 flex justify-center"><AlertCircle size={48} /></div>
-            <h3 class="text-lg font-medium th-text-primary mb-2">{t('live.notSupported')}</h3>
-            <p class="th-text-secondary text-sm mb-4">
-              {t('live.notSupportedDesc')}
-              <span class="font-mono th-text-primary">{camera.protocol}</span>.
-            </p>
-            <button onclick={goBack} class="btn btn-secondary btn-sm">
-              {t('live.backToCameras')}
-            </button>
-          </div>
-        {/if}
-        
-        <!-- PTZ Control: show for ONVIF cameras with PTZ capability (or while caps load) -->
-        {#if isOnvifCamera(camera) && (!deviceCaps || deviceCaps.ptz)}
-          <div class="card">
-            <PtzControl {cameraId} enabled={true} />
-          </div>
-        {/if}
-
-        <!-- ONVIF collapsible panels -->
-        {#if isOnvifCamera(camera) && !capsLoading}
-          <!-- Imaging Panel (collapsible) -->
-          {#if deviceCaps?.imaging}
-            <details class="onvif-collapsible" bind:open={showImaging}>
-              <summary class="onvif-collapsible-summary">
-                <div class="onvif-collapsible-title-row">
-                  {#if showImaging}
-                    <ChevronDown size={16} />
-                  {:else}
-                    <ChevronRight size={16} />
-                  {/if}
-                  <Image size={16} />
-                  <span>{t('onvif.imaging.title')}</span>
+              <!-- PTZ Control -->
+              {#if showPtz}
+                <div class="card border th-border p-4">
+                  <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
+                    <Move size={16} />
+                    {t('live.ptz.title') || '云台控制'}
+                  </h3>
+                  <PtzControl {cameraId} enabled={true} compact={true} />
                 </div>
-              </summary>
-              <div class="onvif-collapsible-body">
-                <ImagingPanel cameraId={camera.id} />
-              </div>
-            </details>
-          {/if}
+              {/if}
 
-          <!-- Preset Manager (collapsible) -->
-          {#if deviceCaps?.ptz}
-            <details class="onvif-collapsible" bind:open={showPresets}>
-              <summary class="onvif-collapsible-summary">
-                <div class="onvif-collapsible-title-row">
-                  {#if showPresets}
-                    <ChevronDown size={16} />
-                  {:else}
-                    <ChevronRight size={16} />
-                  {/if}
-                  <Move size={16} />
-                  <span>{t('onvif.presets.title')}</span>
-                </div>
-              </summary>
-              <div class="onvif-collapsible-body">
-                <PresetManager cameraId={camera.id} />
-              </div>
-            </details>
-          {/if}
+              <!-- ONVIF Panels -->
+              {#if isOnvifCamera(camera) && !capsLoading}
+                <!-- Imaging Panel -->
+                {#if deviceCaps?.imaging}
+                  <details class="onvif-collapsible" open>
+                    <summary class="onvif-collapsible-summary">
+                      <div class="onvif-collapsible-title-row">
+                        <ChevronDown size={14} />
+                        <Image size={14} />
+                        <span>{t('onvif.imaging.title')}</span>
+                      </div>
+                    </summary>
+                    <div class="onvif-collapsible-body">
+                      <ImagingPanel cameraId={camera.id} />
+                    </div>
+                  </details>
+                {/if}
 
-          <!-- ONVIF Events (collapsible) -->
-          {#if deviceCaps?.events}
-            <details class="onvif-collapsible" bind:open={showEvents}>
-              <summary class="onvif-collapsible-summary">
-                <div class="onvif-collapsible-title-row">
-                  {#if showEvents}
-                    <ChevronDown size={16} />
-                  {:else}
-                    <ChevronRight size={16} />
-                  {/if}
-                  <Activity size={16} />
-                  <span>{t('onvif.events.title')}</span>
-                </div>
-              </summary>
-              <div class="onvif-collapsible-body">
-                <ONVIFEvents cameraId={camera.id} maxEvents={50} />
-              </div>
-            </details>
+                <!-- Preset Manager -->
+                {#if deviceCaps?.ptz}
+                  <details class="onvif-collapsible">
+                    <summary class="onvif-collapsible-summary">
+                      <div class="onvif-collapsible-title-row">
+                        <ChevronRight size={14} />
+                        <Move size={14} />
+                        <span>{t('onvif.presets.title')}</span>
+                      </div>
+                    </summary>
+                    <div class="onvif-collapsible-body">
+                      <PresetManager cameraId={camera.id} />
+                    </div>
+                  </details>
+                {/if}
+
+                <!-- ONVIF Events -->
+                {#if deviceCaps?.events}
+                  <details class="onvif-collapsible">
+                    <summary class="onvif-collapsible-summary">
+                      <div class="onvif-collapsible-title-row">
+                        <ChevronRight size={14} />
+                        <Activity size={14} />
+                        <span>{t('onvif.events.title')}</span>
+                      </div>
+                    </summary>
+                    <div class="onvif-collapsible-body">
+                      <ONVIFEvents cameraId={camera.id} maxEvents={50} />
+                    </div>
+                  </details>
+                {/if}
+              {/if}
+            </div>
           {/if}
-        {/if}
-      </div>
+        </div>
+      {:else}
+        <!-- Unsupported protocol -->
+        <div class="card p-12 text-center">
+          <div class="th-text-muted mb-4 flex justify-center"><AlertCircle size={48} /></div>
+          <h3 class="text-lg font-medium th-text-primary mb-2">{t('live.notSupported')}</h3>
+          <p class="th-text-secondary text-sm mb-4">
+            {t('live.notSupportedDesc')}
+            <span class="font-mono th-text-primary">{camera.protocol}</span>.
+          </p>
+          <button onclick={goBack} class="btn btn-secondary btn-sm">
+            {t('live.backToCameras')}
+          </button>
+        </div>
+      {/if}
     {/if}
   </main>
 </div>
@@ -482,9 +482,9 @@
   .onvif-collapsible-summary {
     display: flex;
     align-items: center;
-    padding: 0.75rem 1rem;
+    padding: 0.625rem 0.75rem;
     cursor: pointer;
-    font-size: 0.8125rem;
+    font-size: 0.75rem;
     font-weight: 600;
     color: var(--text-primary);
     background-color: var(--bg-secondary);
@@ -504,11 +504,50 @@
   .onvif-collapsible-title-row {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.375rem;
     color: var(--text-secondary);
   }
 
   .onvif-collapsible-body {
-    padding: 0.75rem;
+    padding: 0.625rem;
+  }
+
+  /* Responsive layout */
+  .live-layout {
+    display: flex;
+    gap: 1rem;
+  }
+
+  .live-player {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .live-controls {
+    width: 320px;
+    flex-shrink: 0;
+  }
+
+  /* Tablet: narrower controls */
+  @media (min-width: 768px) and (max-width: 1023px) {
+    .live-controls {
+      width: 256px;
+    }
+  }
+
+  /* Mobile: stack layout */
+  @media (max-width: 767px) {
+    .live-layout {
+      flex-direction: column;
+      height: auto !important;
+    }
+    
+    .live-player {
+      min-height: 50vh;
+    }
+    
+    .live-controls {
+      width: 100%;
+    }
   }
 </style>

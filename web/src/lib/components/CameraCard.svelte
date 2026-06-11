@@ -3,7 +3,7 @@
   import { normalizeProtocol, enableCamera, disableCamera, getSnapshotUrl } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
-  import { Pencil, Play, Pause, Square, RotateCw, Eye, MoreVertical, Archive, Trash2, Image } from 'lucide-svelte';
+  import { Pencil, Play, Pause, Square, RotateCw, Eye, MoreVertical, Archive, Trash2, Image, Bell } from 'lucide-svelte';
 
   interface Props {
     camera: Camera;
@@ -220,6 +220,36 @@
         {/if}
       </div>
       <p class="text-xs th-text-tertiary truncate font-mono" title={camera.url}>{camera.url}</p>
+      
+      <!-- Device Info -->
+      {#if camera.brand || camera.model || camera.serial_number || camera.location || camera.description}
+        <div class="mt-2 pt-2 border-t th-border space-y-1">
+          {#if camera.brand || camera.model}
+            <div class="flex items-center gap-1.5 text-xs th-text-tertiary">
+              <span class="font-medium">设备:</span>
+              <span>{[camera.brand, camera.model].filter(Boolean).join(' ')}</span>
+            </div>
+          {/if}
+          {#if camera.serial_number}
+            <div class="flex items-center gap-1.5 text-xs th-text-tertiary">
+              <span class="font-medium">序列号:</span>
+              <span class="font-mono">{camera.serial_number}</span>
+            </div>
+          {/if}
+          {#if camera.location}
+            <div class="flex items-center gap-1.5 text-xs th-text-tertiary">
+              <span class="font-medium">位置:</span>
+              <span>{camera.location}</span>
+            </div>
+          {/if}
+          {#if camera.description}
+            <div class="flex items-center gap-1.5 text-xs th-text-tertiary">
+              <span class="font-medium">描述:</span>
+              <span class="truncate">{camera.description}</span>
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     <!-- Bottom: Action bar -->
@@ -317,6 +347,14 @@
                   {t('cameras.live')}
                 </a>
               {/if}
+              <a href="#/events?camera_id={encodeURIComponent(camera.id)}" class="dropdown-item" onclick={closeMenu}>
+                <Bell size={14} />
+                {t('cameras.events') || '查看事件'}
+              </a>
+              <a href="#/recordings?camera_id={encodeURIComponent(camera.id)}" class="dropdown-item" onclick={closeMenu}>
+                <Image size={14} />
+                {t('cameras.recordings') || '查看录像'}
+              </a>
               <button class="dropdown-item" onclick={() => { closeMenu(); onedit(camera); }}>
                 <Pencil size={14} />
                 {t('cameras.edit')}

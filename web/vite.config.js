@@ -14,6 +14,7 @@ export default defineConfig({
     conditions: ['browser'],
   },
   build: {
+    chunkSizeWarningLimit: 800, // Increase warning limit to 800 kB
     rollupOptions: {
       output: {
         manualChunks(id) {

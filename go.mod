@@ -17,12 +17,14 @@ require (
 	github.com/panjjo/gosdp v0.0.0-20201029020038-56e3a0ec56ef
 	github.com/pion/rtp v1.10.1
 	github.com/prometheus/client_golang v1.23.2
+	github.com/q191201771/lal v0.37.4
 	github.com/q191201771/lalmax v0.0.0
 	github.com/shirou/gopsutil/v4 v4.26.5
 	github.com/spf13/afero v1.15.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.50.0
 	golang.org/x/net v0.53.0
+	golang.org/x/text v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.50.0
 )
@@ -88,7 +90,6 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
-	github.com/q191201771/lal v0.37.4 // indirect
 	github.com/q191201771/naza v0.30.48 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/satori/go.uuid v1.2.1-0.20181028125025-b2ce2384e17b // indirect
@@ -104,9 +105,8 @@ require (
 	golang.org/x/arch v0.3.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
-	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
+	google.golang.org/protobuf v1.36.8 // indirect
 	modernc.org/libc v1.72.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

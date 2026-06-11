@@ -916,7 +916,7 @@ function getAffectedCameraCount(protocol: string): number {
   }
 </script>
 
-<div class="min-h-screen th-bg-primary pt-[68px]">
+<div class="min-h-screen th-bg-primary ">
   <!-- Main content -->
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="mb-6">

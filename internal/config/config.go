@@ -39,7 +39,15 @@ type Config struct {
 	WebSocket     WebSocketConfig     `yaml:"websocket"`
 	AI            AIConfig            `yaml:"ai"`
 	MetricsAuth   MetricsAuthConfig   `yaml:"metrics_auth"`
+	Snapshot      SnapshotConfig      `yaml:"snapshot"`
 	Version       string              `yaml:"version"`
+}
+
+type SnapshotConfig struct {
+	Enabled  bool   `yaml:"enabled" json:"enabled"`   // Enable periodic snapshots
+	Interval string `yaml:"interval" json:"interval"` // Snapshot interval, default "5m", min "1m"
+	Quality  int    `yaml:"quality" json:"quality"`    // JPEG quality 1-100, default 80
+	MaxAge   string `yaml:"max_age" json:"max_age"`   // Max age before cleanup, default "24h"
 }
 
 type ServerConfig struct {
@@ -307,12 +315,13 @@ type RTMPConfig struct {
 
 // GB28181Config configures the GB28181 SIP signaling server.
 type GB28181Config struct {
-	Enabled  *bool  `yaml:"enabled"`
-	Host     string `yaml:"host"`      // SIP listen host (empty = auto-detect from media_ip)
-	Port     int    `yaml:"port"`      // SIP listen port (default 5060)
-	ID       string `yaml:"id"`        // 20-digit platform SIP ID
-	Password string `yaml:"password"`  // Global device registration password
-	MediaIP  string `yaml:"media_ip"`  // IP address for SDP media reception
+	Enabled   *bool  `yaml:"enabled"`
+	Host      string `yaml:"host"`       // SIP listen host (empty = auto-detect from media_ip)
+	Port      int    `yaml:"port"`       // SIP listen port (default 5060)
+	ID        string `yaml:"id"`         // 20-digit platform SIP ID
+	Password  string `yaml:"password"`   // Global device registration password
+	MediaIP   string `yaml:"media_ip"`   // IP address for SDP media reception
+	MediaPort int    `yaml:"media_port"` // RTP media port (0=auto/multi-port, >0=single port mode)
 }
 
 // HealthConfig configures the camera health monitoring system.
@@ -1045,6 +1054,12 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.GB28181.Port == 0 {
 		cfg.GB28181.Port = 5060
+	}
+	if cfg.GB28181.ID == "" {
+		cfg.GB28181.ID = "34020000002000000001"
+	}
+	if cfg.GB28181.Password == "" {
+		cfg.GB28181.Password = "12345678"
 	}
 
 	// Health defaults

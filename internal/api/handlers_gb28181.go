@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/gb28181"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
@@ -34,6 +35,12 @@ func NewGB28181Handler(svr *gb28181.Server, camMgr *camera.CameraManager, db *st
 
 // ListDevices returns all registered GB28181 devices.
 func (h *GB28181Handler) ListDevices(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"devices": []interface{}{},
+		})
+		return
+	}
 	devices := h.svr.ListDevices()
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"devices": devices,
@@ -49,6 +56,10 @@ type PlayRequest struct {
 
 // Play starts a GB28181 play session.
 func (h *GB28181Handler) Play(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
 	var req PlayRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -147,6 +158,10 @@ type StopPlayRequest struct {
 
 // StopPlay stops a GB28181 play session.
 func (h *GB28181Handler) StopPlay(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
 	var req StopPlayRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -179,6 +194,10 @@ type PTZRequest struct {
 
 // PTZControl sends a PTZ control command.
 func (h *GB28181Handler) PTZControl(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
 	var req PTZRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -223,6 +242,10 @@ type RecordInfoRequest struct {
 
 // RecordInfo queries a device for its recording list.
 func (h *GB28181Handler) RecordInfo(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
 	var req RecordInfoRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -271,6 +294,10 @@ type PlaybackRequest struct {
 
 // Playback starts a historical video playback session.
 func (h *GB28181Handler) Playback(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
 	var req PlaybackRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -322,4 +349,453 @@ func (h *GB28181Handler) Playback(w http.ResponseWriter, r *http.Request) {
 		"ssrc":      ssrc,
 		"stream_id": streamID,
 	})
+}
+
+// ==================== Platform API ====================
+
+// ListPlatforms returns all upstream platforms.
+func (h *GB28181Handler) ListPlatforms(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"platforms": []interface{}{}})
+		return
+	}
+	pm := h.svr.GetPlatforms()
+	if pm == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"platforms": []interface{}{}})
+		return
+	}
+
+	platforms := pm.ListPlatforms()
+	result := make([]map[string]interface{}, 0, len(platforms))
+	for _, p := range platforms {
+		result = append(result, map[string]interface{}{
+			"id":               p.Config.ID,
+			"name":             p.Config.Name,
+			"enable":           p.Config.Enable,
+			"server_gb_id":     p.Config.ServerGBID,
+			"server_ip":        p.Config.ServerIP,
+			"server_port":      p.Config.ServerPort,
+			"device_gb_id":     p.Config.DeviceGBID,
+			"device_ip":        p.Config.DeviceIP,
+			"device_port":      p.Config.DevicePort,
+			"transport":        p.Config.Transport,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"platforms": result})
+}
+
+// AddPlatformRequest is the request body for adding a platform.
+type AddPlatformRequest struct {
+	Name            string `json:"name"`
+	Enable          bool   `json:"enable"`
+	ServerGBID      string `json:"server_gb_id"`
+	ServerGBDomain  string `json:"server_gb_domain"`
+	ServerIP        string `json:"server_ip"`
+	ServerPort      int    `json:"server_port"`
+	DeviceGBID      string `json:"device_gb_id"`
+	DeviceGBDomain  string `json:"device_gb_domain"`
+	DeviceIP        string `json:"device_ip"`
+	DevicePort      int    `json:"device_port"`
+	Username        string `json:"username"`
+	Password        string `json:"password"`
+	Transport       string `json:"transport"`
+	CharacterSet    string `json:"character_set"`
+	Expires         int    `json:"expires"`
+	KeepTimeout     int    `json:"keep_timeout"`
+	MaxTimeoutCount int    `json:"max_timeout_count"`
+}
+
+// AddPlatform adds a new upstream platform.
+func (h *GB28181Handler) AddPlatform(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
+	var req AddPlatformRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.ServerGBID == "" || req.ServerIP == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "server_gb_id and server_ip are required"})
+		return
+	}
+
+	if req.DeviceGBID == "" {
+		req.DeviceGBID = h.svr.GetConfig().ID
+	}
+	if req.DeviceIP == "" {
+		req.DeviceIP = h.svr.GetConfig().MediaIP
+	}
+	if req.DevicePort == 0 {
+		req.DevicePort = h.svr.GetConfig().Port
+	}
+	if req.Expires == 0 {
+		req.Expires = 3600
+	}
+	if req.KeepTimeout == 0 {
+		req.KeepTimeout = 60
+	}
+	if req.MaxTimeoutCount == 0 {
+		req.MaxTimeoutCount = 3
+	}
+	if req.Transport == "" {
+		req.Transport = "UDP"
+	}
+
+	pm := h.svr.GetPlatforms()
+	if pm == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "platform manager not initialized"})
+		return
+	}
+
+	cfg := &gb28181.PlatformConfig{
+		Name:            req.Name,
+		Enable:          req.Enable,
+		ServerGBID:      req.ServerGBID,
+		ServerGBDomain:  req.ServerGBDomain,
+		ServerIP:        req.ServerIP,
+		ServerPort:      req.ServerPort,
+		DeviceGBID:      req.DeviceGBID,
+		DeviceGBDomain:  req.DeviceGBDomain,
+		DeviceIP:        req.DeviceIP,
+		DevicePort:      req.DevicePort,
+		Username:        req.Username,
+		Password:        req.Password,
+		Transport:       req.Transport,
+		CharacterSet:    req.CharacterSet,
+		Expires:         req.Expires,
+		KeepTimeout:     req.KeepTimeout,
+		MaxTimeoutCount: req.MaxTimeoutCount,
+	}
+
+	if err := pm.AddPlatform(cfg); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"id": cfg.ID, "status": "ok"})
+}
+
+// DeletePlatform deletes an upstream platform.
+func (h *GB28181Handler) DeletePlatform(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
+	idStr := r.URL.Query().Get("id")
+	var id int64
+	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		return
+	}
+
+	pm := h.svr.GetPlatforms()
+	if pm == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "platform manager not initialized"})
+		return
+	}
+
+	if err := pm.RemovePlatform(id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ==================== Broadcast API ====================
+
+// StartBroadcast starts a voice broadcast to a device channel.
+func (h *GB28181Handler) StartBroadcast(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
+	var req struct {
+		DeviceID  string `json:"device_id"`
+		ChannelID string `json:"channel_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	bm := h.svr.GetBroadcastManager()
+	if bm == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "broadcast manager not initialized"})
+		return
+	}
+
+	bs, err := bm.StartBroadcast(req.DeviceID, req.ChannelID, h.svr.GetDeviceStore())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"session_id": bs.DeviceID + "_" + bs.ChannelID,
+		"port":       bs.RTPPort,
+		"ssrc":       bs.SSRC,
+	})
+}
+
+// StopBroadcast stops a voice broadcast.
+func (h *GB28181Handler) StopBroadcast(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
+	var req struct {
+		DeviceID  string `json:"device_id"`
+		ChannelID string `json:"channel_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	bm := h.svr.GetBroadcastManager()
+	if bm == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "broadcast manager not initialized"})
+		return
+	}
+
+	if err := bm.StopBroadcast(req.DeviceID, req.ChannelID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ==================== Alarm API ====================
+
+// ListAlarms returns alarm records.
+func (h *GB28181Handler) ListAlarms(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"alarms": []interface{}{},
+			"total":  0,
+		})
+		return
+	}
+	deviceID := r.URL.Query().Get("device_id")
+	limit := 50
+	offset := 0
+	fmt.Sscanf(r.URL.Query().Get("limit"), "%d", &limit)
+	fmt.Sscanf(r.URL.Query().Get("offset"), "%d", &offset)
+
+	alarms, total, err := h.db.ListAlarms(r.Context(), deviceID, limit, offset)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if alarms == nil {
+		alarms = []storage.AlarmRow{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"alarms": alarms,
+		"total":  total,
+	})
+}
+
+// ==================== Download API ====================
+
+// StartDownload starts a recording download from a device.
+func (h *GB28181Handler) StartDownload(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
+	var req struct {
+		DeviceID  string `json:"device_id"`
+		ChannelID string `json:"channel_id"`
+		StartTime string `json:"start_time"`
+		EndTime   string `json:"end_time"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	startTime, err := time.Parse(time.RFC3339, req.StartTime)
+	if err != nil {
+		startTime, err = time.Parse("2006-01-02T15:04:05", req.StartTime)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid start_time format"})
+			return
+		}
+	}
+	endTime, err := time.Parse(time.RFC3339, req.EndTime)
+	if err != nil {
+		endTime, err = time.Parse("2006-01-02T15:04:05", req.EndTime)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid end_time format"})
+			return
+		}
+	}
+
+	dm := h.svr.GetDownloadManager()
+	if dm == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "download manager not initialized"})
+		return
+	}
+
+	ds, err := dm.StartDownload(req.DeviceID, req.ChannelID, startTime, endTime, h.svr.GetDeviceStore())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"download_id": ds.ID,
+		"file_path":   ds.FilePath,
+		"status":      ds.Status,
+	})
+}
+
+// StopDownload stops a recording download.
+func (h *GB28181Handler) StopDownload(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
+	var req struct {
+		DeviceID   string `json:"device_id"`
+		ChannelID  string `json:"channel_id"`
+		DownloadID int64  `json:"download_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	dm := h.svr.GetDownloadManager()
+	if dm == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "download manager not initialized"})
+		return
+	}
+
+	if err := dm.StopDownload(req.DeviceID, req.ChannelID, req.DownloadID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ListDownloads returns download records.
+func (h *GB28181Handler) ListDownloads(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"downloads": []interface{}{},
+			"total":     0,
+		})
+		return
+	}
+	deviceID := r.URL.Query().Get("device_id")
+	channelID := r.URL.Query().Get("channel_id")
+	limit := 50
+	offset := 0
+	fmt.Sscanf(r.URL.Query().Get("limit"), "%d", &limit)
+	fmt.Sscanf(r.URL.Query().Get("offset"), "%d", &offset)
+
+	downloads, total, err := h.db.ListDownloads(r.Context(), deviceID, channelID, limit, offset)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if downloads == nil {
+		downloads = []storage.DownloadRecordRow{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"downloads": downloads,
+		"total":     total,
+	})
+}
+
+// ==================== Talk WebSocket API ====================
+
+// handleTalkWS handles WebSocket connections for voice talk/intercom.
+func (h *GB28181Handler) HandleTalkWS(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
+
+	deviceID := r.URL.Query().Get("device_id")
+	channelID := r.URL.Query().Get("channel_id")
+	if deviceID == "" || channelID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		return
+	}
+
+	// Get broadcast manager
+	bm := h.svr.GetBroadcastManager()
+	if bm == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "broadcast manager not initialized"})
+		return
+	}
+
+	// Check if session already exists
+	bs, exists := bm.GetSession(deviceID, channelID)
+	if !exists {
+		// Start new broadcast session
+		var err error
+		bs, err = bm.StartBroadcast(deviceID, channelID, h.svr.GetDeviceStore())
+		if err != nil {
+			slog.Error("Failed to start broadcast", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	// Upgrade to WebSocket
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true // Allow all origins for now
+		},
+	}
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		slog.Error("WebSocket upgrade failed", "error", err)
+		return
+	}
+	defer conn.Close()
+
+	slog.Info("Talk WebSocket connected", "device_id", deviceID, "channel_id", channelID)
+
+	// Wait for broadcast session to be ready
+	select {
+	case <-bs.ReadyCh:
+		// Session is ready
+	case <-time.After(30 * time.Second):
+		slog.Error("Talk session timeout", "device_id", deviceID)
+		conn.WriteMessage(websocket.TextMessage, []byte(`{"error":"session timeout"}`))
+		return
+	}
+
+	// Read audio data from WebSocket and send to broadcast session
+	for {
+		messageType, message, err := conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+				slog.Error("WebSocket read error", "error", err)
+			}
+			break
+		}
+
+		if messageType == websocket.BinaryMessage {
+			if err := bs.SendAudioData(message); err != nil {
+				slog.Error("Failed to send audio data", "error", err)
+			}
+		}
+	}
+
+	slog.Info("Talk WebSocket disconnected", "device_id", deviceID, "channel_id", channelID)
 }

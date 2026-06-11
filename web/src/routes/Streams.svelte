@@ -156,7 +156,7 @@
   {/if}
 {/snippet}
 
-<div class="min-h-screen th-bg-primary pt-[68px]">
+<div class="min-h-screen th-bg-primary ">
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 gap-3">
       <div>

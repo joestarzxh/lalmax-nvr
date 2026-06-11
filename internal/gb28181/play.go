@@ -98,22 +98,23 @@ func (g *GB28181API) Play(in *PlayInput) (string, error) {
 		protocol = "tcp"
 	}
 
-	rtpSession, err := g.mediaEngine.StartRTPReceive(context.Background(), media.StartRTPReceiveRequest{
+	rtpReq := media.StartRTPReceiveRequest{
 		StreamID: in.InternalID,
 		AppName:  "rtp",
 		Protocol: protocol,
 		Timeout:  10 * time.Second,
-	})
+	}
+	// Single port mode: use configured port
+	if g.cfg.MediaPort > 0 {
+		rtpReq.Port = g.cfg.MediaPort
+	}
+
+	rtpSession, err := g.mediaEngine.StartRTPReceive(context.Background(), rtpReq)
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "-300") {
 			log.Info("RTP stream already exists, retrying")
 			time.Sleep(500 * time.Millisecond)
-			rtpSession, err = g.mediaEngine.StartRTPReceive(context.Background(), media.StartRTPReceiveRequest{
-				StreamID: in.InternalID,
-				AppName:  "rtp",
-				Protocol: protocol,
-				Timeout:  10 * time.Second,
-			})
+			rtpSession, err = g.mediaEngine.StartRTPReceive(context.Background(), rtpReq)
 			if err != nil {
 				return "", fmt.Errorf("open RTP server failed: %w", err)
 			}
@@ -175,21 +176,22 @@ func (g *GB28181API) Playback(in *PlaybackInput) (string, error) {
 		protocol = "tcp"
 	}
 
-	rtpSession, err := g.mediaEngine.StartRTPReceive(context.Background(), media.StartRTPReceiveRequest{
+	playbackReq := media.StartRTPReceiveRequest{
 		StreamID: in.InternalID,
 		AppName:  "rtp",
 		Protocol: protocol,
 		Timeout:  10 * time.Second,
-	})
+	}
+	// Single port mode: use configured port
+	if g.cfg.MediaPort > 0 {
+		playbackReq.Port = g.cfg.MediaPort
+	}
+
+	rtpSession, err := g.mediaEngine.StartRTPReceive(context.Background(), playbackReq)
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "-300") {
 			time.Sleep(500 * time.Millisecond)
-			rtpSession, err = g.mediaEngine.StartRTPReceive(context.Background(), media.StartRTPReceiveRequest{
-				StreamID: in.InternalID,
-				AppName:  "rtp",
-				Protocol: protocol,
-				Timeout:  10 * time.Second,
-			})
+			rtpSession, err = g.mediaEngine.StartRTPReceive(context.Background(), playbackReq)
 			if err != nil {
 				return "", fmt.Errorf("open RTP server failed: %w", err)
 			}

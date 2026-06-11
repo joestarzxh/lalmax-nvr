@@ -16,7 +16,7 @@ vi.mock('$lib/api', async (importOriginal) => {
 
 // Mock lucide-svelte icons
 vi.mock('lucide-svelte', () => {
-  const icons = ['Pencil', 'Play', 'Square', 'RotateCw', 'Eye', 'MoreVertical', 'Archive', 'Trash2'];
+  const icons = ['Pencil', 'Play', 'Pause', 'Square', 'RotateCw', 'Eye', 'MoreVertical', 'Archive', 'Trash2', 'Image'];
   const mock: Record<string, () => HTMLElement> = {};
   for (const name of icons) {
     mock[name] = () => document.createElement('span');

@@ -9,7 +9,6 @@
   import Events from './routes/Events.svelte';
   import Stats from './routes/Stats.svelte';
   import Settings from './routes/Settings.svelte';
-  import Cameras from './routes/Cameras.svelte';
   import LiveView from './routes/LiveView.svelte';
   import Dashboard from './routes/Dashboard.svelte';
   import Setup from './routes/Setup.svelte';
@@ -17,9 +16,15 @@
   import StreamDetail from './routes/StreamDetail.svelte';
 
   import TranscodingHistory from './routes/TranscodingHistory.svelte';
-  import Surveillance from './routes/Surveillance.svelte';
   import Devices from './routes/Devices.svelte';
   import Status from './routes/Status.svelte';
+  import GB28181Platforms from './routes/GB28181Platforms.svelte';
+  import GB28181Alarms from './routes/GB28181Alarms.svelte';
+  import GB28181Downloads from './routes/GB28181Downloads.svelte';
+  import GB28181 from './routes/GB28181.svelte';
+  import DeviceGroups from './routes/DeviceGroups.svelte';
+  import RecordingPlans from './routes/RecordingPlans.svelte';
+  import Users from './routes/Users.svelte';
   import Header from './components/Header';
 
   // Network status
@@ -91,21 +96,18 @@
     }
 
     if (segments[0] === 'cameras') {
-      if (segments[1]) {
-        return { route: 'cameras-detail', params: { id: segments[1] } };
-      }
-      return { route: 'cameras', params: {} };
+      return { route: 'devices', params: {} };
     }
 
     if (segments[0] === 'live') {
       if (segments[1]) {
         return { route: 'live', params: { id: segments[1] } };
       }
-      return { route: 'cameras', params: {} };
+      return { route: 'devices', params: {} };
     }
 
     if (segments[0] === 'surveillance') {
-      return { route: 'surveillance', params: {} };
+      return { route: 'dashboard', params: {} };
     }
 
     if (segments[0] === 'devices') {
@@ -144,6 +146,22 @@
     if (segments[0] === 'dashboard') {
       const tab = segments[1] === 'health' ? 'health' : 'dashboard';
       return { route: 'dashboard', params: { tab } };
+    }
+
+    if (segments[0] === 'gb28181-platforms' || segments[0] === 'gb28181-alarms' || segments[0] === 'gb28181-downloads' || segments[0] === 'gb28181') {
+      return { route: 'gb28181', params: {} };
+    }
+
+    if (segments[0] === 'device-groups') {
+      return { route: 'device-groups', params: {} };
+    }
+
+    if (segments[0] === 'recording-plans') {
+      return { route: 'recording-plans', params: {} };
+    }
+
+    if (segments[0] === 'users') {
+      return { route: 'users', params: {} };
     }
 
     // Default to login for unknown routes
@@ -225,40 +243,57 @@
     <Setup />
   {:else}
     <Header showBack={currentRoute === 'recording-detail' || currentRoute === 'live' || currentRoute === 'stream-detail'} />
-    {#if currentRoute === 'recordings'}
-      <Recordings />
-    {:else if currentRoute === 'recording-detail'}
-      <RecordingDetail recordingId={params.id} />
-    {:else if currentRoute === 'events'}
-      <Events />
-    {:else if currentRoute === 'cameras'}
-      <Cameras />
-    {:else if currentRoute === 'cameras-detail'}
-      <Cameras />
-    {:else if currentRoute === 'live'}
-      <LiveView cameraId={params.id} />
-    {:else if currentRoute === 'surveillance'}
-      <Surveillance />
-    {:else if currentRoute === 'devices'}
-      <Devices />
-    {:else if currentRoute === 'status'}
-      <Status initialTab={params.tab || 'health'} />
-    {:else if currentRoute === 'streams'}
-      <Streams />
-    {:else if currentRoute === 'stream-detail'}
-      <StreamDetail streamId={params.id} />
-    {:else if currentRoute === 'stats'}
-      <Stats />
-    {:else if currentRoute === 'settings'}
-      <Settings />
-    {:else if currentRoute === 'dashboard'}
-      <Dashboard initialTab={params.tab || 'dashboard'} />
-    {:else if currentRoute === 'transcoding-history'}
-      <TranscodingHistory />
-    {/if}
+    <main class="main-content">
+      {#if currentRoute === 'recordings'}
+        <Recordings />
+      {:else if currentRoute === 'recording-detail'}
+        <RecordingDetail recordingId={params.id} />
+      {:else if currentRoute === 'events'}
+        <Events />
+      {:else if currentRoute === 'live'}
+        <LiveView cameraId={params.id} />
+      {:else if currentRoute === 'devices'}
+        <Devices />
+      {:else if currentRoute === 'status'}
+        <Status initialTab={params.tab || 'health'} />
+      {:else if currentRoute === 'streams'}
+        <Streams />
+      {:else if currentRoute === 'stream-detail'}
+        <StreamDetail streamId={params.id} />
+      {:else if currentRoute === 'stats'}
+        <Stats />
+      {:else if currentRoute === 'settings'}
+        <Settings />
+      {:else if currentRoute === 'dashboard'}
+        <Dashboard initialTab={params.tab || 'dashboard'} />
+      {:else if currentRoute === 'transcoding-history'}
+        <TranscodingHistory />
+      {:else if currentRoute === 'gb28181'}
+        <GB28181 />
+      {:else if currentRoute === 'device-groups'}
+        <DeviceGroups />
+      {:else if currentRoute === 'recording-plans'}
+        <RecordingPlans />
+      {:else if currentRoute === 'users'}
+        <Users />
+      {/if}
+    </main>
   {/if}
 
 <style>
+  .main-content {
+    margin-left: 240px;
+    margin-top: 56px;
+    min-height: calc(100vh - 56px);
+    transition: margin-left var(--duration-normal) var(--ease-out);
+  }
+
+  @media (max-width: 767px) {
+    .main-content {
+      margin-left: 0;
+    }
+  }
+
   .offline-banner {
     position: fixed;
     top: 0;

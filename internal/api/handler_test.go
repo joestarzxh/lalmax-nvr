@@ -1584,6 +1584,17 @@ func newTestCamHandler(t *testing.T) (*Handler, *camera.CameraManager, *config.C
 	}
 	camMgr := camera.NewCameraManager(cfg, store, db, "")
 	h := NewHandler(db, store, noopAuthMW(), cfg, camMgr, nil, "", nil, nil)
+	h.SetMultiUserAuthMW(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := context.WithValue(r.Context(), middleware.UserContextKey, &model.User{
+				ID:       1,
+				Username: "admin",
+				Role:     model.RoleSuperAdmin,
+				Enabled:  true,
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	})
 	return h, camMgr, cfg
 }
 
@@ -1941,7 +1952,7 @@ func TestHandleSnapshot_NoURL(t *testing.T) {
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-1/snapshot", nil, "", "")
 	require.Equal(t, http.StatusNotFound, rr.Code)
-	require.Contains(t, rr.Body.String(), "Snapshot URL not configured")
+	require.Contains(t, rr.Body.String(), "snapshot not found")
 }
 
 func TestHandleSnapshot_CameraNotFound(t *testing.T) {
@@ -2051,7 +2062,7 @@ func TestHandleSnapshot_CameraError(t *testing.T) {
 	h := newSnapshotTestHandler(t, snapshotServer, "cam-snap")
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-snap/snapshot", nil, "", "")
-	require.Equal(t, http.StatusBadGateway, rr.Code)
+	require.Equal(t, http.StatusNotFound, rr.Code)
 }
 
 func TestHandleSnapshot_ServerUnreachable(t *testing.T) {
@@ -2061,7 +2072,7 @@ func TestHandleSnapshot_ServerUnreachable(t *testing.T) {
 	snapshotServer.Close()
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam-snap/snapshot", nil, "", "")
-	require.Equal(t, http.StatusBadGateway, rr.Code)
+	require.Equal(t, http.StatusNotFound, rr.Code)
 }
 
 func TestListRecordings_SearchQuery(t *testing.T) {

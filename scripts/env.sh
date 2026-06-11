@@ -9,8 +9,9 @@ BIN_DIR="${BIN_DIR:-${ROOT_DIR}/bin}"
 RUN_DIR="${RUN_DIR:-${ROOT_DIR}/run}"
 LOG_DIR="${LOG_DIR:-${ROOT_DIR}/logs}"
 DATA_DIR="${DATA_DIR:-${ROOT_DIR}/data}"
-GOCACHE="${GOCACHE:-/private/tmp/lalmax-nvr-gocache}"
-GOMODCACHE="${GOMODCACHE:-/private/tmp/lalmax-nvr-gomodcache}"
+# Use default Go cache directories if not specified
+# GOCACHE="${GOCACHE:-/private/tmp/lalmax-nvr-gocache}"
+# GOMODCACHE="${GOMODCACHE:-/private/tmp/lalmax-nvr-gomodcache}"
 CGO_ENABLED="${CGO_ENABLED:-0}"
 
 BIN_PATH="${BIN_PATH:-${BIN_DIR}/${APP_NAME}}"
@@ -19,7 +20,7 @@ LOG_FILE="${LOG_FILE:-${LOG_DIR}/${APP_NAME}.log}"
 CONFIG_FILE="${CONFIG_FILE:-${ROOT_DIR}/config/lalmax-nvr.yaml}"
 DEFAULT_CONFIG_FILE="${ROOT_DIR}/config/config.example.yaml"
 
-mkdir -p "${BIN_DIR}" "${RUN_DIR}" "${LOG_DIR}" "${DATA_DIR}" "${GOCACHE}" "${GOMODCACHE}" "$(dirname "${CONFIG_FILE}")"
+mkdir -p "${BIN_DIR}" "${RUN_DIR}" "${LOG_DIR}" "${DATA_DIR}" "$(dirname "${CONFIG_FILE}")"
 
 ensure_log_file() {
   mkdir -p "$(dirname "${LOG_FILE}")"

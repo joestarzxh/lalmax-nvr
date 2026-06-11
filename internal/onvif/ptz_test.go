@@ -153,7 +153,7 @@ func TestPTZController_ContinuousMove_Success(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	err := ctrl.ContinuousMove(context.Background(), PTZVector{Pan: 0.5, Tilt: 0.0, Zoom: 0.0})
 	require.NoError(t, err)
 }
@@ -165,7 +165,7 @@ func TestPTZController_AbsoluteMove_Success(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	err := ctrl.AbsoluteMove(context.Background(), PTZVector{Pan: 0.0, Tilt: 0.5, Zoom: 1.0})
 	require.NoError(t, err)
 }
@@ -177,7 +177,7 @@ func TestPTZController_RelativeMove_Success(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	err := ctrl.RelativeMove(context.Background(), PTZVector{Pan: -0.1, Tilt: 0.2, Zoom: 0.0})
 	require.NoError(t, err)
 }
@@ -189,7 +189,7 @@ func TestPTZController_Stop_Success(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	err := ctrl.Stop(context.Background(), true, true)
 	require.NoError(t, err)
 }
@@ -201,7 +201,7 @@ func TestPTZController_GetStatus_Success(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	pos, moving, err := ctrl.GetStatus(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, PTZVector{Pan: 0.5, Tilt: 0.3, Zoom: 1.0}, pos)
@@ -215,7 +215,7 @@ func TestPTZController_GetStatus_Moving(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	pos, moving, err := ctrl.GetStatus(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, PTZVector{Pan: 0.7, Tilt: -0.2, Zoom: 2.0}, pos)
@@ -236,7 +236,7 @@ func TestPTZController_ConcurrentCommands(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 20)
@@ -278,7 +278,7 @@ server := newPTZTestServer(t, func(action string, w http.ResponseWriter) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	err := ctrl.ContinuousMove(context.Background(), PTZVector{Pan: 0.5})
 	require.Error(t, err)
 require.Contains(t, err.Error(), "ContinuousMove failed")
@@ -296,7 +296,7 @@ func TestPTZController_GetPresets_Success(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	presets, err := ctrl.GetPresets(context.Background())
 	require.NoError(t, err)
 	require.Len(t, presets, 2)
@@ -313,7 +313,7 @@ func TestPTZController_GetPresets_Empty(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	presets, err := ctrl.GetPresets(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, presets)
@@ -326,7 +326,7 @@ func TestPTZController_SetPreset_Success(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	token, err := ctrl.SetPreset(context.Background(), "Front Door")
 	require.NoError(t, err)
 	require.Equal(t, "preset-token-3", token)
@@ -339,7 +339,7 @@ func TestPTZController_GoToPreset_Success(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	err := ctrl.GoToPreset(context.Background(), "1")
 	require.NoError(t, err)
 }
@@ -364,7 +364,7 @@ func TestPTZController_GoToPreset_FallbackAbsoluteMove(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	err := ctrl.GoToPreset(context.Background(), "2")
 	require.NoError(t, err)
 	require.Equal(t, []string{"GotoPreset", "GetPresets", "AbsoluteMove"}, calls)
@@ -377,7 +377,7 @@ func TestPTZController_RemovePreset_Success(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	err := ctrl.RemovePreset(context.Background(), "1")
 	require.NoError(t, err)
 }
@@ -389,7 +389,7 @@ func TestPTZController_GetPresets_Error(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	_, err := ctrl.GetPresets(context.Background())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "get PTZ presets failed")
@@ -402,7 +402,7 @@ func TestPTZController_SetPreset_Error(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	_, err := ctrl.SetPreset(context.Background(), "Bad")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "set PTZ preset failed")
@@ -433,7 +433,7 @@ func TestSerializedPTZController_SerializesConcurrentCalls(t *testing.T) {
 	defer server.Close()
 
 	var deviceMu sync.Mutex
-	ctrl := newSerializedPTZController(&deviceMu, newTestOnvifClient(t, server), "profile1")
+	ctrl := newSerializedPTZController(&deviceMu, newTestOnvifClient(t, server), "profile1", nil)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 6; i++ {
@@ -462,7 +462,7 @@ func TestSetProfileToken(t *testing.T) {
 	})
 	defer server.Close()
 
-	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1")
+	ctrl := NewPTZController(newTestOnvifClient(t, server), "profile1", nil)
 	ctrl.SetProfileToken("profile2")
 
 	err := ctrl.Stop(context.Background(), true, true)

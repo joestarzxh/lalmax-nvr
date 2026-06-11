@@ -101,6 +101,14 @@ export function getAuthHeader(): string | null {
   return `Basic ${encoded}`;
 }
 
+// Get base64 token for query parameter auth (e.g. <img src="?token=...">)
+export function getAuthToken(): string | null {
+  const creds = getCredentials();
+  if (!creds) return null;
+
+  return btoa(`${creds.username}:${creds.password}`);
+}
+
 // API base URL (relative path for embedded static files)
 export const API_BASE = '/api';
 

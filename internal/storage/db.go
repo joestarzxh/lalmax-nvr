@@ -104,6 +104,26 @@ func (d *DB) Init(ctx context.Context) error {
 	if err := d.createGB28181Tables(ctx); err != nil {
 		return err
 	}
+	// GB28181 platform tables
+	if err := d.createPlatformTables(ctx); err != nil {
+		return err
+	}
+	// GB28181 alarm table
+	if err := d.createAlarmTable(ctx); err != nil {
+		return err
+	}
+	// GB28181 download table
+	if err := d.createDownloadTable(ctx); err != nil {
+		return err
+	}
+	// Device group tables
+	if err := d.createGroupTables(ctx); err != nil {
+		return err
+	}
+	// Recording plan tables
+	if err := d.createRecordingPlanTables(ctx); err != nil {
+		return err
+	}
 	// indices
 	idx1 := `CREATE INDEX IF NOT EXISTS idx_recordings_camera ON recordings(camera_id);`
 	idx2 := `CREATE INDEX IF NOT EXISTS idx_recordings_time ON recordings(started_at);`
@@ -387,6 +407,12 @@ func (d *DB) Init(ctx context.Context) error {
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_events_status ON events(status)")
 	_, _ = d.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_events_recording ON events(recording_id)")
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='19' WHERE key='schema_version'")
+
+	// Migration v19 → v20: users table for RBAC
+	if err := d.CreateUserTable(ctx); err != nil {
+		return err
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='20' WHERE key='schema_version'")
 
 	return nil
 

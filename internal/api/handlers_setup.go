@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
+	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 )
 
 // setupRequest is the JSON body for POST /api/setup.
@@ -94,6 +96,21 @@ func (h *Handler) handleSetup(w http.ResponseWriter, r *http.Request) {
 	h.config.Auth.Username = req.Username
 	h.config.Auth.PasswordHash = hash
 	h.config.Storage.RootDir = dataDir
+
+	// Create super_admin user in the users table
+	now := time.Now().UTC()
+	dbUser := &model.User{
+		Username:     req.Username,
+		PasswordHash: hash,
+		Role:         model.RoleSuperAdmin,
+		DisplayName:  req.Username,
+		Enabled:      true,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := h.db.CreateUser(r.Context(), dbUser); err != nil {
+		logger.Error("failed to create super_admin user in DB", "error", err)
+	}
 
 	// Generate basic auth token for auto-login
 	token := base64.StdEncoding.EncodeToString([]byte(req.Username + ":" + req.Password))

@@ -198,6 +198,13 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     capabilities: { hls: true, ptz: true, snapshot: false, discovery: true, auth: true },
   },
   {
+    id: 'gb28181',
+    label: 'GB28181',
+    encodings: ['h264', 'h265'],
+    builtIn: true,
+    capabilities: { hls: true, ptz: false, snapshot: false, discovery: false, auth: false },
+  },
+  {
     id: 'xiaomi',
     label: 'Xiaomi',
     encodings: ['h264', 'h265'],
@@ -407,7 +414,7 @@ export async function ptzMove(
   request: PTZMoveRequest,
   signal?: AbortSignal
 ): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>(`/cameras/${cameraId}/ptz/move`, {
+  return apiRequest<{ status: string }>(`/cameras/${encodeURIComponent(cameraId)}/ptz/move`, {
     method: 'POST',
     body: JSON.stringify(request),
     signal,
@@ -418,7 +425,7 @@ export async function ptzStop(
   cameraId: string,
   signal?: AbortSignal
 ): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>(`/cameras/${cameraId}/ptz/stop`, {
+  return apiRequest<{ status: string }>(`/cameras/${encodeURIComponent(cameraId)}/ptz/stop`, {
     method: 'POST',
     signal,
   });
@@ -428,7 +435,7 @@ export async function getPTZStatus(
   cameraId: string,
   signal?: AbortSignal
 ): Promise<PTZStatus> {
-  return apiRequest<PTZStatus>(`/cameras/${cameraId}/ptz/status`, { signal });
+  return apiRequest<PTZStatus>(`/cameras/${encodeURIComponent(cameraId)}/ptz/status`, { signal });
 }
 
 // --- ONVIF Discovery ---

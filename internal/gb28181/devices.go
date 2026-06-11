@@ -79,6 +79,11 @@ func NewDeviceStore(db *storage.DB) *DeviceStore {
 	}
 }
 
+// GetDB returns the underlying database.
+func (s *DeviceStore) GetDB() *storage.DB {
+	return s.db
+}
+
 // LoadFromDB loads all devices from database into memory.
 func (s *DeviceStore) LoadFromDB() error {
 	ctx := context.Background()

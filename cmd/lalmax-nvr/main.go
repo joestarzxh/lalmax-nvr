@@ -353,6 +353,7 @@ type App struct {
 	store   *storage.Manager
 	metrics *metrics.Metrics
 	authMW  func(http.Handler) http.Handler
+	multiUserMW func(http.Handler) http.Handler
 
 	// Managers
 	mergeMgr     *merge.MergeManager
@@ -475,7 +476,7 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		slog.Info("reconciled orphaned recording files", "count", reconciled)
 	}
 
-	// Step 4: Auth middleware
+	// Step 4: Auth middleware — multi-user with legacy fallback
 	authMW, effectiveHash := authmw.NewAuthMiddleware(authmw.AuthProvider{
 		GetUsername: func() string { return cfg.Auth.Username },
 		GetHash:     func() string { return cfg.Auth.PasswordHash },
@@ -486,9 +487,23 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		cfg.Auth.PasswordHash = effectiveHash
 		cfg.Auth.Password = ""
 		if err := config.Save(configPath, cfg); err != nil {
-			slog.Error("failed to save config after auto-hash", "error", err)
+			slog.Error("failed to save auto-hash", "error", err)
 		}
 	}
+
+	// Multi-user auth middleware — wraps the legacy single-user auth.
+	// When users exist in the DB, authenticates against the users table.
+	// When no users exist yet, falls back to legacy config-based auth.
+	multiUserMW := authmw.NewMultiUserAuthMiddleware(authmw.MultiUserProvider{
+		GetUserByUsername: func(ctx context.Context, username string) (*model.User, error) {
+			return a.db.GetUserByUsername(ctx, username)
+		},
+		CountUsers: func(ctx context.Context) (int, error) {
+			return a.db.CountUsers(ctx)
+		},
+		GetLegacyUsername: func() string { return cfg.Auth.Username },
+	}, authMW)
+	a.multiUserMW = multiUserMW
 
 	// Step 5: Merge manager (created before camera manager so ArchiveCamera can use it)
 	a.mergeMgr = merge.NewMergeManager(
@@ -710,11 +725,13 @@ func (a *App) buildRouter() http.Handler {
 
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
 	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.media.HLS(), a.configPath, a.mergeMgr, cloudProxy)
+	handler.SetMultiUserAuthMW(a.multiUserMW)
 
 	// Wire streaming managers
 	handler.SetMediaEngine(a.mediaEngine)
 	if a.gb28181Svr != nil {
 		handler.SetGB28181Server(a.gb28181Svr)
+		handler.SetGB28181ServerInstance(a.gb28181Svr)
 	}
 	handler.SetGB28181Restarter(a)
 	handler.SetFLVManager(a.media.FLV())

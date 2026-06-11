@@ -12,16 +12,20 @@ import (
 
 // PTZControllerImpl implements PTZController by delegating to onvif-go's PTZ service.
 // It wraps an onvif-go Client and stores the profile token internally.
+// When onvif-go returns HTTP 401 (some cameras require HTTP-level auth), it falls
+// back to raw SOAP requests via the parent Client which handles Basic/Digest auth.
 type PTZControllerImpl struct {
 	client       *onvifgo.Client
+	rawClient    *Client // parent Client for raw SOAP fallback on 401
 	profileToken string
 	mu           sync.Mutex
 }
 
 // NewPTZController creates a PTZController backed by an onvif-go client.
-func NewPTZController(client *onvifgo.Client, profileToken string) *PTZControllerImpl {
+func NewPTZController(client *onvifgo.Client, profileToken string, rawClient *Client) *PTZControllerImpl {
 	return &PTZControllerImpl{
 		client:       client,
+		rawClient:    rawClient,
 		profileToken: profileToken,
 	}
 }
@@ -32,10 +36,10 @@ type serializedPTZController struct {
 	inner    *PTZControllerImpl
 }
 
-func newSerializedPTZController(deviceMu *sync.Mutex, client *onvifgo.Client, profileToken string) PTZController {
+func newSerializedPTZController(deviceMu *sync.Mutex, client *onvifgo.Client, profileToken string, rawClient *Client) PTZController {
 	return &serializedPTZController{
 		deviceMu: deviceMu,
-		inner:    NewPTZController(client, profileToken),
+		inner:    NewPTZController(client, profileToken, rawClient),
 	}
 }
 
@@ -139,7 +143,12 @@ func (p *PTZControllerImpl) ContinuousMove(ctx context.Context, velocity PTZVect
 
 	// Provide default timeout — some cameras reject ContinuousMove without it
 	timeout := "PT10S"
-	return p.client.ContinuousMove(ctx, p.profileToken, toOnvifPTZSpeed(velocity), &timeout)
+	err := p.client.ContinuousMove(ctx, p.profileToken, toOnvifPTZSpeed(velocity), &timeout)
+	if err != nil && isHTTPAuthFailure(err) && p.rawClient != nil {
+		logger.Warn("onvif-go ContinuousMove got HTTP 401, falling back to raw SOAP with HTTP auth")
+		return p.rawClient.rawContinuousMove(ctx, p.profileToken, velocity.Pan, velocity.Tilt, velocity.Zoom)
+	}
+	return err
 }
 
 // AbsoluteMove moves PTZ to an absolute position.
@@ -147,7 +156,12 @@ func (p *PTZControllerImpl) AbsoluteMove(ctx context.Context, position PTZVector
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	return p.client.AbsoluteMove(ctx, p.profileToken, toOnvifPTZVector(position), nil)
+	err := p.client.AbsoluteMove(ctx, p.profileToken, toOnvifPTZVector(position), nil)
+	if err != nil && isHTTPAuthFailure(err) && p.rawClient != nil {
+		logger.Warn("onvif-go AbsoluteMove got HTTP 401, falling back to raw SOAP with HTTP auth")
+		return p.rawClient.rawAbsoluteMove(ctx, p.profileToken, position.Pan, position.Tilt, position.Zoom)
+	}
+	return err
 }
 
 // RelativeMove moves PTZ relative to the current position.
@@ -155,7 +169,12 @@ func (p *PTZControllerImpl) RelativeMove(ctx context.Context, displacement PTZVe
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	return p.client.RelativeMove(ctx, p.profileToken, toOnvifPTZVector(displacement), nil)
+	err := p.client.RelativeMove(ctx, p.profileToken, toOnvifPTZVector(displacement), nil)
+	if err != nil && isHTTPAuthFailure(err) && p.rawClient != nil {
+		logger.Warn("onvif-go RelativeMove got HTTP 401, falling back to raw SOAP with HTTP auth")
+		return p.rawClient.rawRelativeMove(ctx, p.profileToken, displacement.Pan, displacement.Tilt, displacement.Zoom)
+	}
+	return err
 }
 
 // Stop stops PTZ movement. stopPanTilt and stopZoom control which axes to stop.
@@ -163,7 +182,12 @@ func (p *PTZControllerImpl) Stop(ctx context.Context, stopPanTilt, stopZoom bool
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	return p.client.Stop(ctx, p.profileToken, stopPanTilt, stopZoom)
+	err := p.client.Stop(ctx, p.profileToken, stopPanTilt, stopZoom)
+	if err != nil && isHTTPAuthFailure(err) && p.rawClient != nil {
+		logger.Warn("onvif-go Stop got HTTP 401, falling back to raw SOAP with HTTP auth")
+		return p.rawClient.rawStop(ctx, p.profileToken)
+	}
+	return err
 }
 
 // GetStatus returns the current PTZ position and whether the camera is moving.
@@ -184,6 +208,10 @@ func (p *PTZControllerImpl) GetPresets(ctx context.Context) ([]PTZPreset, error)
 	defer p.mu.Unlock()
 
 	presets, err := p.client.GetPresets(ctx, p.profileToken)
+	if err != nil && isHTTPAuthFailure(err) && p.rawClient != nil {
+		logger.Warn("onvif-go GetPresets got HTTP 401, falling back to raw SOAP with HTTP auth")
+		return p.rawClient.rawGetPresets(ctx, p.profileToken)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("get PTZ presets failed: %w", err)
 	}

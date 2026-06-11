@@ -7,12 +7,16 @@ import (
 
 // Config holds GB28181 SIP signaling configuration.
 type Config struct {
-	Enabled  bool   `yaml:"enabled"`
-	Host     string `yaml:"host"`      // SIP listen host (empty = auto-detect)
-	Port     int    `yaml:"port"`      // SIP listen port (default 5060)
-	ID       string `yaml:"id"`        // 20-digit platform SIP ID
-	Password string `yaml:"password"`  // Global device registration password
-	MediaIP  string `yaml:"media_ip"`  // IP address put in SDP for media reception
+	Enabled   bool   `yaml:"enabled"`
+	Host      string `yaml:"host"`      // SIP listen host (empty = auto-detect)
+	Port      int    `yaml:"port"`      // SIP listen port (default 5060)
+	ID        string `yaml:"id"`        // 20-digit platform SIP ID
+	Password  string `yaml:"password"`  // Global device registration password
+	MediaIP   string `yaml:"media_ip"`  // IP address put in SDP for media reception
+	MediaPort int    `yaml:"media_port"` // RTP media port (0=auto/multi-port, >0=single port mode)
+
+	// Upstream platform cascading
+	Platforms []PlatformConfig `yaml:"platforms,omitempty"`
 }
 
 // GetDomain extracts the first 10 chars of the SIP ID as the GB domain.
