@@ -11,6 +11,8 @@ import (
 	"github.com/emiago/sipgo/sip"
 )
 
+const BroadcastNotifyTimeout = 10 * time.Second
+
 // TalkManager 管理所有对讲会话
 type TalkManager struct {
 	mu       sync.RWMutex
@@ -36,13 +38,6 @@ func talkKey(deviceID, channelID string) string {
 // StartTalk 启动对讲会话
 func (tm *TalkManager) StartTalk(deviceID, channelID string, mode TransportMode, store *DeviceStore) (*TalkSession, error) {
 	key := talkKey(deviceID, channelID)
-
-	tm.mu.Lock()
-	if existing, ok := tm.sessions[key]; ok {
-		tm.mu.Unlock()
-		return existing, nil
-	}
-	tm.mu.Unlock()
 
 	// 检查设备是否在线
 	dev, ok := store.Load(deviceID)
@@ -76,8 +71,12 @@ func (tm *TalkManager) StartTalk(deviceID, channelID string, mode TransportMode,
 	// 生成 SSRC
 	session.SSRC = fmt.Sprintf("%010d", randInt(1000000000, 9999999999))
 
-	// 存储会话
+	// 存储会话（原子性检查并插入，防止竞态条件）
 	tm.mu.Lock()
+	if existing, ok := tm.sessions[key]; ok {
+		tm.mu.Unlock()
+		return existing, nil
+	}
 	tm.sessions[key] = session
 	tm.mu.Unlock()
 
@@ -130,10 +129,17 @@ func (tm *TalkManager) OnInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
+	to := req.To()
+	if to == nil || to.Address.User == "" {
+		slog.Error("[Talk] OnInvite: invalid to header")
+		return
+	}
+
 	deviceID := from.Address.User
+	channelID := to.Address.User
 	sdpBody := string(req.Body())
 
-	slog.Info("[Talk] OnInvite received", "device_id", deviceID, "sdp_len", len(sdpBody))
+	slog.Info("[Talk] OnInvite received", "device_id", deviceID, "channel_id", channelID, "sdp_len", len(sdpBody))
 
 	// 解析设备 SDP
 	peerIP, peerPort, isTCP, setupActive, deviceSSRC, payloadType, err := parseTalkSDP(sdpBody)
@@ -143,11 +149,11 @@ func (tm *TalkManager) OnInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
-	// 查找匹配的会话
+	// 查找匹配的会话（同时匹配 deviceID 和 channelID）
 	tm.mu.RLock()
 	var session *TalkSession
 	for _, s := range tm.sessions {
-		if s.DeviceID == deviceID {
+		if s.DeviceID == deviceID && s.ChannelID == channelID {
 			session = s
 			break
 		}
@@ -232,15 +238,21 @@ func (tm *TalkManager) OnBye(req *sip.Request, tx sip.ServerTransaction) {
 	}
 	deviceID := from.Address.User
 
+	// 收集需要停止的会话，避免在持锁状态下调用 goroutine
 	tm.mu.Lock()
+	var stoppedSession *TalkSession
 	for key, session := range tm.sessions {
 		if session.DeviceID == deviceID {
 			delete(tm.sessions, key)
-			go session.Stop()
+			stoppedSession = session
 			break
 		}
 	}
 	tm.mu.Unlock()
+
+	if stoppedSession != nil {
+		stoppedSession.Stop()
+	}
 
 	tx.Respond(sip.NewResponseFromRequest(req, 200, "OK", nil))
 	slog.Info("[Talk] OnBye: session stopped", "device_id", deviceID)
@@ -278,7 +290,7 @@ func (tm *TalkManager) sendBroadcastNotify(session *TalkSession, store *DeviceSt
 </Notify>`, sn, sourceID, session.ChannelID)
 	req.SetBody([]byte(body))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), BroadcastNotifyTimeout)
 	defer cancel()
 
 	_, err := tm.client.Do(ctx, req)
