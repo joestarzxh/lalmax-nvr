@@ -3,6 +3,7 @@
   import { Mic, MicOff, Loader2 } from 'lucide-svelte';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
+  import { getAuthToken } from '$lib/api/client';
 
   let { deviceId, channelId }: { deviceId: string; channelId: string } = $props();
 
@@ -55,7 +56,13 @@
 
       // Create WebSocket connection
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/api/gb28181/talk/ws?device_id=${deviceId}&channel_id=${channelId}`;
+      const params = new URLSearchParams({
+        device_id: deviceId,
+        channel_id: channelId,
+      });
+      const authToken = getAuthToken();
+      if (authToken) params.set('token', authToken);
+      const wsUrl = `${protocol}//${window.location.host}/api/gb28181/talk/ws?${params.toString()}`;
       ws = new WebSocket(wsUrl);
       ws.binaryType = 'arraybuffer';
 
@@ -113,26 +120,52 @@
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
       const inputData = e.inputBuffer.getChannelData(0);
-      // Convert float32 to PCM16 (G.711)
-      const pcmData = float32ToPCM16(inputData);
-      ws.send(pcmData);
+      ws.send(float32ToPCMA(inputData));
     };
 
     source.connect(processor);
     processor.connect(audioContext.destination);
   }
 
-  function float32ToPCM16(float32Array: Float32Array): ArrayBuffer {
-    const buffer = new ArrayBuffer(float32Array.length * 2);
-    const view = new DataView(buffer);
+  function float32ToPCMA(float32Array: Float32Array): ArrayBuffer {
+    const buffer = new ArrayBuffer(float32Array.length);
+    const view = new Uint8Array(buffer);
     for (let i = 0; i < float32Array.length; i++) {
       let sample = float32Array[i];
-      // Clamp
       sample = Math.max(-1, Math.min(1, sample));
-      // Convert to 16-bit PCM
-      view.setInt16(i * 2, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+      const pcm = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      view[i] = linearToALaw(pcm);
     }
     return buffer;
+  }
+
+  function linearToALaw(sample: number): number {
+    const ALAW_MAX = 0x7fff;
+    let pcm = Math.trunc(sample);
+    let mask: number;
+
+    if (pcm >= 0) {
+      mask = 0xd5;
+    } else {
+      mask = 0x55;
+      pcm = -pcm - 1;
+      if (pcm < 0) pcm = 0;
+    }
+
+    if (pcm > ALAW_MAX) pcm = ALAW_MAX;
+
+    let compressed: number;
+    if (pcm < 256) {
+      compressed = pcm >> 4;
+    } else {
+      let exponent = 7;
+      for (let expMask = 0x4000; (pcm & expMask) === 0 && exponent > 0; expMask >>= 1) {
+        exponent--;
+      }
+      compressed = (exponent << 4) | ((pcm >> (exponent + 3)) & 0x0f);
+    }
+
+    return (compressed ^ mask) & 0xff;
   }
 
   function stopTalk() {

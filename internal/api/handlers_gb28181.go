@@ -369,16 +369,16 @@ func (h *GB28181Handler) ListPlatforms(w http.ResponseWriter, r *http.Request) {
 	result := make([]map[string]interface{}, 0, len(platforms))
 	for _, p := range platforms {
 		result = append(result, map[string]interface{}{
-			"id":               p.Config.ID,
-			"name":             p.Config.Name,
-			"enable":           p.Config.Enable,
-			"server_gb_id":     p.Config.ServerGBID,
-			"server_ip":        p.Config.ServerIP,
-			"server_port":      p.Config.ServerPort,
-			"device_gb_id":     p.Config.DeviceGBID,
-			"device_ip":        p.Config.DeviceIP,
-			"device_port":      p.Config.DevicePort,
-			"transport":        p.Config.Transport,
+			"id":           p.Config.ID,
+			"name":         p.Config.Name,
+			"enable":       p.Config.Enable,
+			"server_gb_id": p.Config.ServerGBID,
+			"server_ip":    p.Config.ServerIP,
+			"server_port":  p.Config.ServerPort,
+			"device_gb_id": p.Config.DeviceGBID,
+			"device_ip":    p.Config.DeviceIP,
+			"device_port":  p.Config.DevicePort,
+			"transport":    p.Config.Transport,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"platforms": result})
@@ -775,9 +775,15 @@ func (h *GB28181Handler) HandleTalkWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		slog.Error("WebSocket upgrade failed", "error", err)
+		_ = tm.StopTalk(deviceID, channelID)
 		return
 	}
 	defer conn.Close()
+	defer func() {
+		if err := tm.StopTalk(deviceID, channelID); err != nil {
+			slog.Warn("Failed to stop talk session", "device_id", deviceID, "channel_id", channelID, "error", err)
+		}
+	}()
 
 	slog.Info("Talk WebSocket connected", "device_id", deviceID, "channel_id", channelID, "transport", transportMode)
 

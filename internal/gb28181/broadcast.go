@@ -2,9 +2,12 @@ package gb28181
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -14,32 +17,36 @@ import (
 
 // BroadcastSession represents a voice broadcast/intercom session.
 type BroadcastSession struct {
-	DeviceID    string
-	ChannelID   string
-	Session     *sipgo.DialogClientSession
-	RTPConn     *net.UDPConn
-	TCPConn     net.Conn
-	TCPListener net.Listener
-	RTPPort     int
-	RTPPeerIP   string
-	RTPPeerPort int
-	SSRC        string
-	CallID      string
-	PayloadType uint8
-	IsTCP       bool
-	TCPPassive  bool
-	AudioChan   chan []byte
-	ReadyCh     chan struct{}
-	ReadyOnce   sync.Once
-	StopOnce    sync.Once
-	IdleTimer   *time.Timer
-	SeqNum      uint16
-	Timestamp   uint32
-	AudioBuffer []byte
-	client      *sipgo.Client
-	cfg         *Config
-	stopped     bool
-	mu          sync.Mutex
+	DeviceID     string
+	ChannelID    string
+	Session      *sipgo.DialogClientSession
+	RTPConn      *net.UDPConn
+	TCPConn      net.Conn
+	TCPListener  net.Listener
+	RTPPort      int
+	TCPActive    bool
+	RTPPeerIP    string
+	RTPPeerPort  int
+	SSRC         string
+	RTPSSRC      uint32
+	CallID       string
+	PayloadType  uint8
+	IsTCP        bool
+	TCPPassive   bool
+	AudioChan    chan []byte
+	ReadyCh      chan struct{}
+	TCPReadyCh   chan struct{}
+	TCPReadyOnce sync.Once
+	ReadyOnce    sync.Once
+	StopOnce     sync.Once
+	IdleTimer    *time.Timer
+	SeqNum       uint16
+	Timestamp    uint32
+	AudioBuffer  []byte
+	client       *sipgo.Client
+	cfg          *Config
+	stopped      bool
+	mu           sync.Mutex
 }
 
 // BroadcastManager manages broadcast sessions.
@@ -89,13 +96,15 @@ func (bm *BroadcastManager) StartBroadcast(deviceID, channelID string, store *De
 		ChannelID:   channelID,
 		AudioChan:   make(chan []byte, 100),
 		ReadyCh:     make(chan struct{}),
+		TCPReadyCh:  make(chan struct{}),
 		PayloadType: 8, // PCMA
 		client:      bm.client,
 		cfg:         bm.cfg,
 	}
 
-	// Generate SSRC
-	bs.SSRC = fmt.Sprintf("%010d", randInt(1000000000, 9999999999))
+	// Generate one stable RTP SSRC for the whole talk session.
+	bs.RTPSSRC = uint32(randInt(1000000000, 0x7FFFFFFF))
+	bs.SSRC = fmt.Sprintf("%010d", bs.RTPSSRC)
 
 	// Prepare UDP listener
 	if err := bs.prepareRTPConn(); err != nil {
@@ -109,6 +118,7 @@ func (bm *BroadcastManager) StartBroadcast(deviceID, channelID string, store *De
 	// Send broadcast notify to device
 	if err := bs.sendBroadcastNotify(store); err != nil {
 		bm.RemoveSession(key)
+		_ = bs.Stop()
 		return nil, fmt.Errorf("send broadcast notify failed: %w", err)
 	}
 
@@ -265,15 +275,21 @@ func (bm *BroadcastManager) OnInvite(req *sip.Request, tx sip.ServerTransaction)
 	slog.Info("[Broadcast] OnInvite received", "device_id", deviceID, "sdp_len", len(sdpBody))
 
 	// Parse SDP to get peer info
-	peerIP, peerPort, isTCP, payloadType := parseBroadcastSDP(sdpBody)
+	offer := parseBroadcastSDP(sdpBody)
+	offer.IP = normalizeMediaIP(offer.IP, req.Source())
 
 	// Find matching session
 	bm.mu.RLock()
 	var bs *BroadcastSession
-	for _, s := range bm.sessions {
-		if s.DeviceID == deviceID {
-			bs = s
-			break
+	if offer.ChannelID != "" {
+		bs, _ = bm.sessions[broadcastKey(deviceID, offer.ChannelID)]
+	}
+	if bs == nil {
+		for _, s := range bm.sessions {
+			if s.DeviceID == deviceID {
+				bs = s
+				break
+			}
 		}
 	}
 	bm.mu.RUnlock()
@@ -284,36 +300,64 @@ func (bm *BroadcastManager) OnInvite(req *sip.Request, tx sip.ServerTransaction)
 		return
 	}
 
-	bs.RTPPeerIP = peerIP
-	bs.RTPPeerPort = peerPort
-	bs.IsTCP = isTCP
-	if payloadType >= 0 {
-		bs.PayloadType = uint8(payloadType)
+	bs.RTPPeerIP = offer.IP
+	bs.RTPPeerPort = offer.Port
+	bs.IsTCP = offer.IsTCP
+	bs.TCPActive = !offer.TCPActive
+	if offer.PayloadType >= 0 {
+		bs.PayloadType = uint8(offer.PayloadType)
+	}
+	if offer.SSRC != 0 {
+		bs.RTPSSRC = offer.SSRC
+		bs.SSRC = fmt.Sprintf("%010d", offer.SSRC)
 	}
 
 	// Build 200 OK response with SDP
-	sdpIP := bs.cfg.MediaIP
-	if sdpIP == "" {
-		sdpIP = bs.cfg.Host
-	}
+	sdpIP := advertisedMediaIP(bs.cfg)
 
 	mediaPort := bs.RTPPort
 	protocol := "RTP/AVP"
-	if isTCP {
+	if offer.IsTCP {
+		if bs.RTPConn != nil {
+			_ = bs.RTPConn.Close()
+			bs.RTPConn = nil
+		}
+		if bs.TCPActive {
+			if err := bs.prepareTCPActivePort(); err != nil {
+				slog.Error("[Broadcast] OnInvite: prepare TCP active port failed", "error", err)
+				tx.Respond(sip.NewResponseFromRequest(req, 500, "Internal Server Error", nil))
+				return
+			}
+		} else {
+			if err := bs.prepareTCPListener(); err != nil {
+				slog.Error("[Broadcast] OnInvite: prepare TCP listener failed", "error", err)
+				tx.Respond(sip.NewResponseFromRequest(req, 500, "Internal Server Error", nil))
+				return
+			}
+		}
+		mediaPort = bs.RTPPort
 		protocol = "TCP/RTP/AVP"
 	}
 
-	responseSDP := fmt.Sprintf(`v=0
-o=%s 0 0 IN IP4 %s
-s=Play
-c=IN IP4 %s
-t=0 0
-m=audio %d %s %d
-a=sendonly
-a=rtpmap:%d PCMA/8000
-y=%s
-f=v/a/1/8/1/8000
-`, bs.cfg.ID, sdpIP, sdpIP, mediaPort, protocol, bs.PayloadType, bs.PayloadType, bs.SSRC)
+	responseSDP := fmt.Sprintf("v=0\r\n"+
+		"o=%s 0 0 IN IP4 %s\r\n"+
+		"s=Play\r\n"+
+		"c=IN IP4 %s\r\n"+
+		"t=0 0\r\n"+
+		"m=audio %d %s %d\r\n"+
+		"a=rtpmap:%d PCMA/8000\r\n"+
+		"a=sendonly\r\n",
+		bs.cfg.ID, sdpIP, sdpIP, mediaPort, protocol, bs.PayloadType, bs.PayloadType)
+	if offer.IsTCP {
+		setup := "passive"
+		if bs.TCPActive {
+			setup = "active"
+		}
+		responseSDP += fmt.Sprintf("a=setup:%s\r\n", setup)
+		responseSDP += "a=connection:new\r\n"
+	}
+	responseSDP += fmt.Sprintf("y=%s\r\n", bs.SSRC)
+	responseSDP += "f=v/////a/1/8/1\r\n"
 
 	okResp := sip.NewResponseFromRequest(req, 200, "OK", nil)
 	okResp.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
@@ -324,15 +368,139 @@ f=v/a/1/8/1/8000
 		return
 	}
 
+	if bs.IsTCP {
+		if bs.TCPActive {
+			go bs.dialTCPConn()
+		} else {
+			go bs.acceptTCPConn()
+		}
+	} else {
+		bs.markReady()
+	}
+
 	// Start audio sender
 	go bs.startAudioSender()
 
-	// Notify ready
+	slog.Info("[Broadcast] OnInvite: 200 OK sent", "device_id", deviceID, "port", mediaPort)
+}
+
+func (bs *BroadcastSession) markReady() {
 	bs.ReadyOnce.Do(func() {
 		close(bs.ReadyCh)
 	})
+}
 
-	slog.Info("[Broadcast] OnInvite: 200 OK sent", "device_id", deviceID, "port", mediaPort)
+func (bs *BroadcastSession) markTCPReady() {
+	bs.TCPReadyOnce.Do(func() {
+		close(bs.TCPReadyCh)
+	})
+	bs.markReady()
+}
+
+func (bs *BroadcastSession) prepareTCPListener() error {
+	if bs.TCPListener != nil {
+		return nil
+	}
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		return err
+	}
+	bs.TCPListener = listener
+	bs.RTPPort = listener.Addr().(*net.TCPAddr).Port
+	return nil
+}
+
+func (bs *BroadcastSession) prepareTCPActivePort() error {
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		return err
+	}
+	bs.RTPPort = listener.Addr().(*net.TCPAddr).Port
+	return listener.Close()
+}
+
+func (bs *BroadcastSession) dialTCPConn() {
+	if bs.RTPPeerIP == "" || bs.RTPPeerPort == 0 {
+		slog.Error("[Broadcast] TCP dial skipped: peer address not ready", "device_id", bs.DeviceID, "channel_id", bs.ChannelID)
+		return
+	}
+
+	dialer := &net.Dialer{LocalAddr: &net.TCPAddr{Port: bs.RTPPort}, Timeout: 3 * time.Second}
+	remoteAddr := net.JoinHostPort(bs.RTPPeerIP, strconv.Itoa(bs.RTPPeerPort))
+
+	var conn net.Conn
+	var err error
+	for i := 0; i < 3; i++ {
+		conn, err = dialer.Dial("tcp", remoteAddr)
+		if err == nil {
+			break
+		}
+		slog.Warn("[Broadcast] TCP dial failed", "device_id", bs.DeviceID, "channel_id", bs.ChannelID, "remote", remoteAddr, "attempt", i+1, "error", err)
+		time.Sleep(time.Second)
+	}
+	if err != nil {
+		slog.Error("[Broadcast] TCP dial failed", "device_id", bs.DeviceID, "channel_id", bs.ChannelID, "remote", remoteAddr, "error", err)
+		return
+	}
+
+	bs.setTCPConn(conn)
+	slog.Info("[Broadcast] TCP connected", "device_id", bs.DeviceID, "channel_id", bs.ChannelID, "remote", conn.RemoteAddr().String())
+	bs.markTCPReady()
+	bs.readTCPConn(conn)
+}
+
+func (bs *BroadcastSession) acceptTCPConn() {
+	if bs.TCPListener == nil {
+		return
+	}
+	conn, err := bs.TCPListener.Accept()
+	if err != nil {
+		bs.mu.Lock()
+		stopped := bs.stopped
+		bs.mu.Unlock()
+		if !stopped {
+			slog.Error("[Broadcast] TCP accept failed", "device_id", bs.DeviceID, "channel_id", bs.ChannelID, "error", err)
+		}
+		return
+	}
+
+	bs.setTCPConn(conn)
+	slog.Info("[Broadcast] TCP connected", "device_id", bs.DeviceID, "channel_id", bs.ChannelID, "remote", conn.RemoteAddr().String())
+	bs.markTCPReady()
+	bs.readTCPConn(conn)
+}
+
+func (bs *BroadcastSession) setTCPConn(conn net.Conn) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	if bs.TCPConn != nil && bs.TCPConn != conn {
+		_ = bs.TCPConn.Close()
+	}
+	bs.TCPConn = conn
+}
+
+func (bs *BroadcastSession) readTCPConn(conn net.Conn) {
+	// Keep reading and discarding peer TCP packets so connection closure is detected.
+	lengthBuf := make([]byte, 2)
+	for {
+		if _, err := io.ReadFull(conn, lengthBuf); err != nil {
+			break
+		}
+		n := int(binary.BigEndian.Uint16(lengthBuf))
+		if n <= 0 {
+			continue
+		}
+		if _, err := io.CopyN(io.Discard, conn, int64(n)); err != nil {
+			break
+		}
+	}
+
+	bs.mu.Lock()
+	if bs.TCPConn == conn {
+		bs.TCPConn = nil
+	}
+	bs.mu.Unlock()
+	_ = conn.Close()
 }
 
 // OnAck handles a SIP ACK for broadcast.
@@ -382,21 +550,46 @@ func (bs *BroadcastSession) startAudioSender() {
 }
 
 func (bs *BroadcastSession) sendAudioData(data []byte) error {
-	if bs.RTPConn == nil || bs.RTPPeerIP == "" || bs.RTPPeerPort == 0 {
+	if bs.IsTCP {
+		if bs.TCPConn == nil {
+			return fmt.Errorf("TCP connection not ready")
+		}
+	} else if bs.RTPConn == nil || bs.RTPPeerIP == "" || bs.RTPPeerPort == 0 {
 		return fmt.Errorf("RTP connection not ready")
 	}
-
-	remoteAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", bs.RTPPeerIP, bs.RTPPeerPort))
-	if err != nil {
-		return err
+	if len(data) == 0 {
+		return nil
 	}
 
-	// Simple RTP packet construction
+	var remoteAddr *net.UDPAddr
+	if !bs.IsTCP {
+		var err error
+		remoteAddr, err = net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", bs.RTPPeerIP, bs.RTPPeerPort))
+		if err != nil {
+			return err
+		}
+	}
+
+	const g711FrameSamples = 160 // 20ms at 8kHz, 1 byte per PCMA sample.
+	for len(data) > 0 {
+		n := g711FrameSamples
+		if len(data) < n {
+			n = len(data)
+		}
+		if err := bs.sendRTPPayload(remoteAddr, data[:n]); err != nil {
+			return err
+		}
+		data = data[n:]
+	}
+	return nil
+}
+
+func (bs *BroadcastSession) sendRTPPayload(remoteAddr *net.UDPAddr, payload []byte) error {
 	bs.SeqNum++
-	bs.Timestamp += uint32(len(data))
+	bs.Timestamp += uint32(len(payload))
 
 	// RTP header (12 bytes) + payload
-	rtpPacket := make([]byte, 12+len(data))
+	rtpPacket := make([]byte, 12+len(payload))
 	rtpPacket[0] = 0x80 // V=2
 	rtpPacket[1] = bs.PayloadType
 	rtpPacket[2] = byte(bs.SeqNum >> 8)
@@ -406,49 +599,156 @@ func (bs *BroadcastSession) sendAudioData(data []byte) error {
 	rtpPacket[6] = byte(bs.Timestamp >> 8)
 	rtpPacket[7] = byte(bs.Timestamp)
 	// SSRC
-	ssrc := uint32(randInt(0, 0x7FFFFFFF))
-	rtpPacket[8] = byte(ssrc >> 24)
-	rtpPacket[9] = byte(ssrc >> 16)
-	rtpPacket[10] = byte(ssrc >> 8)
-	rtpPacket[11] = byte(ssrc)
-	copy(rtpPacket[12:], data)
+	rtpPacket[8] = byte(bs.RTPSSRC >> 24)
+	rtpPacket[9] = byte(bs.RTPSSRC >> 16)
+	rtpPacket[10] = byte(bs.RTPSSRC >> 8)
+	rtpPacket[11] = byte(bs.RTPSSRC)
+	copy(rtpPacket[12:], payload)
 
-	_, err = bs.RTPConn.WriteToUDP(rtpPacket, remoteAddr)
+	if bs.IsTCP {
+		bs.mu.Lock()
+		conn := bs.TCPConn
+		bs.mu.Unlock()
+		if conn == nil {
+			return fmt.Errorf("TCP connection not ready")
+		}
+		length := make([]byte, 2)
+		binary.BigEndian.PutUint16(length, uint16(len(rtpPacket)))
+		if _, err := conn.Write(length); err != nil {
+			return err
+		}
+		_, err := conn.Write(rtpPacket)
+		return err
+	}
+
+	_, err := bs.RTPConn.WriteToUDP(rtpPacket, remoteAddr)
 	return err
 }
 
-// parseBroadcastSDP extracts peer IP, port, transport, and codec from SDP.
-func parseBroadcastSDP(sdpBody string) (ip string, port int, isTCP bool, payloadType int) {
-	payloadType = 8 // default PCMA
-	port = 0
-	isTCP = false
+type broadcastSDPOffer struct {
+	ChannelID   string
+	IP          string
+	Port        int
+	IsTCP       bool
+	TCPActive   bool
+	PayloadType int
+	SSRC        uint32
+}
+
+// parseBroadcastSDP extracts peer IP, port, transport, codec and GB metadata from SDP.
+func parseBroadcastSDP(sdpBody string) broadcastSDPOffer {
+	offer := broadcastSDPOffer{
+		PayloadType: 8, // default PCMA
+	}
 
 	lines := splitLines(sdpBody)
 	for _, line := range lines {
 		switch {
+		case len(line) > 2 && line[:2] == "o=":
+			// o=<channel-id> 0 0 IN IP4 x.x.x.x
+			parts := splitFields(line[2:])
+			if len(parts) > 0 {
+				offer.ChannelID = parts[0]
+			}
 		case len(line) > 2 && line[:2] == "c=":
 			// c=IN IP4 x.x.x.x
 			parts := splitFields(line[2:])
 			for i, p := range parts {
 				if p == "IP4" && i+1 < len(parts) {
-					ip = parts[i+1]
+					offer.IP = parts[i+1]
 				}
 			}
 		case len(line) > 2 && line[:2] == "m=":
 			// m=audio port RTP/AVP 8
 			parts := splitFields(line[2:])
 			if len(parts) >= 3 {
-				fmt.Sscanf(parts[1], "%d", &port)
+				fmt.Sscanf(parts[1], "%d", &offer.Port)
 				if parts[2] == "TCP/RTP/AVP" || parts[2] == "RTP/AVP/TCP" {
-					isTCP = true
+					offer.IsTCP = true
 				}
 				if len(parts) >= 4 {
-					fmt.Sscanf(parts[3], "%d", &payloadType)
+					fmt.Sscanf(parts[3], "%d", &offer.PayloadType)
 				}
+			}
+		case len(line) > len("a=setup:") && line[:len("a=setup:")] == "a=setup:":
+			offer.TCPActive = line[len("a=setup:"):] == "active"
+		case len(line) > 2 && line[:2] == "y=":
+			if ssrc, err := strconv.ParseUint(line[2:], 10, 32); err == nil {
+				offer.SSRC = uint32(ssrc)
 			}
 		}
 	}
-	return
+	return offer
+}
+
+func normalizeMediaIP(mediaIP, source string) string {
+	if mediaIP != "" && mediaIP != "0.0.0.0" {
+		return mediaIP
+	}
+	if source == "" {
+		return mediaIP
+	}
+	host, _, err := net.SplitHostPort(source)
+	if err == nil && host != "" {
+		return host
+	}
+	return source
+}
+
+func advertisedMediaIP(cfg *Config) string {
+	if cfg != nil {
+		if isAdvertisableMediaIP(cfg.MediaIP) {
+			return cfg.MediaIP
+		}
+		if isAdvertisableMediaIP(cfg.Host) {
+			return cfg.Host
+		}
+	}
+	if ip := firstNonLoopbackIPv4(); ip != "" {
+		return ip
+	}
+	return "127.0.0.1"
+}
+
+func isAdvertisableMediaIP(addr string) bool {
+	if addr == "" {
+		return false
+	}
+	host := addr
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.To4() != nil && !ip.IsUnspecified() && !ip.IsLoopback()
+}
+
+func firstNonLoopbackIPv4() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip4 := ip.To4(); ip4 != nil && !ip4.IsUnspecified() && !ip4.IsLoopback() {
+				return ip4.String()
+			}
+		}
+	}
+	return ""
 }
 
 func splitLines(s string) []string {
