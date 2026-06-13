@@ -59,7 +59,10 @@ a=rtpmap:8 PCMA/8000
 y=0000000033
 f=v/////a/1/8/1`
 
-	peerIP, peerPort, isTCP, setupActive, ssrc, payloadType := parseTalkSDP(sdp)
+	peerIP, peerPort, isTCP, setupActive, ssrc, payloadType, err := parseTalkSDP(sdp)
+	if err != nil {
+		t.Fatalf("parseTalkSDP failed: %v", err)
+	}
 
 	if peerIP != "10.0.15.209" {
 		t.Errorf("Expected peerIP 10.0.15.209, got %s", peerIP)
@@ -93,7 +96,10 @@ a=rtpmap:8 PCMA/8000
 a=setup:active
 y=0000000033`
 
-	_, _, isTCP, setupActive, _, _ := parseTalkSDP(sdp)
+	_, _, isTCP, setupActive, _, _, err := parseTalkSDP(sdp)
+	if err != nil {
+		t.Fatalf("parseTalkSDP failed: %v", err)
+	}
 
 	if !isTCP {
 		t.Error("Expected TCP mode")

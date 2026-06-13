@@ -34,11 +34,12 @@ func buildTalkSDP(serverID, mediaIP string, port int, mode TransportMode, ssrc s
 	}
 
 	// TCP 模式添加 setup 和 connection 属性
-	if mode == TransportTCPPassive {
-		sdpLines = append(sdpLines, "a=setup:passive")
-		sdpLines = append(sdpLines, "a=connection:new")
-	} else if mode == TransportTCPActive {
-		sdpLines = append(sdpLines, "a=setup:active")
+	if mode == TransportTCPPassive || mode == TransportTCPActive {
+		if mode == TransportTCPPassive {
+			sdpLines = append(sdpLines, "a=setup:passive")
+		} else {
+			sdpLines = append(sdpLines, "a=setup:active")
+		}
 		sdpLines = append(sdpLines, "a=connection:new")
 	}
 
@@ -50,8 +51,8 @@ func buildTalkSDP(serverID, mediaIP string, port int, mode TransportMode, ssrc s
 }
 
 // parseTalkSDP 解析设备 INVITE SDP
-// 返回：peerIP, peerPort, isTCP, setupActive, ssrc, payloadType
-func parseTalkSDP(sdpBody string) (string, int, bool, bool, string, int) {
+// 返回：peerIP, peerPort, isTCP, setupActive, ssrc, payloadType, error
+func parseTalkSDP(sdpBody string) (string, int, bool, bool, string, int, error) {
 	peerIP := ""
 	peerPort := 0
 	isTCP := false
@@ -79,12 +80,20 @@ func parseTalkSDP(sdpBody string) (string, int, bool, bool, string, int) {
 			// m=audio port RTP/AVP 8
 			parts := strings.Fields(line[2:])
 			if len(parts) >= 3 {
-				peerPort, _ = strconv.Atoi(parts[1])
+				port, err := strconv.Atoi(parts[1])
+				if err != nil {
+					return "", 0, false, false, "", 0, fmt.Errorf("invalid port in m= line: %w", err)
+				}
+				peerPort = port
 				if parts[2] == "TCP/RTP/AVP" || parts[2] == "RTP/AVP/TCP" {
 					isTCP = true
 				}
 				if len(parts) >= 4 {
-					payloadType, _ = strconv.Atoi(parts[3])
+					pt, err := strconv.Atoi(parts[3])
+					if err != nil {
+						return "", 0, false, false, "", 0, fmt.Errorf("invalid payload type in m= line: %w", err)
+					}
+					payloadType = pt
 				}
 			}
 		case strings.HasPrefix(line, "a=setup:"):
@@ -97,5 +106,5 @@ func parseTalkSDP(sdpBody string) (string, int, bool, bool, string, int) {
 		}
 	}
 
-	return peerIP, peerPort, isTCP, setupActive, ssrc, payloadType
+	return peerIP, peerPort, isTCP, setupActive, ssrc, payloadType, nil
 }
