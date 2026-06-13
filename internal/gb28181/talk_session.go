@@ -1,0 +1,255 @@
+package gb28181
+
+import (
+	"encoding/binary"
+	"fmt"
+	"log/slog"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/emiago/sipgo"
+)
+
+// TalkSession 表示一个对讲会话
+type TalkSession struct {
+	DeviceID      string
+	ChannelID     string
+	TransportMode TransportMode
+	SSRC          string
+	CallID        string
+	PayloadType   uint8
+
+	// 网络连接
+	RTPConn     *net.UDPConn     // UDP 模式
+	TCPConn     net.Conn         // TCP 主动模式
+	TCPListener net.Listener     // TCP 被动模式
+	RTPPort     int
+	RTPPeerIP   string
+	RTPPeerPort int
+
+	// 音频通道
+	AudioChan  chan []byte
+	ReadyCh    chan struct{}
+	ReadyOnce  sync.Once
+	StopOnce   sync.Once
+
+	// RTP 状态
+	SeqNum     uint16
+	Timestamp  uint32
+
+	// 控制
+	client  *sipgo.Client
+	cfg     *Config
+	stopped bool
+	mu      sync.Mutex
+}
+
+// NewTalkSession 创建新的 TalkSession
+func NewTalkSession(deviceID, channelID string, mode TransportMode, cfg *Config, client *sipgo.Client) *TalkSession {
+	return &TalkSession{
+		DeviceID:      deviceID,
+		ChannelID:     channelID,
+		TransportMode: mode,
+		PayloadType:   8, // PCMA
+		AudioChan:     make(chan []byte, 100),
+		ReadyCh:       make(chan struct{}),
+		client:        client,
+		cfg:           cfg,
+	}
+}
+
+// prepareUDPConn 准备 UDP 连接
+func (ts *TalkSession) prepareUDPConn() error {
+	localAddr, err := net.ResolveUDPAddr("udp", ":0")
+	if err != nil {
+		return fmt.Errorf("resolve UDP addr: %w", err)
+	}
+
+	conn, err := net.ListenUDP("udp", localAddr)
+	if err != nil {
+		return fmt.Errorf("listen UDP: %w", err)
+	}
+
+	ts.RTPConn = conn
+	ts.RTPPort = conn.LocalAddr().(*net.UDPAddr).Port
+	return nil
+}
+
+// prepareTCPListener 准备 TCP 被动监听
+func (ts *TalkSession) prepareTCPListener() error {
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		return fmt.Errorf("listen TCP: %w", err)
+	}
+
+	ts.TCPListener = listener
+	ts.RTPPort = listener.Addr().(*net.TCPAddr).Port
+	return nil
+}
+
+// acceptTCPConn 接受 TCP 连接（TCP 被动模式）
+func (ts *TalkSession) acceptTCPConn() {
+	conn, err := ts.TCPListener.Accept()
+	if err != nil {
+		if !ts.stopped {
+			slog.Error("[Talk] accept TCP failed", "error", err)
+		}
+		return
+	}
+
+	ts.mu.Lock()
+	ts.TCPConn = conn
+	ts.mu.Unlock()
+
+	slog.Info("[Talk] TCP connection accepted", "device_id", ts.DeviceID, "remote", conn.RemoteAddr())
+
+	// 通知就绪
+	ts.ReadyOnce.Do(func() {
+		close(ts.ReadyCh)
+	})
+}
+
+// connectTCP 主动连接设备（TCP 主动模式）
+func (ts *TalkSession) connectTCP(peerIP string, peerPort int) {
+	addr := net.JoinHostPort(peerIP, fmt.Sprintf("%d", peerPort))
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		slog.Error("[Talk] connect TCP failed", "error", err, "addr", addr)
+		return
+	}
+
+	ts.mu.Lock()
+	ts.TCPConn = conn
+	ts.RTPPeerIP = peerIP
+	ts.RTPPeerPort = peerPort
+	ts.mu.Unlock()
+
+	slog.Info("[Talk] TCP connected", "device_id", ts.DeviceID, "remote", addr)
+
+	// 通知就绪
+	ts.ReadyOnce.Do(func() {
+		close(ts.ReadyCh)
+	})
+}
+
+// SendAudioData 发送音频数据到通道
+func (ts *TalkSession) SendAudioData(data []byte) error {
+	ts.mu.Lock()
+	if ts.stopped {
+		ts.mu.Unlock()
+		return fmt.Errorf("session stopped")
+	}
+	ts.mu.Unlock()
+
+	select {
+	case ts.AudioChan <- data:
+		return nil
+	default:
+		return fmt.Errorf("audio channel full")
+	}
+}
+
+// startAudioSender 启动音频发送器
+func (ts *TalkSession) startAudioSender() {
+	slog.Info("[Talk] audio sender started", "device_id", ts.DeviceID)
+
+	// 等待就绪
+	<-ts.ReadyCh
+
+	for audioData := range ts.AudioChan {
+		if err := ts.sendAudioData(audioData); err != nil {
+			slog.Error("[Talk] send audio failed", "error", err)
+		}
+	}
+
+	slog.Info("[Talk] audio sender stopped", "device_id", ts.DeviceID)
+}
+
+// sendAudioData 发送音频数据
+func (ts *TalkSession) sendAudioData(data []byte) error {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	if ts.stopped {
+		return fmt.Errorf("session stopped")
+	}
+
+	// 构建 RTP 包
+	packet := ts.buildRTPPacket(data)
+
+	// 根据传输模式发送
+	switch ts.TransportMode {
+	case TransportUDP:
+		if ts.RTPConn == nil || ts.RTPPeerIP == "" || ts.RTPPeerPort == 0 {
+			return fmt.Errorf("UDP connection not ready")
+		}
+		remoteAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(ts.RTPPeerIP, fmt.Sprintf("%d", ts.RTPPeerPort)))
+		if err != nil {
+			return fmt.Errorf("resolve remote addr: %w", err)
+		}
+		_, err = ts.RTPConn.WriteToUDP(packet, remoteAddr)
+		return err
+
+	case TransportTCPPassive, TransportTCPActive:
+		if ts.TCPConn == nil {
+			return fmt.Errorf("TCP connection not ready")
+		}
+		_, err := ts.TCPConn.Write(packet)
+		return err
+
+	default:
+		return fmt.Errorf("unsupported transport mode: %d", ts.TransportMode)
+	}
+}
+
+// buildRTPPacket 构建 RTP 包
+func (ts *TalkSession) buildRTPPacket(data []byte) []byte {
+	ts.SeqNum++
+	ts.Timestamp += 160 // 8000Hz, 20ms = 160 samples
+
+	packet := make([]byte, 12+len(data))
+	packet[0] = 0x80           // V=2
+	packet[1] = ts.PayloadType // PT=8 (PCMA)
+	binary.BigEndian.PutUint16(packet[2:4], ts.SeqNum)
+	binary.BigEndian.PutUint32(packet[4:8], ts.Timestamp)
+
+	// SSRC
+	ssrc := parseSSRC(ts.SSRC)
+	binary.BigEndian.PutUint32(packet[8:12], ssrc)
+
+	copy(packet[12:], data)
+	return packet
+}
+
+// parseSSRC 解析 SSRC 字符串为 uint32
+func parseSSRC(s string) uint32 {
+	var ssrc uint32
+	fmt.Sscanf(s, "%d", &ssrc)
+	return ssrc
+}
+
+// Stop 停止对讲会话
+func (ts *TalkSession) Stop() error {
+	var err error
+	ts.StopOnce.Do(func() {
+		ts.mu.Lock()
+		ts.stopped = true
+		ts.mu.Unlock()
+
+		close(ts.AudioChan)
+
+		if ts.RTPConn != nil {
+			ts.RTPConn.Close()
+		}
+		if ts.TCPConn != nil {
+			ts.TCPConn.Close()
+		}
+		if ts.TCPListener != nil {
+			ts.TCPListener.Close()
+		}
+
+		slog.Info("[Talk] session stopped", "device_id", ts.DeviceID, "channel_id", ts.ChannelID)
+	})
+	return err
+}
