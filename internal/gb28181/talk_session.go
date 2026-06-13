@@ -2,6 +2,7 @@ package gb28181
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -9,6 +10,14 @@ import (
 	"time"
 
 	"github.com/emiago/sipgo"
+)
+
+const (
+	PayloadTypePCMA      uint8 = 8
+	AudioChanBuffer      int   = 100
+	TCPDialTimeout             = 10 * time.Second
+	RTPSamplesPer20ms    uint32 = 160
+	RTPVersion2          byte  = 0x80
 )
 
 // TalkSession 表示一个对讲会话
@@ -51,8 +60,8 @@ func NewTalkSession(deviceID, channelID string, mode TransportMode, cfg *Config,
 		DeviceID:      deviceID,
 		ChannelID:     channelID,
 		TransportMode: mode,
-		PayloadType:   8, // PCMA
-		AudioChan:     make(chan []byte, 100),
+		PayloadType:   PayloadTypePCMA,
+		AudioChan:     make(chan []byte, AudioChanBuffer),
 		ReadyCh:       make(chan struct{}),
 		client:        client,
 		cfg:           cfg,
@@ -113,7 +122,7 @@ func (ts *TalkSession) acceptTCPConn() {
 // connectTCP 主动连接设备（TCP 主动模式）
 func (ts *TalkSession) connectTCP(peerIP string, peerPort int) {
 	addr := net.JoinHostPort(peerIP, fmt.Sprintf("%d", peerPort))
-	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	conn, err := net.DialTimeout("tcp", addr, TCPDialTimeout)
 	if err != nil {
 		slog.Error("[Talk] connect TCP failed", "error", err, "addr", addr)
 		return
@@ -176,7 +185,10 @@ func (ts *TalkSession) sendAudioData(data []byte) error {
 	}
 
 	// 构建 RTP 包
-	packet := ts.buildRTPPacket(data)
+	packet, err := ts.buildRTPPacket(data)
+	if err != nil {
+		return fmt.Errorf("build RTP packet: %w", err)
+	}
 
 	// 根据传输模式发送
 	switch ts.TransportMode {
@@ -204,29 +216,37 @@ func (ts *TalkSession) sendAudioData(data []byte) error {
 }
 
 // buildRTPPacket 构建 RTP 包
-func (ts *TalkSession) buildRTPPacket(data []byte) []byte {
+func (ts *TalkSession) buildRTPPacket(data []byte) ([]byte, error) {
 	ts.SeqNum++
-	ts.Timestamp += 160 // 8000Hz, 20ms = 160 samples
+	ts.Timestamp += RTPSamplesPer20ms
 
 	packet := make([]byte, 12+len(data))
-	packet[0] = 0x80           // V=2
-	packet[1] = ts.PayloadType // PT=8 (PCMA)
+	packet[0] = RTPVersion2
+	packet[1] = ts.PayloadType
 	binary.BigEndian.PutUint16(packet[2:4], ts.SeqNum)
 	binary.BigEndian.PutUint32(packet[4:8], ts.Timestamp)
 
-	// SSRC
-	ssrc := parseSSRC(ts.SSRC)
+	ssrc, err := parseSSRC(ts.SSRC)
+	if err != nil {
+		return nil, fmt.Errorf("parse SSRC %q: %w", ts.SSRC, err)
+	}
 	binary.BigEndian.PutUint32(packet[8:12], ssrc)
 
 	copy(packet[12:], data)
-	return packet
+	return packet, nil
 }
 
 // parseSSRC 解析 SSRC 字符串为 uint32
-func parseSSRC(s string) uint32 {
+func parseSSRC(s string) (uint32, error) {
 	var ssrc uint32
-	fmt.Sscanf(s, "%d", &ssrc)
-	return ssrc
+	n, err := fmt.Sscanf(s, "%d", &ssrc)
+	if err != nil {
+		return 0, fmt.Errorf("scan SSRC %q: %w", s, err)
+	}
+	if n != 1 {
+		return 0, fmt.Errorf("scan SSRC %q: parsed %d values, want 1", s, n)
+	}
+	return ssrc, nil
 }
 
 // Stop 停止对讲会话
@@ -235,18 +255,18 @@ func (ts *TalkSession) Stop() error {
 	ts.StopOnce.Do(func() {
 		ts.mu.Lock()
 		ts.stopped = true
+		close(ts.AudioChan)
+		ts.AudioChan = nil
 		ts.mu.Unlock()
 
-		close(ts.AudioChan)
-
 		if ts.RTPConn != nil {
-			ts.RTPConn.Close()
+			err = errors.Join(err, ts.RTPConn.Close())
 		}
 		if ts.TCPConn != nil {
-			ts.TCPConn.Close()
+			err = errors.Join(err, ts.TCPConn.Close())
 		}
 		if ts.TCPListener != nil {
-			ts.TCPListener.Close()
+			err = errors.Join(err, ts.TCPListener.Close())
 		}
 
 		slog.Info("[Talk] session stopped", "device_id", ts.DeviceID, "channel_id", ts.ChannelID)

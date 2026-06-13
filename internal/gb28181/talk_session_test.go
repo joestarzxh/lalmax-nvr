@@ -34,7 +34,10 @@ func TestBuildRTPPacket(t *testing.T) {
 	}
 
 	data := []byte{0x01, 0x02, 0x03, 0x04}
-	packet := session.buildRTPPacket(data)
+	packet, err := session.buildRTPPacket(data)
+	if err != nil {
+		t.Fatalf("buildRTPPacket failed: %v", err)
+	}
 
 	// 检查 RTP 头
 	if packet[0] != 0x80 {
@@ -63,8 +66,18 @@ func TestBuildRTPPacket(t *testing.T) {
 }
 
 func TestParseSSRC(t *testing.T) {
-	ssrc := parseSSRC("1234567890")
+	ssrc, err := parseSSRC("1234567890")
+	if err != nil {
+		t.Fatalf("parseSSRC failed: %v", err)
+	}
 	if ssrc != 1234567890 {
 		t.Errorf("Expected ssrc 1234567890, got %d", ssrc)
+	}
+}
+
+func TestParseSSRCError(t *testing.T) {
+	_, err := parseSSRC("not_a_number")
+	if err == nil {
+		t.Error("Expected error for invalid SSRC, got nil")
 	}
 }
