@@ -178,40 +178,48 @@ func (ts *TalkSession) startAudioSender() {
 // sendAudioData 发送音频数据
 func (ts *TalkSession) sendAudioData(data []byte) error {
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
-
 	if ts.stopped {
+		ts.mu.Unlock()
 		return fmt.Errorf("session stopped")
 	}
 
-	// 构建 RTP 包
+	// 构建 RTP 包（需要锁保护 SeqNum/Timestamp）
 	packet, err := ts.buildRTPPacket(data)
 	if err != nil {
+		ts.mu.Unlock()
 		return fmt.Errorf("build RTP packet: %w", err)
 	}
 
-	// 根据传输模式发送
-	switch ts.TransportMode {
+	// 复制连接引用，避免在 I/O 期间持锁
+	mode := ts.TransportMode
+	udpConn := ts.RTPConn
+	udpIP := ts.RTPPeerIP
+	udpPort := ts.RTPPeerPort
+	tcpConn := ts.TCPConn
+	ts.mu.Unlock()
+
+	// 根据传输模式发送（不持锁）
+	switch mode {
 	case TransportUDP:
-		if ts.RTPConn == nil || ts.RTPPeerIP == "" || ts.RTPPeerPort == 0 {
+		if udpConn == nil || udpIP == "" || udpPort == 0 {
 			return fmt.Errorf("UDP connection not ready")
 		}
-		remoteAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(ts.RTPPeerIP, fmt.Sprintf("%d", ts.RTPPeerPort)))
+		remoteAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(udpIP, fmt.Sprintf("%d", udpPort)))
 		if err != nil {
 			return fmt.Errorf("resolve remote addr: %w", err)
 		}
-		_, err = ts.RTPConn.WriteToUDP(packet, remoteAddr)
+		_, err = udpConn.WriteToUDP(packet, remoteAddr)
 		return err
 
 	case TransportTCPPassive, TransportTCPActive:
-		if ts.TCPConn == nil {
+		if tcpConn == nil {
 			return fmt.Errorf("TCP connection not ready")
 		}
-		_, err := ts.TCPConn.Write(packet)
+		_, err := tcpConn.Write(packet)
 		return err
 
 	default:
-		return fmt.Errorf("unsupported transport mode: %d", ts.TransportMode)
+		return fmt.Errorf("unsupported transport mode: %d", mode)
 	}
 }
 

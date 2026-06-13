@@ -274,7 +274,18 @@ func (s *Server) handlerInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
-	// This is from a downstream device - likely a broadcast INVITE
+	// Check for pending talk sessions first
+	if from != nil {
+		to := req.To()
+		if to != nil {
+			if _, ok := s.talk.GetSession(from.Address.User, to.Address.User); ok {
+				s.talk.OnInvite(req, tx)
+				return
+			}
+		}
+	}
+
+	// Fall through to broadcast
 	s.broadcast.OnInvite(req, tx)
 }
 

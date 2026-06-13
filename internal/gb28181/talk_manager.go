@@ -166,7 +166,8 @@ func (tm *TalkManager) OnInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
-	// 更新会话信息
+	// 更新会话信息（持锁防止数据竞争）
+	session.mu.Lock()
 	session.RTPPeerIP = peerIP
 	session.RTPPeerPort = peerPort
 	if deviceSSRC != "" {
@@ -189,6 +190,7 @@ func (tm *TalkManager) OnInvite(req *sip.Request, tx sip.ServerTransaction) {
 		}
 	}
 	session.TransportMode = transportMode
+	session.mu.Unlock()
 
 	// 构建 200 OK 响应
 	sdpIP := tm.cfg.MediaIP
