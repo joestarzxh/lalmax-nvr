@@ -352,7 +352,7 @@
     <div>
       <label for="cam-protocol" class="input-label">{t('cameras.protocol')}</label>
       <select id="cam-protocol" class="input" bind:value={formProtocol}>
-        {#each protocols as proto (proto.id)}
+        {#each protocols.filter(p => p.addable !== false) as proto (proto.id)}
           <option value={proto.id}>{proto.label}</option>
         {/each}
       </select>
@@ -394,7 +394,11 @@
       </label>
       <div class="flex gap-2">
         <input id="cam-url" type="text" class="input flex-1 {validationErrors['url'] ? 'border-red-500' : ''}" bind:value={formUrl}
-          placeholder={formProtocol === 'xiaomi' ? 'xiaomi://device_id' : formProtocol === 'onvif' ? 'http://192.168.1.100:80/onvif/device_service' : 'rtsp://...'}
+          placeholder={formProtocol === 'xiaomi' ? 'xiaomi://device_id' 
+            : formProtocol === 'onvif' ? 'http://192.168.1.100:80/onvif/device_service' 
+            : formProtocol === 'rtmp-pull' ? 'rtmp://example.com/live/stream' 
+            : formProtocol === 'http-flv-pull' ? 'http://example.com/live/stream.flv' 
+            : 'rtsp://...'}
           onblur={() => validateField('url', formUrl)} oninput={() => { if (validationErrors['url']) delete validationErrors['url']; testResult = null; }} />
         {#if formProtocol !== 'xiaomi'}
           <button

@@ -402,6 +402,46 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			}
 		}
 		rec = recorder.NewTimelapseRecorder(tlCfg, cm.store)
+	case "rtmp-pull", "http-flv-pull":
+		// These protocols pull via lalmax relay, then record via lalmax's RTSP output
+		if recordingSourceURL == "" {
+			logger.Warn("relay pull protocol requires media engine", "camera_id", cam.ID, "protocol", cam.Protocol)
+			return nil
+		}
+		logger.Info("recording via relay pull", "camera_id", cam.ID, "protocol", cam.Protocol, "source_url", recordingSourceURL)
+		switch cam.Encoding {
+		case string(model.FormatH264), "": // Default to H264
+			h264Cfg := recorder.H264Config{
+				CameraID:      cam.ID,
+				RTSPURL:       recordingSourceURL,
+				RTSPTransport: "tcp",
+				SegmentDur:    segDur,
+				DB:            cm.db,
+				AudioEnabled:  cam.AudioEnabled,
+				EventBus:      cm.eventBus,
+			}
+			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
+				h264Cfg.FrameWatchdogTimeout = d
+			}
+			rec = recorder.NewH264Recorder(h264Cfg, cm.store, cm.metrics)
+		case string(model.FormatH265):
+			h265Cfg := recorder.H265Config{
+				CameraID:      cam.ID,
+				RTSPURL:       recordingSourceURL,
+				RTSPTransport: "tcp",
+				SegmentDur:    segDur,
+				DB:            cm.db,
+				AudioEnabled:  cam.AudioEnabled,
+				EventBus:      cm.eventBus,
+			}
+			if d, err := time.ParseDuration(cam.FrameWatchdogTimeout); err == nil && d > 0 {
+				h265Cfg.FrameWatchdogTimeout = d
+			}
+			rec = recorder.NewH265Recorder(h265Cfg, cm.store, cm.metrics)
+		default:
+			logger.Warn("unsupported encoding for relay pull recording", "camera_id", cam.ID, "encoding", cam.Encoding)
+			return nil
+		}
 	default:
 		return nil
 	}
@@ -422,6 +462,11 @@ func (cm *CameraManager) recordingSourceURL(cam config.CameraConfig) string {
 		}
 	case string(model.ProtoONVIF):
 		if enc := cm.normalizedRecordingEncoding(cam); enc != string(model.FormatH264) && enc != string(model.FormatH265) {
+			return ""
+		}
+	case "rtmp-pull", "http-flv-pull":
+		// Relay pull protocols always use lalmax RTSP output for recording
+		if cam.Encoding != string(model.FormatH264) && cam.Encoding != string(model.FormatH265) && cam.Encoding != "" {
 			return ""
 		}
 	default:
@@ -1512,6 +1557,9 @@ func (cm *CameraManager) shouldStartMediaPull(cam config.CameraConfig) bool {
 			return false
 		}
 		return cam.Encoding == string(model.FormatH264) || cam.Encoding == string(model.FormatH265)
+	case "rtmp-pull", "http-flv-pull":
+		// These protocols are pure relay pulls — always start media pull
+		return true
 	default:
 		return false
 	}

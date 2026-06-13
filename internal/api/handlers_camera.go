@@ -67,6 +67,9 @@ func (h *Handler) resolveCameraSourceType(ctx context.Context, row *storage.Came
 	case "rtmp_push", "srt_push", "whip_push", "relay_pull":
 		row.SourceType = row.Protocol
 		return
+	case "rtmp-pull", "http-flv-pull":
+		row.SourceType = "relay_pull"
+		return
 	}
 	if h.db == nil {
 		return
@@ -166,6 +169,9 @@ var validProtocols = map[string]bool{
 	"onvif": true,
 	// Plugin protocols
 	"xiaomi": true,
+	// Pull protocols (relay to lalmax)
+	"rtmp-pull":     true,
+	"http-flv-pull": true,
 	// Legacy combined protocols (accepted, will be normalized)
 	"rtsp_h264":  true,
 	"rtsp_h265":  true,

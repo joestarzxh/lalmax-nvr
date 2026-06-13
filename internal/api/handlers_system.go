@@ -748,6 +748,7 @@ type protocolInfo struct {
 	Label        string          `json:"label"`
 	Encodings    []string        `json:"encodings"`
 	BuiltIn      bool            `json:"built_in"`
+	Addable      bool            `json:"addable"`                // Whether this protocol can be manually added
 	Capabilities map[string]bool `json:"capabilities"`
 }
 
@@ -758,6 +759,7 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Label:        "RTSP",
 			Encodings:    []string{"h264", "h265", "mjpeg"},
 			BuiltIn:      true,
+			Addable:      true,
 			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": false, "auth": true},
 		},
 		{
@@ -765,6 +767,7 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Label:        "HTTP JPEG",
 			Encodings:    []string{"jpeg"},
 			BuiltIn:      true,
+			Addable:      true,
 			Capabilities: map[string]bool{"hls": false, "ptz": false, "snapshot": true, "discovery": false, "auth": true},
 		},
 		{
@@ -772,6 +775,7 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Label:        "ONVIF",
 			Encodings:    []string{"h264", "h265", "mjpeg"},
 			BuiltIn:      true,
+			Addable:      true,
 			Capabilities: map[string]bool{"hls": true, "ptz": true, "snapshot": false, "discovery": true, "auth": true},
 		},
 		{
@@ -779,6 +783,7 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Label:        "GB28181",
 			Encodings:    []string{"h264", "h265"},
 			BuiltIn:      true,
+			Addable:      false, // Auto-registered via SIP, not manually added
 			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
 		},
 		{
@@ -786,7 +791,32 @@ func (h *Handler) handleProtocols(w http.ResponseWriter, r *http.Request) {
 			Label:        "Xiaomi",
 			Encodings:    []string{"h264", "h265"},
 			BuiltIn:      true,
+			Addable:      true,
 			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": true, "auth": true},
+		},
+		{
+			ID:           "rtmp-pull",
+			Label:        "RTMP Pull",
+			Encodings:    []string{"h264", "h265"},
+			BuiltIn:      true,
+			Addable:      true,
+			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
+		},
+		{
+			ID:           "http-flv-pull",
+			Label:        "HTTP-FLV Pull",
+			Encodings:    []string{"h264", "h265"},
+			BuiltIn:      true,
+			Addable:      true,
+			Capabilities: map[string]bool{"hls": true, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
+		},
+		{
+			ID:           "rtmp",
+			Label:        "RTMP Push",
+			Encodings:    []string{"h264", "h265"},
+			BuiltIn:      true,
+			Addable:      false, // Auto-registered when stream is pushed
+			Capabilities: map[string]bool{"hls": false, "ptz": false, "snapshot": false, "discovery": false, "auth": false},
 		},
 	}
 

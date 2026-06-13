@@ -42,6 +42,18 @@
     const hasPermission = await checkMicrophonePermission();
     if (!hasPermission) return;
 
+    // Check if microphone device exists before requesting permission
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const hasMicrophone = devices.some(d => d.kind === 'audioinput');
+      if (!hasMicrophone) {
+        showToast(t('live.talk.noMicrophone') || '未检测到麦克风设备', 'error');
+        return;
+      }
+    } catch {
+      // enumerateDevices may fail, proceed with getUserMedia
+    }
+
     isConnecting = true;
     try {
       // Request microphone permission
@@ -97,10 +109,15 @@
 
     } catch (e) {
       console.error('Failed to start talk:', e);
-      if (e instanceof DOMException && e.name === 'NotAllowedError') {
-        showToast(t('live.talk.permissionDenied') || '请允许麦克风权限', 'error');
-      } else if (e instanceof DOMException && e.name === 'NotFoundError') {
-        showToast(t('live.talk.noMicrophone') || '未检测到麦克风设备', 'error');
+      if (e instanceof DOMException && (e.name === 'NotAllowedError' || e.name === 'NotFoundError')) {
+        // Check if any audio input device exists
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const hasMicrophone = devices.some(d => d.kind === 'audioinput');
+        if (!hasMicrophone) {
+          showToast(t('live.talk.noMicrophone') || '未检测到麦克风设备', 'error');
+        } else {
+          showToast(t('live.talk.permissionDenied') || '请允许麦克风权限', 'error');
+        }
       } else {
         showToast(t('live.talk.error') || '启动对讲失败', 'error');
       }

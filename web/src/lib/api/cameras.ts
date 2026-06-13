@@ -171,6 +171,7 @@ export interface ProtocolInfo {
   label: string;
   encodings: string[];
   builtIn: boolean;
+  addable?: boolean; // Whether this protocol can be manually added in the form
   capabilities: ProtocolCapabilities;
 }
 
@@ -181,6 +182,7 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     label: 'RTSP',
     encodings: ['h264', 'h265', 'mjpeg'],
     builtIn: true,
+    addable: true,
     capabilities: { hls: true, ptz: false, snapshot: false, discovery: false, auth: true },
   },
   {
@@ -188,6 +190,7 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     label: 'HTTP',
     encodings: ['jpeg'],
     builtIn: true,
+    addable: true,
     capabilities: { hls: false, ptz: false, snapshot: true, discovery: false, auth: true },
   },
   {
@@ -195,6 +198,7 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     label: 'ONVIF',
     encodings: ['h264', 'h265', 'mjpeg'],
     builtIn: true,
+    addable: true,
     capabilities: { hls: true, ptz: true, snapshot: false, discovery: true, auth: true },
   },
   {
@@ -202,6 +206,7 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     label: 'GB28181',
     encodings: ['h264', 'h265'],
     builtIn: true,
+    addable: false, // Auto-registered via SIP, not manually added
     capabilities: { hls: true, ptz: false, snapshot: false, discovery: false, auth: false },
   },
   {
@@ -209,13 +214,31 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     label: 'Xiaomi',
     encodings: ['h264', 'h265'],
     builtIn: true,
+    addable: true,
     capabilities: { hls: true, ptz: false, snapshot: false, discovery: true, auth: true },
   },
   {
-    id: 'rtmp',
-    label: 'RTMP',
-    encodings: ['h264'],
+    id: 'rtmp-pull',
+    label: 'RTMP Pull',
+    encodings: ['h264', 'h265'],
     builtIn: true,
+    addable: true,
+    capabilities: { hls: true, ptz: false, snapshot: false, discovery: false, auth: false },
+  },
+  {
+    id: 'http-flv-pull',
+    label: 'HTTP-FLV Pull',
+    encodings: ['h264', 'h265'],
+    builtIn: true,
+    addable: true,
+    capabilities: { hls: true, ptz: false, snapshot: false, discovery: false, auth: false },
+  },
+  {
+    id: 'rtmp',
+    label: 'RTMP Push',
+    encodings: ['h264', 'h265'],
+    builtIn: true,
+    addable: false, // Auto-registered when stream is pushed
     capabilities: { hls: false, ptz: false, snapshot: false, discovery: false, auth: false },
   },
   {
@@ -223,9 +246,14 @@ export const DEFAULT_PROTOCOLS: ProtocolInfo[] = [
     label: 'SRT',
     encodings: ['h264', 'h265'],
     builtIn: true,
+    addable: false, // Auto-registered when stream is pushed
     capabilities: { hls: false, ptz: false, snapshot: false, discovery: false, auth: false },
   },
 ];
+
+// Protocols that should NOT appear in the "Add Camera" form
+// (they are auto-registered or use special mechanisms)
+export const EXCLUDED_ADD_PROTOCOLS = ['gb28181'];
 
 // --- Camera CRUD ---
 

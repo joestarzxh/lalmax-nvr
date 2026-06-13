@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities } from '$lib/api';
+  import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, playGB28181Stream } from '$lib/api';
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo } from '$lib/api';
   import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Mic, MicOff } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
@@ -112,6 +112,20 @@
     try {
       camera = await getCamera(cameraId);
     } catch (e) {
+      // If camera not found and ID looks like GB28181 (contains ':'), try to start play first
+      if (cameraId.includes(':')) {
+        try {
+          const parts = cameraId.split(':');
+          if (parts.length === 2) {
+            await playGB28181Stream({ device_id: parts[0], channel_id: parts[1] });
+            // Retry loading camera after play starts
+            camera = await getCamera(cameraId);
+            return;
+          }
+        } catch (playErr) {
+          console.warn('Failed to start GB28181 play:', playErr);
+        }
+      }
       error = e instanceof Error ? e.message : t('live.failedLoadCamera');
       camera = null;
     } finally {

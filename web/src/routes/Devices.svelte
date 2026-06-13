@@ -954,19 +954,35 @@
       </div>
     {/if}
 
-    <!-- Add/Edit Form -->
+    <!-- Add/Edit Form Modal -->
     {#if showForm}
-      <div class="mb-6">
-        <CameraForm
-          {editingCamera}
-          {protocols}
-          {protocolsMap}
-          {xiaomiDeviceList}
-          globalTranscodingEnabled={false}
-          h265Available={true}
-          onsave={handleFormSave}
-          oncancel={handleFormCancel}
-        />
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="fixed inset-0 z-50 flex items-center justify-center"
+        role="presentation"
+        onmousedown={(e) => { if (e.target === e.currentTarget) handleFormCancel(); }}
+      >
+        <!-- Backdrop -->
+        <div class="fixed inset-0 bg-black/60 backdrop-blur-sm" aria-hidden="true"></div>
+        
+        <!-- Modal Content -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="relative card border th-border max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto"
+          onmousedown={(e) => e.stopPropagation()}
+        >
+          <CameraForm
+            {editingCamera}
+            {protocols}
+            {protocolsMap}
+            {xiaomiDeviceList}
+            globalTranscodingEnabled={false}
+            h265Available={true}
+            onsave={handleFormSave}
+            oncancel={handleFormCancel}
+          />
+        </div>
       </div>
     {/if}
 
