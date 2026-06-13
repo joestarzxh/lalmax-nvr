@@ -1,0 +1,301 @@
+package gb28181
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/emiago/sipgo"
+	"github.com/emiago/sipgo/sip"
+)
+
+// TalkManager 管理所有对讲会话
+type TalkManager struct {
+	mu       sync.RWMutex
+	sessions map[string]*TalkSession // key: deviceID_channelID
+	client   *sipgo.Client
+	cfg      *Config
+}
+
+// NewTalkManager 创建新的 TalkManager
+func NewTalkManager(client *sipgo.Client, cfg *Config) *TalkManager {
+	return &TalkManager{
+		sessions: make(map[string]*TalkSession),
+		client:   client,
+		cfg:      cfg,
+	}
+}
+
+// talkKey 生成会话 key
+func talkKey(deviceID, channelID string) string {
+	return deviceID + "_" + channelID
+}
+
+// StartTalk 启动对讲会话
+func (tm *TalkManager) StartTalk(deviceID, channelID string, mode TransportMode, store *DeviceStore) (*TalkSession, error) {
+	key := talkKey(deviceID, channelID)
+
+	tm.mu.Lock()
+	if existing, ok := tm.sessions[key]; ok {
+		tm.mu.Unlock()
+		return existing, nil
+	}
+	tm.mu.Unlock()
+
+	// 检查设备是否在线
+	dev, ok := store.Load(deviceID)
+	if !ok || !dev.IsOnline {
+		return nil, ErrDeviceOffline
+	}
+
+	_, ok = dev.GetChannel(channelID)
+	if !ok {
+		return nil, ErrChannelNotExist
+	}
+
+	// 创建会话
+	session := NewTalkSession(deviceID, channelID, mode, tm.cfg, tm.client)
+
+	// 根据传输模式准备网络连接
+	switch mode {
+	case TransportUDP:
+		if err := session.prepareUDPConn(); err != nil {
+			return nil, fmt.Errorf("prepare UDP: %w", err)
+		}
+	case TransportTCPPassive:
+		if err := session.prepareTCPListener(); err != nil {
+			return nil, fmt.Errorf("prepare TCP listener: %w", err)
+		}
+	case TransportTCPActive:
+		// TCP 主动模式在收到 INVITE 后才连接
+		session.RTPPort = 0 // 端口在连接时分配
+	}
+
+	// 生成 SSRC
+	session.SSRC = fmt.Sprintf("%010d", randInt(1000000000, 9999999999))
+
+	// 存储会话
+	tm.mu.Lock()
+	tm.sessions[key] = session
+	tm.mu.Unlock()
+
+	// 发送 Broadcast Notify
+	if err := tm.sendBroadcastNotify(session, store); err != nil {
+		tm.RemoveSession(key)
+		return nil, fmt.Errorf("send broadcast notify: %w", err)
+	}
+
+	slog.Info("[Talk] session started", "device_id", deviceID, "channel_id", channelID, "mode", mode, "port", session.RTPPort)
+	return session, nil
+}
+
+// StopTalk 停止对讲会话
+func (tm *TalkManager) StopTalk(deviceID, channelID string) error {
+	key := talkKey(deviceID, channelID)
+	tm.mu.Lock()
+	session, ok := tm.sessions[key]
+	if !ok {
+		tm.mu.Unlock()
+		return nil
+	}
+	delete(tm.sessions, key)
+	tm.mu.Unlock()
+
+	return session.Stop()
+}
+
+// RemoveSession 移除会话
+func (tm *TalkManager) RemoveSession(key string) {
+	tm.mu.Lock()
+	delete(tm.sessions, key)
+	tm.mu.Unlock()
+}
+
+// GetSession 获取会话
+func (tm *TalkManager) GetSession(deviceID, channelID string) (*TalkSession, bool) {
+	key := talkKey(deviceID, channelID)
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	session, ok := tm.sessions[key]
+	return session, ok
+}
+
+// OnInvite 处理设备 INVITE 请求
+func (tm *TalkManager) OnInvite(req *sip.Request, tx sip.ServerTransaction) {
+	from := req.From()
+	if from == nil || from.Address.User == "" {
+		slog.Error("[Talk] OnInvite: invalid from header")
+		return
+	}
+
+	deviceID := from.Address.User
+	sdpBody := string(req.Body())
+
+	slog.Info("[Talk] OnInvite received", "device_id", deviceID, "sdp_len", len(sdpBody))
+
+	// 解析设备 SDP
+	peerIP, peerPort, isTCP, setupActive, deviceSSRC, payloadType, err := parseTalkSDP(sdpBody)
+	if err != nil {
+		slog.Error("[Talk] OnInvite: parse SDP failed", "error", err)
+		tx.Respond(sip.NewResponseFromRequest(req, 400, "Bad Request", nil))
+		return
+	}
+
+	// 查找匹配的会话
+	tm.mu.RLock()
+	var session *TalkSession
+	for _, s := range tm.sessions {
+		if s.DeviceID == deviceID {
+			session = s
+			break
+		}
+	}
+	tm.mu.RUnlock()
+
+	if session == nil {
+		slog.Warn("[Talk] OnInvite: no session found", "device_id", deviceID)
+		tx.Respond(sip.NewResponseFromRequest(req, 404, "Not Found", nil))
+		return
+	}
+
+	// 更新会话信息
+	session.RTPPeerIP = peerIP
+	session.RTPPeerPort = peerPort
+	if deviceSSRC != "" {
+		session.SSRC = deviceSSRC
+	}
+	if payloadType >= 0 {
+		session.PayloadType = uint8(payloadType)
+	}
+
+	// 根据传输模式准备连接
+	transportMode := TransportUDP
+	if isTCP {
+		if setupActive {
+			transportMode = TransportTCPActive
+			// TCP 主动：NVR 连接设备
+			go session.connectTCP(peerIP, peerPort)
+		} else {
+			transportMode = TransportTCPPassive
+			// TCP 被动：等待设备连接（已在 StartTalk 中启动监听）
+		}
+	}
+	session.TransportMode = transportMode
+
+	// 构建 200 OK 响应
+	sdpIP := tm.cfg.MediaIP
+	if sdpIP == "" {
+		sdpIP = tm.cfg.Host
+	}
+
+	sdp := buildTalkSDP(tm.cfg.ID, sdpIP, session.RTPPort, transportMode, session.SSRC)
+	okResp := sip.NewResponseFromRequest(req, 200, "OK", nil)
+	okResp.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
+	okResp.AppendHeader(sip.NewHeader("Contact", fmt.Sprintf("sip:%s@%s:%d", tm.cfg.ID, sdpIP, tm.cfg.Port)))
+	okResp.SetBody(sdp)
+
+	if err := tx.Respond(okResp); err != nil {
+		slog.Error("[Talk] OnInvite: send 200 OK failed", "error", err)
+		return
+	}
+
+	// 启动音频发送器
+	go session.startAudioSender()
+
+	// 通知就绪（UDP 模式或 TCP 主动模式）
+	if transportMode == TransportUDP || transportMode == TransportTCPActive {
+		session.ReadyOnce.Do(func() {
+			close(session.ReadyCh)
+		})
+	}
+
+	slog.Info("[Talk] OnInvite: 200 OK sent", "device_id", deviceID, "port", session.RTPPort, "mode", transportMode)
+}
+
+// OnAck 处理设备 ACK 请求
+func (tm *TalkManager) OnAck(req *sip.Request, tx sip.ServerTransaction) {
+	from := req.From()
+	if from == nil {
+		return
+	}
+	deviceID := from.Address.User
+	slog.Debug("[Talk] OnAck received", "device_id", deviceID)
+}
+
+// OnBye 处理设备 BYE 请求
+func (tm *TalkManager) OnBye(req *sip.Request, tx sip.ServerTransaction) {
+	from := req.From()
+	if from == nil {
+		return
+	}
+	deviceID := from.Address.User
+
+	tm.mu.Lock()
+	for key, session := range tm.sessions {
+		if session.DeviceID == deviceID {
+			delete(tm.sessions, key)
+			go session.Stop()
+			break
+		}
+	}
+	tm.mu.Unlock()
+
+	tx.Respond(sip.NewResponseFromRequest(req, 200, "OK", nil))
+	slog.Info("[Talk] OnBye: session stopped", "device_id", deviceID)
+}
+
+// sendBroadcastNotify 发送 Broadcast Notify
+func (tm *TalkManager) sendBroadcastNotify(session *TalkSession, store *DeviceStore) error {
+	dev, ok := store.Load(session.DeviceID)
+	if !ok {
+		return ErrDeviceNotExist
+	}
+
+	uri := sip.Uri{
+		Scheme: "sip",
+		User:   session.ChannelID,
+		Host:   getHost(dev.Address),
+		Port:   getPort(dev.Address),
+	}
+
+	req := sip.NewRequest(sip.MESSAGE, uri)
+	req.AppendHeader(sip.NewHeader("Content-Type", "Application/MANSCDP+xml"))
+
+	sourceID := tm.cfg.ID
+	if sourceID == "" {
+		sourceID = session.DeviceID
+	}
+
+	sn := randInt(100000, 999999)
+	body := fmt.Sprintf(`<?xml version="1.0" encoding="GB2312"?>
+<Notify>
+<CmdType>Broadcast</CmdType>
+<SN>%d</SN>
+<SourceID>%s</SourceID>
+<TargetID>%s</TargetID>
+</Notify>`, sn, sourceID, session.ChannelID)
+	req.SetBody([]byte(body))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := tm.client.Do(ctx, req)
+	return err
+}
+
+// StopAll 停止所有会话
+func (tm *TalkManager) StopAll() {
+	tm.mu.Lock()
+	sessions := make([]*TalkSession, 0, len(tm.sessions))
+	for _, s := range tm.sessions {
+		sessions = append(sessions, s)
+	}
+	tm.sessions = make(map[string]*TalkSession)
+	tm.mu.Unlock()
+
+	for _, s := range sessions {
+		s.Stop()
+	}
+}
