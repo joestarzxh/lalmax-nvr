@@ -720,7 +720,7 @@ func (h *GB28181Handler) ListDownloads(w http.ResponseWriter, r *http.Request) {
 
 // ==================== Talk WebSocket API ====================
 
-// handleTalkWS handles WebSocket connections for voice talk/intercom.
+// HandleTalkWS handles WebSocket connections for voice talk/intercom.
 func (h *GB28181Handler) HandleTalkWS(w http.ResponseWriter, r *http.Request) {
 	if h.svr == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
@@ -729,35 +729,46 @@ func (h *GB28181Handler) HandleTalkWS(w http.ResponseWriter, r *http.Request) {
 
 	deviceID := r.URL.Query().Get("device_id")
 	channelID := r.URL.Query().Get("channel_id")
+	transportStr := r.URL.Query().Get("transport")
+
 	if deviceID == "" || channelID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
 		return
 	}
 
-	// Get broadcast manager
-	bm := h.svr.GetBroadcastManager()
-	if bm == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "broadcast manager not initialized"})
+	// 解析传输模式
+	transportMode := gb28181.TransportUDP
+	switch transportStr {
+	case "1":
+		transportMode = gb28181.TransportTCPPassive
+	case "2":
+		transportMode = gb28181.TransportTCPActive
+	}
+
+	// 获取 TalkManager
+	tm := h.svr.GetTalkManager()
+	if tm == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "talk manager not initialized"})
 		return
 	}
 
-	// Check if session already exists
-	bs, exists := bm.GetSession(deviceID, channelID)
+	// 检查会话是否已存在
+	session, exists := tm.GetSession(deviceID, channelID)
 	if !exists {
-		// Start new broadcast session
+		// 启动新的对讲会话
 		var err error
-		bs, err = bm.StartBroadcast(deviceID, channelID, h.svr.GetDeviceStore())
+		session, err = tm.StartTalk(deviceID, channelID, transportMode, h.svr.GetDeviceStore())
 		if err != nil {
-			slog.Error("Failed to start broadcast", "error", err)
+			slog.Error("Failed to start talk", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 	}
 
-	// Upgrade to WebSocket
+	// 升级为 WebSocket
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
-			return true // Allow all origins for now
+			return true
 		},
 	}
 
@@ -768,19 +779,31 @@ func (h *GB28181Handler) HandleTalkWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	slog.Info("Talk WebSocket connected", "device_id", deviceID, "channel_id", channelID)
+	slog.Info("Talk WebSocket connected", "device_id", deviceID, "channel_id", channelID, "transport", transportMode)
 
-	// Wait for broadcast session to be ready
-	select {
-	case <-bs.ReadyCh:
-		// Session is ready
-	case <-time.After(30 * time.Second):
-		slog.Error("Talk session timeout", "device_id", deviceID)
-		conn.WriteMessage(websocket.TextMessage, []byte(`{"error":"session timeout"}`))
+	// 发送状态消息
+	statusMsg := map[string]interface{}{
+		"status":     "connected",
+		"session_id": deviceID + "_" + channelID,
+		"port":       session.RTPPort,
+		"transport":  transportMode,
+	}
+	if err := conn.WriteJSON(statusMsg); err != nil {
+		slog.Error("Failed to send status message", "error", err)
 		return
 	}
 
-	// Read audio data from WebSocket and send to broadcast session
+	// 等待会话就绪
+	select {
+	case <-session.ReadyCh:
+		// 会话就绪
+	case <-time.After(30 * time.Second):
+		slog.Error("Talk session timeout", "device_id", deviceID)
+		conn.WriteJSON(map[string]string{"error": "session timeout"})
+		return
+	}
+
+	// 读取音频数据并发送
 	for {
 		messageType, message, err := conn.ReadMessage()
 		if err != nil {
@@ -791,7 +814,7 @@ func (h *GB28181Handler) HandleTalkWS(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if messageType == websocket.BinaryMessage {
-			if err := bs.SendAudioData(message); err != nil {
+			if err := session.SendAudioData(message); err != nil {
 				slog.Error("Failed to send audio data", "error", err)
 			}
 		}

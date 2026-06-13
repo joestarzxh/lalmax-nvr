@@ -24,6 +24,7 @@ type Server struct {
 	cancel    context.CancelFunc
 	platforms *PlatformManager
 	broadcast *BroadcastManager
+	talk      *TalkManager
 	alarm     *AlarmManager
 	download  *DownloadManager
 }
@@ -81,6 +82,7 @@ func NewServer(cfg *Config, mediaEngine media.Engine, db *storage.DB) (*Server, 
 	// Initialize managers
 	s.platforms = NewPlatformManager(client, cfg.Host, cfg.MediaIP, cfg.ID, cfg.Password, store.GetDB())
 	s.broadcast = NewBroadcastManager(client, cfg)
+	s.talk = NewTalkManager(client, cfg)
 	s.alarm = NewAlarmManager(client, cfg, store.GetDB())
 	s.download = NewDownloadManager(client, cfg, mediaEngine, store.GetDB(), "")
 
@@ -207,6 +209,11 @@ func (s *Server) GetPlatforms() *PlatformManager {
 // GetBroadcastManager returns the broadcast manager.
 func (s *Server) GetBroadcastManager() *BroadcastManager {
 	return s.broadcast
+}
+
+// GetTalkManager returns the talk manager.
+func (s *Server) GetTalkManager() *TalkManager {
+	return s.talk
 }
 
 // GetAlarmManager returns the alarm manager.
@@ -350,6 +357,10 @@ func (s *Server) Stop() {
 			p.Stop()
 		}
 		s.platforms.mu.Unlock()
+	}
+	// Stop talk manager
+	if s.talk != nil {
+		s.talk.StopAll()
 	}
 	// Small delay to allow listeners to close
 	time.Sleep(100 * time.Millisecond)
