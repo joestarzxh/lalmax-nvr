@@ -220,7 +220,14 @@ func (tm *TalkManager) OnInvite(req *sip.Request, tx sip.ServerTransaction) {
 		if setupActive {
 			// 设备主动连接NVR -> NVR使用TCP被动模式（监听等待连接）
 			transportMode = TransportTCPPassive
-			// TCP 被动：已在 StartTalk 中启动监听，等待设备连接
+			// 如果session之前是UDP模式，需要启动TCP监听
+			if session.TCPListener == nil {
+				if err := session.prepareTCPListener(); err != nil {
+					slog.Error("[Talk] OnInvite: prepare TCP listener failed", "error", err)
+					tx.Respond(sip.NewResponseFromRequest(req, 500, "Internal Server Error", nil))
+					return
+				}
+			}
 		} else {
 			// 设备被动等待NVR连接 -> NVR使用TCP主动模式（连接设备）
 			transportMode = TransportTCPActive
@@ -237,6 +244,7 @@ func (tm *TalkManager) OnInvite(req *sip.Request, tx sip.ServerTransaction) {
 	}
 
 	sdp := buildTalkSDP(tm.cfg.ID, sdpIP, session.RTPPort, transportMode, session.SSRC)
+	slog.Info("[Talk] OnInvite: response SDP", "sdp", string(sdp))
 	okResp := sip.NewResponseFromRequest(req, 200, "OK", nil)
 	okResp.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
 	okResp.AppendHeader(sip.NewHeader("Contact", fmt.Sprintf("sip:%s@%s:%d", tm.cfg.ID, sdpIP, tm.cfg.Port)))
@@ -250,8 +258,12 @@ func (tm *TalkManager) OnInvite(req *sip.Request, tx sip.ServerTransaction) {
 	// 启动音频发送器
 	go session.startAudioSender()
 
-	// 通知就绪（UDP 模式或 TCP 主动模式）
-	if transportMode == TransportUDP || transportMode == TransportTCPActive {
+	// 根据传输模式启动连接
+	if transportMode == TransportTCPPassive {
+		// TCP被动模式：启动accept等待设备连接
+		go session.acceptTCPConn()
+	} else if transportMode == TransportUDP || transportMode == TransportTCPActive {
+		// UDP或TCP主动模式：立即通知就绪
 		session.ReadyOnce.Do(func() {
 			close(session.ReadyCh)
 		})
