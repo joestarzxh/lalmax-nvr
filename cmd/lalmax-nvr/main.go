@@ -20,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	_ "net/http/pprof"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
 	"github.com/lalmax-pro/lalmax-nvr/internal/api"
 	"github.com/lalmax-pro/lalmax-nvr/internal/ban"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
@@ -745,6 +746,10 @@ func (a *App) buildRouter() http.Handler {
 		handler.SetConfigWatcher(a.watcher)
 	}
 
+	// Wire AI Manager
+	aiMgr := ai.NewManager(cfg.AI)
+	handler.SetAIManager(aiMgr)
+
 	// Create and populate StreamRegistry for protocol discovery
 	reg := api.NewStreamRegistry()
 	if a.mediaEngine != nil {
@@ -869,6 +874,8 @@ func (a *App) buildRouter() http.Handler {
 		r.Post("/api/gb28181/ptz", gbHandler.PTZControl)
 		r.Post("/api/gb28181/record_info", gbHandler.RecordInfo)
 		r.Post("/api/gb28181/playback", gbHandler.Playback)
+		r.Post("/api/gb28181/playback/speed", gbHandler.PlaySpeed)
+		r.Post("/api/gb28181/playback/seek", gbHandler.PlaySeek)
 		// Platform cascading
 		r.Get("/api/gb28181/platforms", gbHandler.ListPlatforms)
 		r.Post("/api/gb28181/platforms", gbHandler.AddPlatform)
@@ -877,6 +884,9 @@ func (a *App) buildRouter() http.Handler {
 		r.Post("/api/gb28181/broadcast/start", gbHandler.StartBroadcast)
 		r.Post("/api/gb28181/broadcast/stop", gbHandler.StopBroadcast)
 		r.Get("/api/gb28181/talk/ws", gbHandler.HandleTalkWS)
+		// WHIP Talk
+		r.Post("/api/gb28181/talk/start", gbHandler.HandleStartTalkWhip)
+		r.Post("/api/gb28181/talk/stop", gbHandler.HandleStopTalkWhip)
 		// Alarm
 		r.Get("/api/gb28181/alarms", gbHandler.ListAlarms)
 		// Download

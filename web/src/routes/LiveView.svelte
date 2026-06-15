@@ -393,8 +393,8 @@
                     {t('live.talk.title') || '语音对讲'}
                   </h3>
                   <TalkButton
-                    deviceId={camera.id.split('_')[0] || camera.id}
-                    channelId={camera.id.split('_')[1] || '0'}
+                    deviceId={camera.id.split(':')[0] || camera.id}
+                    channelId={camera.id.split(':')[1] || '0'}
                   />
                 </div>
               {/if}

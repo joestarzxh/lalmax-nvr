@@ -13,60 +13,30 @@
   let audioContext: AudioContext | null = null;
   let mediaStream: MediaStream | null = null;
   let processor: ScriptProcessorNode | null = null;
-  let audioWorklet: AudioWorkletNode | null = null;
 
   const SAMPLE_RATE = 8000;
   const BUFFER_SIZE = 1024;
 
-  async function checkMicrophonePermission(): Promise<boolean> {
-    try {
-      // Check if Permissions API is supported
-      if (navigator.permissions && navigator.permissions.query) {
-        const result = await navigator.permissions.query({ name: 'microphone' as PermissionName });
-        if (result.state === 'denied') {
-          showToast(t('live.talk.permissionDenied') || '麦克风权限被拒绝，请在浏览器设置中允许麦克风权限', 'error');
-          return false;
-        }
-      }
-      return true;
-    } catch {
-      // Permissions API not supported, proceed with getUserMedia
-      return true;
-    }
-  }
-
   async function startTalk() {
+    console.log('[Talk] startTalk called', { isTalking, isConnecting, deviceId, channelId });
     if (isTalking || isConnecting) return;
-
-    // Check permission first
-    const hasPermission = await checkMicrophonePermission();
-    if (!hasPermission) return;
-
-    // Check if microphone device exists before requesting permission
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const hasMicrophone = devices.some(d => d.kind === 'audioinput');
-      if (!hasMicrophone) {
-        showToast(t('live.talk.noMicrophone') || '未检测到麦克风设备', 'error');
-        return;
-      }
-    } catch {
-      // enumerateDevices may fail, proceed with getUserMedia
-    }
 
     isConnecting = true;
     try {
-      // Request microphone permission
+      console.log('[Talk] Requesting microphone...');
+      // 获取音频流，使用WebRTC的音频处理（回声消除、降噪等）
       mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          sampleRate: SAMPLE_RATE,
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
-        }
+          autoGainControl: true,
+        },
+        video: false,
       });
+      console.log('[Talk] Got media stream:', mediaStream);
 
-      // Create WebSocket connection
+      // 创建WebSocket连接
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const params = new URLSearchParams({
         device_id: deviceId,
@@ -75,11 +45,13 @@
       const authToken = getAuthToken();
       if (authToken) params.set('token', authToken);
       const wsUrl = `${protocol}//${window.location.host}/api/gb28181/talk/ws?${params.toString()}`;
+      
+      console.log('[Talk] Connecting WebSocket to:', wsUrl);
       ws = new WebSocket(wsUrl);
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
-        // Start audio capture
+        console.log('[Talk] WebSocket connected');
         startAudioCapture();
         isTalking = true;
         isConnecting = false;
@@ -87,61 +59,73 @@
       };
 
       ws.onerror = (e) => {
-        console.error('WebSocket error:', e);
+        console.error('[Talk] WebSocket error:', e);
         showToast(t('live.talk.error') || '对讲连接失败', 'error');
         stopTalk();
       };
 
-      ws.onclose = () => {
+      ws.onclose = (e) => {
+        console.log('[Talk] WebSocket closed:', e.code, e.reason);
         if (isTalking) {
           showToast(t('live.talk.stopped') || '对讲已停止', 'info');
         }
         stopTalk();
       };
 
-      // Timeout
+      // 超时处理
       setTimeout(() => {
         if (isConnecting) {
+          console.warn('[Talk] Connection timeout');
           showToast(t('live.talk.timeout') || '连接超时', 'error');
           stopTalk();
         }
       }, 10000);
 
     } catch (e) {
-      console.error('Failed to start talk:', e);
-      if (e instanceof DOMException && (e.name === 'NotAllowedError' || e.name === 'NotFoundError')) {
-        // Check if any audio input device exists
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const hasMicrophone = devices.some(d => d.kind === 'audioinput');
-        if (!hasMicrophone) {
+      console.error('[Talk] Failed to start:', e);
+      if (e instanceof DOMException) {
+        if (e.name === 'NotAllowedError') {
+          showToast(t('live.talk.permissionDenied') || '麦克风权限被拒绝，请点击地址栏左侧的麦克风图标允许权限', 'error');
+        } else if (e.name === 'NotFoundError') {
           showToast(t('live.talk.noMicrophone') || '未检测到麦克风设备', 'error');
+        } else if (e.name === 'NotReadableError') {
+          showToast(t('live.talk.microphoneInUse') || '麦克风被其他应用占用', 'error');
         } else {
-          showToast(t('live.talk.permissionDenied') || '请允许麦克风权限', 'error');
+          showToast(t('live.talk.error') || '启动对讲失败: ' + e.message, 'error');
         }
       } else {
         showToast(t('live.talk.error') || '启动对讲失败', 'error');
       }
       isConnecting = false;
+      stopTalk();
     }
   }
 
   function startAudioCapture() {
-    if (!mediaStream || !ws) return;
+    if (!mediaStream || !ws) {
+      console.error('[Talk] Cannot start audio capture: missing stream or ws');
+      return;
+    }
 
+    console.log('[Talk] Starting audio capture...');
+    // 使用较低的采样率创建AudioContext，浏览器会自动重采样
     audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
     const source = audioContext.createMediaStreamSource(mediaStream);
 
-    // Use ScriptProcessorNode for broader compatibility
+    // 使用ScriptProcessorNode采集音频
     processor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
     processor.onaudioprocess = (e) => {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
       const inputData = e.inputBuffer.getChannelData(0);
-      ws.send(float32ToPCMA(inputData));
+      const pcmData = float32ToPCMA(inputData);
+      ws.send(pcmData);
     };
 
     source.connect(processor);
+    // 连接到destination才能触发onaudioprocess
     processor.connect(audioContext.destination);
+    console.log('[Talk] Audio capture started');
   }
 
   function float32ToPCMA(float32Array: Float32Array): ArrayBuffer {
@@ -186,10 +170,10 @@
   }
 
   function stopTalk() {
+    console.log('[Talk] Stopping talk...');
     isTalking = false;
     isConnecting = false;
 
-    // Stop audio processing
     if (processor) {
       processor.disconnect();
       processor = null;
@@ -200,20 +184,20 @@
       audioContext = null;
     }
 
-    // Stop microphone
     if (mediaStream) {
       mediaStream.getTracks().forEach(track => track.stop());
       mediaStream = null;
     }
 
-    // Close WebSocket
     if (ws) {
       ws.close();
       ws = null;
     }
+    console.log('[Talk] Talk stopped');
   }
 
   function toggleTalk() {
+    console.log('[Talk] Button clicked', { isTalking, isConnecting });
     if (isTalking) {
       stopTalk();
       showToast(t('live.talk.stopped') || '对讲已停止', 'info');
@@ -228,7 +212,6 @@
 </script>
 
 <div class="flex flex-col items-center gap-3">
-  <!-- Talk button -->
   <button
     onclick={toggleTalk}
     disabled={isConnecting}
@@ -329,33 +312,14 @@
     animation: audioBar 0.5s infinite alternate;
   }
 
-  .audio-indicator .bar:nth-child(1) {
-    animation-delay: 0s;
-    height: 8px;
-  }
-  .audio-indicator .bar:nth-child(2) {
-    animation-delay: 0.1s;
-    height: 16px;
-  }
-  .audio-indicator .bar:nth-child(3) {
-    animation-delay: 0.2s;
-    height: 12px;
-  }
-  .audio-indicator .bar:nth-child(4) {
-    animation-delay: 0.3s;
-    height: 18px;
-  }
-  .audio-indicator .bar:nth-child(5) {
-    animation-delay: 0.4s;
-    height: 10px;
-  }
+  .audio-indicator .bar:nth-child(1) { animation-delay: 0s; height: 8px; }
+  .audio-indicator .bar:nth-child(2) { animation-delay: 0.1s; height: 16px; }
+  .audio-indicator .bar:nth-child(3) { animation-delay: 0.2s; height: 12px; }
+  .audio-indicator .bar:nth-child(4) { animation-delay: 0.3s; height: 18px; }
+  .audio-indicator .bar:nth-child(5) { animation-delay: 0.4s; height: 10px; }
 
   @keyframes audioBar {
-    0% {
-      height: 4px;
-    }
-    100% {
-      height: 20px;
-    }
+    0% { height: 4px; }
+    100% { height: 20px; }
   }
 </style>

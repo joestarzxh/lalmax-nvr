@@ -351,6 +351,79 @@ func (h *GB28181Handler) Playback(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// PlaySpeed changes the playback speed.
+func (h *GB28181Handler) PlaySpeed(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
+	var req struct {
+		DeviceID  string  `json:"device_id"`
+		ChannelID string  `json:"channel_id"`
+		Speed     float32 `json:"speed"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.DeviceID == "" || req.ChannelID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		return
+	}
+
+	if req.Speed != 0.5 && req.Speed != 1 && req.Speed != 2 && req.Speed != 4 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "speed must be 0.5, 1, 2, or 4"})
+		return
+	}
+
+	if err := h.svr.PlaySpeed(&gb28181.PlaySpeedInput{
+		DeviceID:  req.DeviceID,
+		ChannelID: req.ChannelID,
+		Speed:     req.Speed,
+	}); err != nil {
+		slog.Error("GB28181 play speed failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// PlaySeek seeks to a position in playback.
+func (h *GB28181Handler) PlaySeek(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
+	var req struct {
+		DeviceID  string `json:"device_id"`
+		ChannelID string `json:"channel_id"`
+		SeekTime  int64  `json:"seek_time"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.DeviceID == "" || req.ChannelID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		return
+	}
+
+	if err := h.svr.PlaySeek(&gb28181.PlaySeekInput{
+		DeviceID:  req.DeviceID,
+		ChannelID: req.ChannelID,
+		SeekTime:  req.SeekTime,
+	}); err != nil {
+		slog.Error("GB28181 play seek failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // ==================== Platform API ====================
 
 // ListPlatforms returns all upstream platforms.
@@ -827,4 +900,117 @@ func (h *GB28181Handler) HandleTalkWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("Talk WebSocket disconnected", "device_id", deviceID, "channel_id", channelID)
+}
+
+// ==================== WHIP Talk API ====================
+
+// StartTalkWhipRequest is the request body for starting a WHIP talk session.
+type StartTalkWhipRequest struct {
+	StreamName string `json:"stream_name"`
+	DeviceID   string `json:"device_id"`
+	ChannelID  string `json:"channel_id"`
+	Transport  string `json:"transport,omitempty"` // 0=UDP, 1=TCP passive, 2=TCP active
+}
+
+// HandleStartTalkWhip starts a GB28181 talk session for WHIP streaming.
+// The frontend should first establish a WHIP connection to the media server,
+// then call this API to start the GB28181 talk session.
+func (h *GB28181Handler) HandleStartTalkWhip(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
+
+	var req StartTalkWhipRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.DeviceID == "" || req.ChannelID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		return
+	}
+
+	// 解析传输模式
+	transportMode := gb28181.TransportUDP
+	switch req.Transport {
+	case "1":
+		transportMode = gb28181.TransportTCPPassive
+	case "2":
+		transportMode = gb28181.TransportTCPActive
+	}
+
+	// 获取 TalkManager
+	tm := h.svr.GetTalkManager()
+	if tm == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "talk manager not initialized"})
+		return
+	}
+
+	// 检查会话是否已存在
+	session, exists := tm.GetSession(req.DeviceID, req.ChannelID)
+	if !exists {
+		// 启动新的对讲会话
+		var err error
+		session, err = tm.StartTalk(req.DeviceID, req.ChannelID, transportMode, h.svr.GetDeviceStore())
+		if err != nil {
+			slog.Error("Failed to start WHIP talk", "error", err, "device_id", req.DeviceID, "channel_id", req.ChannelID)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	slog.Info("WHIP talk session started", 
+		"device_id", req.DeviceID, 
+		"channel_id", req.ChannelID,
+		"stream_name", req.StreamName,
+		"port", session.RTPPort)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":     "started",
+		"session_id": req.DeviceID + "_" + req.ChannelID,
+		"port":       session.RTPPort,
+		"transport":  transportMode,
+		"stream_name": req.StreamName,
+	})
+}
+
+// HandleStopTalkWhip stops a GB28181 talk session for WHIP streaming.
+func (h *GB28181Handler) HandleStopTalkWhip(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
+
+	var req StartTalkWhipRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.DeviceID == "" || req.ChannelID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		return
+	}
+
+	// 获取 TalkManager
+	tm := h.svr.GetTalkManager()
+	if tm == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "talk manager not initialized"})
+		return
+	}
+
+	// 停止对讲会话
+	if err := tm.StopTalk(req.DeviceID, req.ChannelID); err != nil {
+		slog.Warn("Failed to stop WHIP talk", "error", err, "device_id", req.DeviceID, "channel_id", req.ChannelID)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	slog.Info("WHIP talk session stopped", "device_id", req.DeviceID, "channel_id", req.ChannelID)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status": "stopped",
+	})
 }

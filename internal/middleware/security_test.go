@@ -25,7 +25,7 @@ func TestSecurityHeaders(t *testing.T) {
 		{"X-Frame-Options", "DENY"},
 		{"X-XSS-Protection", "1; mode=block"},
 		{"Referrer-Policy", "strict-origin-when-cross-origin"},
-		{"Permissions-Policy", "camera=(), microphone=(), geolocation=()"},
+		{"Permissions-Policy", "camera=(), microphone=(self), geolocation=()"},
 		{"Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src blob: data: 'self'; media-src blob: data: 'self' http: https:; connect-src 'self' http: https: ws: wss:"},
 	}
 	for _, tt := range tests {
