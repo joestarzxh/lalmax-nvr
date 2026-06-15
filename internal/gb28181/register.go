@@ -206,6 +206,10 @@ func (g *GB28181API) handlerMessage(req *sip.Request, tx sip.ServerTransaction) 
 		g.handleRecordInfoResponse(deviceID, body)
 	case "Keepalive":
 		g.handleKeepalive(deviceID, source, "OK")
+	case "Alarm":
+		if g.svr != nil && g.svr.alarm != nil {
+			g.svr.alarm.HandleAlarm(deviceID, body)
+		}
 	default:
 		slog.Debug("[SIP] MESSAGE unhandled cmd type", "device_id", deviceID, "cmd_type", msg.CmdType)
 	}

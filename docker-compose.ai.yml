@@ -1,0 +1,50 @@
+# Docker Compose for lalmax-nvr with YOLO AI Service
+#
+# Usage:
+#   docker compose -f docker-compose.ai.yml up -d
+#
+# This will start:
+#   1. lalmax-nvr (the NVR)
+#   2. yolo-service (YOLO object detection)
+#
+# After startup, configure AI in the NVR web UI:
+#   - Go to Settings -> AI Detection
+#   - Enable AI
+#   - Select "HTTP 远程服务" as backend
+#   - Set endpoint to: http://yolo-service:8080/api/detect
+
+services:
+  lalmax-nvr:
+    image: lalmax-nvr:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./data:/var/lib/lalmax-nvr
+    restart: unless-stopped
+    depends_on:
+      yolo-service:
+        condition: service_healthy
+
+  yolo-service:
+    build:
+      context: ./docker/yolo-service
+      dockerfile: Dockerfile
+    environment:
+      - PORT=8080
+      - MODEL=yolov8n.pt
+      - CONFIDENCE=0.5
+      - DEVICE=cpu
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    # Uncomment for GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]

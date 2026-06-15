@@ -12,6 +12,10 @@ type Streams struct {
 	ChannelID string
 	SSRC      string
 	SessionID string
+	CallID    string
+	FromTag   string
+	ToTag     string
+	RemoteURI string
 }
 
 // streamsManager manages active streams.

@@ -25,6 +25,7 @@
   import DeviceGroups from './routes/DeviceGroups.svelte';
   import RecordingPlans from './routes/RecordingPlans.svelte';
   import Users from './routes/Users.svelte';
+  import AIDetection from './routes/AIDetection.svelte';
   import Header from './components/Header';
 
   // Network status
@@ -164,6 +165,10 @@
       return { route: 'users', params: {} };
     }
 
+    if (segments[0] === 'ai' || segments[0] === 'ai-detection') {
+      return { route: 'ai-detection', params: {} };
+    }
+
     // Default to login for unknown routes
     return { route: 'login', params: {} };
   }
@@ -276,6 +281,8 @@
         <RecordingPlans />
       {:else if currentRoute === 'users'}
         <Users />
+      {:else if currentRoute === 'ai-detection'}
+        <AIDetection />
       {/if}
     </main>
   {/if}

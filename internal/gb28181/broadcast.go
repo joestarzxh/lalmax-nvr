@@ -51,18 +51,20 @@ type BroadcastSession struct {
 
 // BroadcastManager manages broadcast sessions.
 type BroadcastManager struct {
-	mu       sync.RWMutex
-	sessions map[string]*BroadcastSession // key: deviceID_channelID
-	client   *sipgo.Client
-	cfg      *Config
+	mu         sync.RWMutex
+	sessions   map[string]*BroadcastSession // key: deviceID_channelID
+	client     *sipgo.Client
+	cfg        *Config
+	deviceStore *DeviceStore
 }
 
 // NewBroadcastManager creates a new broadcast manager.
-func NewBroadcastManager(client *sipgo.Client, cfg *Config) *BroadcastManager {
+func NewBroadcastManager(client *sipgo.Client, cfg *Config, store *DeviceStore) *BroadcastManager {
 	return &BroadcastManager{
-		sessions: make(map[string]*BroadcastSession),
-		client:   client,
-		cfg:      cfg,
+		sessions:   make(map[string]*BroadcastSession),
+		client:     client,
+		cfg:        cfg,
+		deviceStore: store,
 	}
 }
 
@@ -279,6 +281,9 @@ func (bm *BroadcastManager) OnInvite(req *sip.Request, tx sip.ServerTransaction)
 	offer.IP = normalizeMediaIP(offer.IP, req.Source())
 
 	// Find matching session
+	// 1. Try to find by channelID from SDP o= line
+	// 2. Try to find by deviceID (fromUser)
+	// 3. Try to find by looking up device in store (fromUser might be channelID)
 	bm.mu.RLock()
 	var bs *BroadcastSession
 	if offer.ChannelID != "" {
@@ -291,6 +296,23 @@ func (bm *BroadcastManager) OnInvite(req *sip.Request, tx sip.ServerTransaction)
 				break
 			}
 		}
+	}
+	// Fallback: fromUser might be channelID, find device by channelID
+	if bs == nil && bm.deviceStore != nil {
+		bm.deviceStore.RangeDevices(func(devID string, dev *Device) bool {
+			if ch, ok := dev.GetChannel(deviceID); ok {
+				// Found device with this channelID, try to find session by deviceID
+				for _, s := range bm.sessions {
+					if s.DeviceID == devID {
+						bs = s
+						slog.Info("[Broadcast] OnInvite: found session by channelID lookup",
+							"device_id", devID, "channel_id", ch.ChannelID)
+						return false
+					}
+				}
+			}
+			return true
+		})
 	}
 	bm.mu.RUnlock()
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/emiago/sipgo"
@@ -81,8 +82,8 @@ func NewServer(cfg *Config, mediaEngine media.Engine, db *storage.DB) (*Server, 
 
 	// Initialize managers
 	s.platforms = NewPlatformManager(client, cfg.Host, cfg.MediaIP, cfg.ID, cfg.Password, store.GetDB())
-	s.broadcast = NewBroadcastManager(client, cfg)
-	s.talk = NewTalkManager(client, cfg)
+	s.broadcast = NewBroadcastManager(client, cfg, store)
+	s.talk = NewTalkManager(client, cfg, store)
 	s.alarm = NewAlarmManager(client, cfg, store.GetDB())
 	s.download = NewDownloadManager(client, cfg, mediaEngine, store.GetDB(), "")
 
@@ -196,6 +197,16 @@ func (s *Server) Playback(in *PlaybackInput) (string, error) {
 	return s.gb.Playback(in)
 }
 
+// PlaySpeed changes the playback speed.
+func (s *Server) PlaySpeed(in *PlaySpeedInput) error {
+	return s.gb.PlaySpeed(in)
+}
+
+// PlaySeek seeks to a position in playback.
+func (s *Server) PlaySeek(in *PlaySeekInput) error {
+	return s.gb.PlaySeek(in)
+}
+
 // IsStreamPlaying reports whether the given stream ID has an active GB28181 play session.
 func (s *Server) IsStreamPlaying(streamID string) bool {
 	return globalStreams.IsStreamPlaying(streamID)
@@ -285,8 +296,74 @@ func (s *Server) handlerInvite(req *sip.Request, tx sip.ServerTransaction) {
 		}
 	}
 
-	// Fall through to broadcast
-	s.broadcast.OnInvite(req, tx)
+	// Check for pending broadcast sessions
+	if _, ok := s.broadcast.GetSession(fromUser, ""); ok {
+		s.broadcast.OnInvite(req, tx)
+		return
+	}
+
+	// Device-initiated INVITE (e.g., for talk/broadcast response)
+	// Parse SDP to get channel ID from o= line
+	channelID := parseChannelIDFromSDP(sdpBody)
+	if channelID == "" {
+		channelID = fromUser // Fallback to using fromUser as channelID
+	}
+
+	slog.Info("[SIP] INVITE device-initiated", "from", fromUser, "channel_id", channelID)
+
+	// Find device and channel from registered devices
+	var foundDevice *Device
+	var foundChannel *Channel
+	s.store.RangeDevices(func(deviceID string, dev *Device) bool {
+		// Method 1: Find by deviceID match (fromUser is deviceID)
+		if deviceID == fromUser {
+			// Try to find the specific channel
+			if ch, ok := dev.GetChannel(channelID); ok {
+				foundDevice = dev
+				foundChannel = ch
+				return false
+			}
+			// Fallback: use first channel
+			dev.Channels.Range(func(k, v any) bool {
+				foundDevice = dev
+				foundChannel = v.(*Channel)
+				return false
+			})
+			return false
+		}
+		// Method 2: fromUser might be a channelID
+		if ch, ok := dev.GetChannel(fromUser); ok {
+			foundDevice = dev
+			foundChannel = ch
+			return false
+		}
+		return true
+	})
+
+	if foundDevice == nil || foundChannel == nil {
+		slog.Warn("[SIP] INVITE: device/channel not found",
+			"from", fromUser,
+			"channel_id", channelID,
+			"tip", "Check if device registered and catalog queried")
+		tx.Respond(sip.NewResponseFromRequest(req, 404, "Not Found", nil))
+		return
+	}
+
+	slog.Info("[SIP] INVITE: found device and channel",
+		"device_id", foundDevice.DeviceID,
+		"channel_id", foundChannel.ChannelID,
+		"is_online", foundDevice.IsOnline)
+
+	// Create a talk session for device-initiated INVITE
+	_, err := s.talk.StartTalk(foundDevice.DeviceID, foundChannel.ChannelID, TransportUDP, s.store)
+	if err != nil {
+		slog.Error("[SIP] INVITE: failed to start talk session", "error", err)
+		tx.Respond(sip.NewResponseFromRequest(req, 500, "Internal Server Error", nil))
+		return
+	}
+
+	// Handle the INVITE with the newly created session
+	s.talk.OnInvite(req, tx)
 }
 
 // handlerAck handles incoming SIP ACK requests.
@@ -400,4 +477,35 @@ func resolveHost(host string) string {
 		return host
 	}
 	return addrs[0]
+}
+
+// parseChannelIDFromSDP extracts channel ID from SDP o= line.
+// Example: o=34020000002000000001 0 0 IN IP4 192.168.31.215
+// Returns "34020000002000000001"
+func parseChannelIDFromSDP(sdpBody string) string {
+	lines := strings.Split(sdpBody, "\r\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "o=") {
+			// Parse o=<channel-id> 0 0 IN IP4 x.x.x.x
+			parts := strings.Fields(strings.TrimPrefix(line, "o="))
+			if len(parts) > 0 {
+				channelID := parts[0]
+				// Validate it looks like a GB28181 ID (20 digits)
+				if len(channelID) >= 18 && len(channelID) <= 20 {
+					isDigit := true
+					for _, c := range channelID {
+						if c < '0' || c > '9' {
+							isDigit = false
+							break
+						}
+					}
+					if isDigit {
+						return channelID
+					}
+				}
+			}
+		}
+	}
+	return ""
 }

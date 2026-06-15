@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/gb28181"
@@ -139,8 +140,7 @@ type Handler struct {
 	streamRegistry    *StreamRegistry
 	downloader        TranscodeDownloader
 	transcodeMgr      TranscodeManagerAPI
-	aiEngine          AIEngine
-	aiDetector        AIDetector
+	aiManager         *ai.Manager
 	onvifDiscover     func(ctx context.Context, timeout time.Duration) *onvif.DiscoveryResult
 	onvifProbeDevice  func(ctx context.Context, host string, port int, timeout time.Duration) (*onvif.DiscoveredDevice, error)
 	onvifNewClient    func(endpoint, username, password string) onvifDeviceClient
@@ -216,6 +216,11 @@ func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler
 
 func (h *Handler) SetMultiUserAuthMW(mw func(http.Handler) http.Handler) {
 	h.multiUserMW = mw
+}
+
+// SetAIManager sets the AI Manager on the handler.
+func (h *Handler) SetAIManager(mgr *ai.Manager) {
+	h.aiManager = mgr
 }
 
 // Routes returns a chi.Router with all routes registered.
@@ -350,6 +355,8 @@ func (h *Handler) Routes() http.Handler {
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/gb28181", h.handleUpdateGB28181Settings)
 		r.Get("/api/settings/hls", h.handleGetHLSSettings)
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/hls", h.handleUpdateHLSSettings)
+		r.Get("/api/settings/ai", h.handleGetAISettings)
+		r.With(middleware.RequireOperatePermission()).Put("/api/settings/ai", h.handleUpdateAISettings)
 		r.With(middleware.RequireOperatePermission()).Post("/api/settings/lalmax/regenerate", h.handleRegenerateLalmaxConfig)
 		r.With(middleware.RequireOperatePermission()).Post("/api/config/reload", h.handleReloadConfig)
 		r.Get("/api/config/check", h.handleCheckConfigChange)
@@ -414,6 +421,7 @@ func (h *Handler) Routes() http.Handler {
 			r.Post("/enable", h.handleEnableAI)
 			r.Post("/disable", h.handleDisableAI)
 			r.Get("/events", h.handleAIEvents)
+			r.Post("/webhook", h.handleAIWebhook)
 		})
 		// Snapshot endpoints
 		r.Route("/api/snapshots", func(r chi.Router) {

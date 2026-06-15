@@ -24,8 +24,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
-	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
-	"github.com/lalmax-pro/lalmax-nvr/internal/ai/engine"
 	"github.com/lalmax-pro/lalmax-nvr/internal/api"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"

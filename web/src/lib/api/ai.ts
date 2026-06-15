@@ -90,3 +90,107 @@ export function detectAiBackend(): string {
   }
   return 'WASM SIMD';
 }
+
+// ─── Backend API ─────────────────────────────────────────────────────────────
+
+import { apiRequest } from './client';
+
+/** AI engine status response from GET /api/ai/status. */
+export interface AiStatusResponse {
+  available: boolean;
+  backend: 'http' | 'webhook' | 'disabled';
+  reason: string;
+}
+
+/** Detection event from SSE stream. */
+export interface AiDetectionEvent {
+  camera_id: string;
+  pts: number;
+  detections: AiDetection[];
+}
+
+/** Single detection result. */
+export interface AiDetection {
+  label: string;
+  confidence: number;
+  box: [number, number, number, number]; // [x, y, w, h] normalized
+}
+
+/** Get AI engine status. */
+export async function getAiStatus(): Promise<AiStatusResponse> {
+  return apiRequest<AiStatusResponse>('/ai/status');
+}
+
+/** Enable AI detection for a camera. */
+export async function enableAiDetection(cameraId: string): Promise<{ status: string; camera_id: string }> {
+  return apiRequest('/ai/enable', {
+    method: 'POST',
+    body: JSON.stringify({ camera_id: cameraId }),
+  });
+}
+
+/** Disable AI detection for a camera. */
+export async function disableAiDetection(cameraId: string): Promise<{ status: string; camera_id: string }> {
+  return apiRequest('/ai/disable', {
+    method: 'POST',
+    body: JSON.stringify({ camera_id: cameraId }),
+  });
+}
+
+/** Subscribe to AI detection events via SSE. Returns cleanup function. */
+export function subscribeAiEvents(
+  onEvent: (event: AiDetectionEvent) => void,
+  onError?: (error: Event) => void,
+): () => void {
+  const eventSource = new EventSource('/api/ai/events');
+
+  eventSource.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data) as AiDetectionEvent;
+      onEvent(data);
+    } catch (e) {
+      console.warn('Failed to parse AI event:', e);
+    }
+  };
+
+  eventSource.onerror = (error) => {
+    if (onError) onError(error);
+  };
+
+  return () => {
+    eventSource.close();
+  };
+}
+
+// ─── AI Settings API ──────────────────────────────────────────────────────
+
+/** AI backend configuration from GET /api/settings/ai. */
+export interface AiBackendConfig {
+  enabled: boolean;
+  backend: 'http' | 'webhook' | 'disabled';
+  frame_skip_rate: number;
+  confidence_threshold: number;
+  inference_timeout_ms: number;
+  http: {
+    endpoint: string;
+    api_key: string;
+    headers: Record<string, string>;
+    timeout: number;
+  } | null;
+  webhook: {
+    enabled: boolean;
+  } | null;
+}
+
+/** Get AI backend configuration. */
+export async function getAiBackendConfig(): Promise<AiBackendConfig> {
+  return apiRequest<AiBackendConfig>('/settings/ai');
+}
+
+/** Update AI backend configuration. */
+export async function updateAiBackendConfig(config: Partial<AiBackendConfig>): Promise<{ status: string }> {
+  return apiRequest('/settings/ai', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+}

@@ -254,3 +254,31 @@ export async function startDevicePlayback(data: PlaybackRequest): Promise<Playba
     body: JSON.stringify(data),
   });
 }
+
+// Playback speed control
+export interface PlaySpeedRequest {
+  device_id: string;
+  channel_id: string;
+  speed: 0.5 | 1 | 2 | 4;
+}
+
+// Playback seek control
+export interface PlaySeekRequest {
+  device_id: string;
+  channel_id: string;
+  seek_time: number; // seconds from start
+}
+
+export async function setPlaybackSpeed(data: PlaySpeedRequest): Promise<{ status: string }> {
+  return apiRequest('/gb28181/playback/speed', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function seekPlayback(data: PlaySeekRequest): Promise<{ status: string }> {
+  return apiRequest('/gb28181/playback/seek', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}

@@ -384,10 +384,24 @@ type WebSocketConfig struct {
 }
 
 type AIConfig struct {
-	InferenceTimeoutMs  int     `yaml:"inference_timeout_ms" json:"inferenceTimeoutMs"`
-	FrameSkipRate       int     `yaml:"frame_skip_rate" json:"frameSkipRate"`
-	ConfidenceThreshold float64 `yaml:"confidence_threshold" json:"confidenceThreshold"`
-	ModelPath           string  `yaml:"model_path" json:"modelPath"`
+	Enabled             bool           `yaml:"enabled" json:"enabled"`
+	Backend             string         `yaml:"backend" json:"backend"` // "http", "webhook", "disabled"
+	FrameSkipRate       int            `yaml:"frame_skip_rate" json:"frameSkipRate"`
+	ConfidenceThreshold float64        `yaml:"confidence_threshold" json:"confidenceThreshold"`
+	InferenceTimeoutMs  int            `yaml:"inference_timeout_ms" json:"inferenceTimeoutMs"`
+	HTTP                *AIHTTPConfig  `yaml:"http,omitempty" json:"http,omitempty"`
+	Webhook             *AIWebhookConfig `yaml:"webhook,omitempty" json:"webhook,omitempty"`
+}
+
+type AIHTTPConfig struct {
+	Endpoint string            `yaml:"endpoint" json:"endpoint"`
+	APIKey   string            `yaml:"api_key" json:"apiKey"`
+	Headers  map[string]string `yaml:"headers" json:"headers"`
+	Timeout  int               `yaml:"timeout" json:"timeout"` // milliseconds
+}
+
+type AIWebhookConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
 }
 
 // IsConfigured returns true if both username and a password (or hash) are set.
@@ -1102,6 +1116,22 @@ func (cfg *Config) ApplyDefaults() {
 	// Remote log defaults
 	if cfg.RemoteLog.Format == "" {
 		cfg.RemoteLog.Format = "jsonline"
+	}
+	// AI defaults
+	if cfg.AI.Backend == "" {
+		cfg.AI.Backend = "disabled"
+	}
+	if cfg.AI.FrameSkipRate <= 0 {
+		cfg.AI.FrameSkipRate = 3
+	}
+	if cfg.AI.ConfidenceThreshold <= 0 {
+		cfg.AI.ConfidenceThreshold = 0.3
+	}
+	if cfg.AI.InferenceTimeoutMs <= 0 {
+		cfg.AI.InferenceTimeoutMs = 30000
+	}
+	if cfg.AI.HTTP != nil && cfg.AI.HTTP.Timeout <= 0 {
+		cfg.AI.HTTP.Timeout = 10000
 	}
 	// Camera protocol/encoding normalization (backward compat with old combined protocol strings)
 	for i := range cfg.Cameras {

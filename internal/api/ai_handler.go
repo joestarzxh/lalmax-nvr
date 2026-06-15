@@ -8,38 +8,32 @@ import (
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
-	"github.com/lalmax-pro/lalmax-nvr/internal/ai/engine"
+	"github.com/lalmax-pro/lalmax-nvr/internal/ai/webhook"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 )
 
-// --- AI interfaces for testability ---
+// --- AI Manager interface for testability ---
 
-// AIEngine abstracts the AI engine lifecycle for the handler.
-type AIEngine interface {
-	IsAvailable() bool
-	Name() string
-	ModelPath() string
-}
-
-// AIDetector abstracts per-camera AI detection management for the handler.
-type AIDetector interface {
-	EnableCamera(camID string, hub *model.StreamHub) error
-	DisableCamera(camID string)
+// AIManagerInterface abstracts the AI Manager for the handler.
+type AIManagerInterface interface {
+	Status() ai.Status
+	EnableCamera(camID string, hub interface{}) error
+	DisableCamera(camID string, hub interface{})
 	IsEnabled(camID string) bool
 	EnabledCameras() []string
-	OnDetection(cb engine.OnDetectionFunc) string
+	OnDetection(cb webhook.CallbackFunc) string
 	UnregisterCallback(id string) bool
 	StopAll()
+	GetReceiver() *webhook.Receiver
 }
 
 // --- AI status types ---
 
 // aiStatusResponse is the JSON response for GET /api/ai/status.
 type aiStatusResponse struct {
-	Available    bool          `json:"available"`
-	EngineStatus string        `json:"engine_status"` // "running", "stopped", "not_installed"
-	Model        string        `json:"model"`
-	Probe        engine.ProbeInfo `json:"probe"`
+	Available bool   `json:"available"`
+	Backend   string `json:"backend"`   // "http", "webhook", "disabled"
+	Reason    string `json:"reason"`    // human-readable status explanation
 }
 
 // aiEnableRequest is the JSON body for POST /api/ai/enable.
@@ -52,46 +46,30 @@ type aiDisableRequest struct {
 	CameraID string `json:"camera_id"`
 }
 
-// --- AI setter ---
-
-// SetAIComponents sets the AI engine and detector on the handler.
-func (h *Handler) SetAIComponents(eng AIEngine, det AIDetector) {
-	h.aiEngine = eng
-	h.aiDetector = det
-}
-
 // --- AI handlers ---
 
 // handleGetAIStatus handles GET /api/ai/status.
-// Returns AI engine availability, model info, and probe details.
 func (h *Handler) handleGetAIStatus(w http.ResponseWriter, r *http.Request) {
-	if h.aiEngine == nil {
+	if h.aiManager == nil {
 		writeJSON(w, http.StatusOK, aiStatusResponse{
-			Available:    false,
-			EngineStatus: "not_installed",
-			Model:        "",
-			Probe:        engine.ProbeInfo{},
+			Available: false,
+			Backend:   "disabled",
+			Reason:    "AI 模块未初始化",
 		})
 		return
 	}
 
-	status := "stopped"
-	if h.aiEngine.IsAvailable() {
-		status = "running"
-	}
-
+	status := h.aiManager.Status()
 	writeJSON(w, http.StatusOK, aiStatusResponse{
-		Available:    h.aiEngine.IsAvailable(),
-		EngineStatus: status,
-		Model:        h.aiEngine.ModelPath(),
-		Probe:        engine.ProbeInfo{},
+		Available: status.Available,
+		Backend:   status.Backend,
+		Reason:    status.Reason,
 	})
 }
 
 // handleEnableAI handles POST /api/ai/enable.
-// Enables AI detection for a camera by subscribing to its StreamHub.
 func (h *Handler) handleEnableAI(w http.ResponseWriter, r *http.Request) {
-	if h.aiDetector == nil {
+	if h.aiManager == nil {
 		writeError(w, http.StatusServiceUnavailable, "AI detection not available")
 		return
 	}
@@ -135,7 +113,7 @@ func (h *Handler) handleEnableAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.aiDetector.EnableCamera(req.CameraID, hub); err != nil {
+	if err := h.aiManager.EnableCamera(req.CameraID, hub); err != nil {
 		writeError(w, http.StatusConflict, fmt.Sprintf("failed to enable AI: %v", err))
 		return
 	}
@@ -147,9 +125,8 @@ func (h *Handler) handleEnableAI(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDisableAI handles POST /api/ai/disable.
-// Disables AI detection for a camera.
 func (h *Handler) handleDisableAI(w http.ResponseWriter, r *http.Request) {
-	if h.aiDetector == nil {
+	if h.aiManager == nil {
 		writeError(w, http.StatusServiceUnavailable, "AI detection not available")
 		return
 	}
@@ -164,16 +141,15 @@ func (h *Handler) handleDisableAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if camera is enabled (idempotent).
-	if !h.aiDetector.IsEnabled(req.CameraID) {
-		writeJSON(w, http.StatusOK, map[string]string{
-			"status":    "disabled",
-			"camera_id": req.CameraID,
-		})
-		return
+	// Get StreamHub for unsubscribe
+	var hub *model.StreamHub
+	if h.camMgr != nil {
+		if rec := h.camMgr.GetRecorder(req.CameraID); rec != nil {
+			hub = getStreamHub(rec)
+		}
 	}
 
-	h.aiDetector.DisableCamera(req.CameraID)
+	h.aiManager.DisableCamera(req.CameraID, hub)
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":    "disabled",
@@ -184,7 +160,7 @@ func (h *Handler) handleDisableAI(w http.ResponseWriter, r *http.Request) {
 // handleAIEvents handles GET /api/ai/events.
 // SSE stream that pushes detection events to the frontend.
 func (h *Handler) handleAIEvents(w http.ResponseWriter, r *http.Request) {
-	if h.aiDetector == nil {
+	if h.aiManager == nil {
 		writeError(w, http.StatusServiceUnavailable, "AI detection not available")
 		return
 	}
@@ -202,18 +178,17 @@ func (h *Handler) handleAIEvents(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	ctx := r.Context()
-	eventCh := make(chan engine.DetectionResult, 16)
+	eventCh := make(chan webhook.DetectionResult, 16)
 	var eventClosed atomic.Bool
 
 	// Register detection callback.
-	callbackID := h.aiDetector.OnDetection(func(result engine.DetectionResult) {
+	callbackID := h.aiManager.OnDetection(func(result webhook.DetectionResult) {
 		if eventClosed.Load() {
 			return
 		}
 		select {
 		case eventCh <- result:
 		default:
-			// Drop event if client is too slow.
 			logger.Warn("AI SSE: dropping detection event, client too slow")
 		}
 	})
@@ -226,12 +201,11 @@ func (h *Handler) handleAIEvents(w http.ResponseWriter, r *http.Request) {
 		eventClosed.Store(true)
 		close(eventCh)
 	}()
-	defer h.aiDetector.UnregisterCallback(callbackID)
+	defer h.aiManager.UnregisterCallback(callbackID)
 
 	for {
 		select {
 		case <-ctx.Done():
-			// Client disconnected.
 			return
 		case result := <-eventCh:
 			data, err := json.Marshal(result)
@@ -248,6 +222,19 @@ func (h *Handler) handleAIEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// --- ensure imports are used ---
+// handleAIWebhook handles POST /api/ai/webhook.
+// Receives detection events from external AI services.
+func (h *Handler) handleAIWebhook(w http.ResponseWriter, r *http.Request) {
+	if h.aiManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "AI detection not available")
+		return
+	}
 
-var _ = ai.Detection{}
+	receiver := h.aiManager.GetReceiver()
+	if receiver == nil {
+		writeError(w, http.StatusServiceUnavailable, "AI webhook not configured")
+		return
+	}
+
+	receiver.HandleHTTP()(w, r)
+}

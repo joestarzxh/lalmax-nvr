@@ -9,6 +9,8 @@
     listGB28181Devices,
     queryDeviceRecords,
     startDevicePlayback,
+    setPlaybackSpeed,
+    seekPlayback,
   } from '$lib/api';
   import type { GB28181Platform, GB28181Alarm, GB28181Download, AddPlatformRequest, GB28181Device, DeviceRecordItem } from '$lib/api';
   import { showToast } from '$lib/toast';
@@ -16,7 +18,7 @@
   import {
     Link, AlertTriangle, Download, RefreshCw, Plus, Trash2,
     Server, Wifi, WifiOff, X, Bell, CheckCircle, Clock,
-    Search, Play, Film,
+    Search, Play, Film, FastForward, Rewind,
   } from 'lucide-svelte';
 
   type TabId = 'platforms' | 'alarms' | 'downloads' | 'records';
@@ -198,6 +200,10 @@
   let records = $state<DeviceRecordItem[]>([]);
   let playbackStreamUrl = $state('');
   let playbackStreamId = $state('');
+  let playbackSpeed = $state<0.5 | 1 | 2 | 4>(1);
+  let playbackSeekTime = $state(0);
+  let speedLoading = $state(false);
+  let seekLoading = $state(false);
 
   function getDefaultTimeRange() {
     const now = new Date();
@@ -267,6 +273,42 @@
       }
     } catch (e) {
       showToast(e instanceof Error ? e.message : '播放失败', 'error');
+    }
+  }
+
+  async function handleSpeedChange(speed: 0.5 | 1 | 2 | 4) {
+    if (!recordDeviceId || !recordChannelId) return;
+    speedLoading = true;
+    try {
+      await setPlaybackSpeed({
+        device_id: recordDeviceId,
+        channel_id: recordChannelId,
+        speed,
+      });
+      playbackSpeed = speed;
+      showToast(`倍速已设置为 ${speed}x`, 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '设置倍速失败', 'error');
+    } finally {
+      speedLoading = false;
+    }
+  }
+
+  async function handleSeek(seconds: number) {
+    if (!recordDeviceId || !recordChannelId) return;
+    seekLoading = true;
+    try {
+      await seekPlayback({
+        device_id: recordDeviceId,
+        channel_id: recordChannelId,
+        seek_time: seconds,
+      });
+      playbackSeekTime = seconds;
+      showToast(`已拖动到 ${seconds}秒`, 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '拖动失败', 'error');
+    } finally {
+      seekLoading = false;
     }
   }
 
@@ -551,6 +593,43 @@
                 expanded={false}
                 tabVisible={true}
               />
+            </div>
+            <!-- Playback controls -->
+            <div class="mt-4 space-y-3">
+              <!-- Speed control -->
+              <div class="flex items-center gap-3">
+                <span class="text-sm th-text-secondary flex items-center gap-1">
+                  <FastForward size={14} /> 倍速:
+                </span>
+                <div class="flex gap-1">
+                  {#each [0.5, 1, 2, 4] as speed}
+                    <button
+                      class="btn btn-sm {playbackSpeed === speed ? 'btn-primary' : 'btn-ghost'}"
+                      onclick={() => handleSpeedChange(speed as 0.5 | 1 | 2 | 4)}
+                      disabled={speedLoading}
+                    >
+                      {speed}x
+                    </button>
+                  {/each}
+                </div>
+              </div>
+              <!-- Seek control -->
+              <div class="flex items-center gap-3">
+                <span class="text-sm th-text-secondary flex items-center gap-1">
+                  <Rewind size={14} /> 拖动:
+                </span>
+                <div class="flex gap-1">
+                  {#each [0, 30, 60, 300, 600] as seconds}
+                    <button
+                      class="btn btn-sm btn-ghost"
+                      onclick={() => handleSeek(seconds)}
+                      disabled={seekLoading}
+                    >
+                      {seconds === 0 ? '起点' : seconds < 60 ? `${seconds}秒` : `${seconds / 60}分`}
+                    </button>
+                  {/each}
+                </div>
+              </div>
             </div>
           </div>
         {/if}

@@ -1275,15 +1275,14 @@ ai:
 	require.Equal(t, 30000, cfg.AI.InferenceTimeoutMs)
 	require.Equal(t, 3, cfg.AI.FrameSkipRate)
 	require.Equal(t, 0.5, cfg.AI.ConfidenceThreshold)
-	require.Equal(t, "/models/yolo.onnx", cfg.AI.ModelPath)
 }
 
 func TestAIConfigDefaults(t *testing.T) {
 	cfg := &Config{}
 	cfg.ApplyDefaults()
-	// No defaults are applied for AIConfig, so Go zero values remain
-	require.Equal(t, 0, cfg.AI.InferenceTimeoutMs)
-	require.Equal(t, 0, cfg.AI.FrameSkipRate)
-	require.Equal(t, 0.0, cfg.AI.ConfidenceThreshold)
-	require.Equal(t, "", cfg.AI.ModelPath)
+	// Verify AI defaults are applied
+	require.Equal(t, 30000, cfg.AI.InferenceTimeoutMs)
+	require.Equal(t, 3, cfg.AI.FrameSkipRate)
+	require.Equal(t, 0.3, cfg.AI.ConfidenceThreshold)
+	require.Equal(t, "disabled", cfg.AI.Backend)
 }

@@ -307,15 +307,25 @@ export type {
   TranscodingSettings,
 } from './transcoding';
 
-// AI Detection — localStorage-backed settings
+// AI Detection — localStorage-backed settings + backend API
 export {
   getAiSettings,
   saveAiSettings,
   detectAiBackend,
+  getAiStatus,
+  enableAiDetection,
+  disableAiDetection,
+  subscribeAiEvents,
+  getAiBackendConfig,
+  updateAiBackendConfig,
 } from './ai';
 
 export type {
   AiDetectionSettings,
+  AiStatusResponse,
+  AiDetectionEvent,
+  AiDetection,
+  AiBackendConfig,
 } from './ai';
 
 // GB28181 — SIP device management
@@ -334,6 +344,8 @@ export {
   listGB28181Downloads,
   queryDeviceRecords,
   startDevicePlayback,
+  setPlaybackSpeed,
+  seekPlayback,
 } from './gb28181';
 
 export type {
@@ -354,6 +366,8 @@ export type {
   QueryDeviceRecordRequest,
   PlaybackRequest,
   PlaybackResponse,
+  PlaySpeedRequest,
+  PlaySeekRequest,
 } from './gb28181';
 
 // Groups — device grouping management

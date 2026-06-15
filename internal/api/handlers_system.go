@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
@@ -700,6 +701,133 @@ func (h *Handler) handleUpdateTranscodingSettings(w http.ResponseWriter, r *http
 	if !h.saveConfig(w) {
 		return
 	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (h *Handler) handleGetAISettings(w http.ResponseWriter, r *http.Request) {
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+
+	ai := h.config.AI
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"enabled":              ai.Enabled,
+		"backend":              ai.Backend,
+		"frame_skip_rate":      ai.FrameSkipRate,
+		"confidence_threshold": ai.ConfidenceThreshold,
+		"inference_timeout_ms": ai.InferenceTimeoutMs,
+		"http":                 ai.HTTP,
+		"webhook":              ai.Webhook,
+	})
+}
+
+func (h *Handler) handleUpdateAISettings(w http.ResponseWriter, r *http.Request) {
+	if h.config == nil {
+		writeError(w, http.StatusInternalServerError, "config not available")
+		return
+	}
+
+	var body struct {
+		Enabled             *bool                `json:"enabled"`
+		Backend             *string              `json:"backend"`
+		FrameSkipRate       *int                 `json:"frame_skip_rate"`
+		ConfidenceThreshold *float64             `json:"confidence_threshold"`
+		InferenceTimeoutMs  *int                 `json:"inference_timeout_ms"`
+		HTTP                *config.AIHTTPConfig `json:"http"`
+		Webhook             *config.AIWebhookConfig `json:"webhook"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Update enabled
+	if body.Enabled != nil {
+		h.config.AI.Enabled = *body.Enabled
+	}
+
+	// Update backend
+	if body.Backend != nil {
+		switch *body.Backend {
+		case "http", "webhook", "disabled":
+			h.config.AI.Backend = *body.Backend
+		default:
+			writeError(w, http.StatusBadRequest, "backend must be 'http', 'webhook', or 'disabled'")
+			return
+		}
+	}
+
+	// Update frame skip rate
+	if body.FrameSkipRate != nil {
+		if *body.FrameSkipRate < 1 || *body.FrameSkipRate > 30 {
+			writeError(w, http.StatusBadRequest, "frame_skip_rate must be between 1 and 30")
+			return
+		}
+		h.config.AI.FrameSkipRate = *body.FrameSkipRate
+	}
+
+	// Update confidence threshold
+	if body.ConfidenceThreshold != nil {
+		if *body.ConfidenceThreshold < 0.1 || *body.ConfidenceThreshold > 1.0 {
+			writeError(w, http.StatusBadRequest, "confidence_threshold must be between 0.1 and 1.0")
+			return
+		}
+		h.config.AI.ConfidenceThreshold = *body.ConfidenceThreshold
+	}
+
+	// Update inference timeout
+	if body.InferenceTimeoutMs != nil {
+		if *body.InferenceTimeoutMs < 1000 || *body.InferenceTimeoutMs > 60000 {
+			writeError(w, http.StatusBadRequest, "inference_timeout_ms must be between 1000 and 60000")
+			return
+		}
+		h.config.AI.InferenceTimeoutMs = *body.InferenceTimeoutMs
+	}
+
+	// Update HTTP config
+	if body.HTTP != nil {
+		if h.config.AI.HTTP == nil {
+			h.config.AI.HTTP = &config.AIHTTPConfig{}
+		}
+		if body.HTTP.Endpoint != "" {
+			h.config.AI.HTTP.Endpoint = body.HTTP.Endpoint
+		}
+		if body.HTTP.APIKey != "" {
+			h.config.AI.HTTP.APIKey = body.HTTP.APIKey
+		}
+		if body.HTTP.Headers != nil {
+			h.config.AI.HTTP.Headers = body.HTTP.Headers
+		}
+		if body.HTTP.Timeout > 0 {
+			h.config.AI.HTTP.Timeout = body.HTTP.Timeout
+		}
+	}
+
+	// Update webhook config
+	if body.Webhook != nil {
+		if h.config.AI.Webhook == nil {
+			h.config.AI.Webhook = &config.AIWebhookConfig{}
+		}
+		h.config.AI.Webhook.Enabled = body.Webhook.Enabled
+	}
+
+	// Apply defaults
+	h.config.ApplyDefaults()
+
+	// Persist config to disk
+	if !h.saveConfig(w) {
+		return
+	}
+
+	// Reinitialize AI Manager with new config
+	if h.aiManager != nil {
+		h.aiManager.StopAll()
+	}
+	newMgr := ai.NewManager(h.config.AI)
+	h.aiManager = newMgr
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }

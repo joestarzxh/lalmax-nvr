@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras, getStreamingSettings, updateStreamingSettings, getAiSettings, saveAiSettings, detectAiBackend, getGB28181Settings, updateGB28181Settings, reloadConfig, checkConfigChange, regenerateLalmaxConfig, getHLSSettings, updateHLSSettings, getLocalNetworkInterfaces } from '$lib/api';
+  import { getSettings, updateSettings, getMergeSettings, updateMergeSettings, getFeatures, updateFeatures, getStats, listCameras, getStreamingSettings, updateStreamingSettings, getAiSettings, saveAiSettings, detectAiBackend, getAiBackendConfig, updateAiBackendConfig, getGB28181Settings, updateGB28181Settings, reloadConfig, checkConfigChange, regenerateLalmaxConfig, getHLSSettings, updateHLSSettings, getLocalNetworkInterfaces } from '$lib/api';
+  import type { AiBackendConfig } from '$lib/api';
   import { getTranscodingCheck, getTranscodingStatus, getFFmpegStatus, downloadFFmpeg, retryDownload, getTranscodingSettings, updateTranscodingSettings } from '$lib/api/transcoding';
   import type { SelfCheckResult, DownloadStatus, HardwareCapabilities, ManagerStatus, TranscodeTask } from '$lib/api/transcoding';
   import type { SettingsConfig, FeatureFlags, StorageStats, Camera, StreamingConfig, GB28181Config, HLSConfig, NetworkInterface } from '$lib/api';
@@ -53,9 +54,16 @@ let srtStreams = $state<{streamId: string, cameraId: string, mode: string, addre
 
 // AI Detection state
 let aiEnabled = $state(false);
+let aiBackend = $state<'http' | 'webhook' | 'disabled'>('disabled');
 let aiConfidenceThreshold = $state(0.5);
 let aiFrameSkip = $state(3);
+let aiInferenceTimeout = $state(30000);
+let aiHttpEndpoint = $state('');
+let aiHttpApiKey = $state('');
+let aiHttpTimeout = $state(10000);
+let aiWebhookEnabled = $state(false);
 let aiDetectedBackend = $state('');
+let aiSaving = $state(false);
 
 // GB28181 state
 let gb28181Enabled = $state(false);
@@ -577,9 +585,7 @@ function getAffectedCameraCount(protocol: string): number {
     loadCameraList();
     loadStreamingConfig();
     loadAiSettings();
-    loadFeatures();
-    loadDiskInfo();
-    loadCameraList();
+    loadAiBackendSettings();
     window.addEventListener('hashchange', handleHashChange);
     // Check for external config changes every 30s
     configCheckInterval = setInterval(checkForConfigChanges, 30000);
@@ -701,12 +707,65 @@ function getAffectedCameraCount(protocol: string): number {
 
   // --- AI Detection ---
 
+  async function loadAiBackendSettings() {
+    try {
+      const config = await getAiBackendConfig();
+      aiEnabled = config.enabled;
+      aiBackend = config.backend;
+      aiConfidenceThreshold = config.confidence_threshold;
+      aiFrameSkip = config.frame_skip_rate;
+      aiInferenceTimeout = config.inference_timeout_ms;
+      if (config.http) {
+        aiHttpEndpoint = config.http.endpoint;
+        aiHttpApiKey = config.http.api_key;
+        aiHttpTimeout = config.http.timeout;
+      }
+      if (config.webhook) {
+        aiWebhookEnabled = config.webhook.enabled;
+      }
+    } catch (e) {
+      console.warn('Failed to load AI backend config:', e);
+    }
+  }
+
   function loadAiSettings() {
     const settings = getAiSettings();
-    aiEnabled = settings.enabled;
-    aiConfidenceThreshold = settings.confidenceThreshold;
-    aiFrameSkip = settings.frameSkip;
     aiDetectedBackend = detectAiBackend();
+  }
+
+  async function saveAiBackendSettings() {
+    aiSaving = true;
+    try {
+      const config: Partial<AiBackendConfig> = {
+        enabled: aiEnabled,
+        backend: aiEnabled ? aiBackend : 'disabled',
+        frame_skip_rate: aiFrameSkip,
+        confidence_threshold: aiConfidenceThreshold,
+        inference_timeout_ms: aiInferenceTimeout,
+      };
+
+      if (aiBackend === 'http') {
+        config.http = {
+          endpoint: aiHttpEndpoint,
+          api_key: aiHttpApiKey,
+          headers: {},
+          timeout: aiHttpTimeout,
+        };
+      }
+
+      if (aiBackend === 'webhook') {
+        config.webhook = {
+          enabled: aiWebhookEnabled,
+        };
+      }
+
+      await updateAiBackendConfig(config);
+      showToast('AI 配置已保存', 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '保存 AI 配置失败', 'error');
+    } finally {
+      aiSaving = false;
+    }
   }
 
   function saveAiSettingsLocal() {
@@ -1611,7 +1670,7 @@ function getAffectedCameraCount(protocol: string): number {
             </div>
             <button
               id="ai-toggle" aria-label={t('settings.ai.title')}
-type="button"
+              type="button"
               class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 {aiEnabled ? 'bg-blue-600' : 'th-bg-tertiary'}"
               onclick={() => { aiEnabled = !aiEnabled; }}
               onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); aiEnabled = !aiEnabled; } }}
@@ -1624,54 +1683,153 @@ type="button"
 
           {#if aiEnabled}
             <div class="mt-4 pt-4 border-t th-border space-y-6">
-              <!-- Confidence Threshold -->
+              <!-- Backend Type Selection -->
               <div>
-                <div class="flex items-center justify-between mb-2">
-                <label class="input-label" for="ai-confidence-threshold">{t('settings.ai.confidenceThreshold')}</label>
-                  <span class="text-sm font-medium th-text-primary">{Math.round(aiConfidenceThreshold * 100)}%</span>
+                <div class="input-label mb-2">AI 后端类型</div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    class="p-4 rounded-lg border-2 text-left transition-colors {aiBackend === 'http' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'th-border th-bg-hover'}"
+                    onclick={() => { aiBackend = 'http'; }}
+                  >
+                    <div class="font-medium th-text-primary">HTTP 远程服务</div>
+                    <div class="text-sm th-text-secondary mt-1">发送帧到远程 AI 服务进行检测</div>
+                  </button>
+                  <button
+                    type="button"
+                    class="p-4 rounded-lg border-2 text-left transition-colors {aiBackend === 'webhook' ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20' : 'th-border th-bg-hover'}"
+                    onclick={() => { aiBackend = 'webhook'; }}
+                  >
+                    <div class="font-medium th-text-primary">Webhook 推送</div>
+                    <div class="text-sm th-text-secondary mt-1">外部 AI 服务主动推送检测结果</div>
+                  </button>
                 </div>
-                <input
-                  id="ai-confidence-threshold"
-
-                  type="range"
-                  class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
-                  bind:value={aiConfidenceThreshold}
-                  min="0.1"
-                  max="0.9"
-                  step="0.1"
-                />
-                <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.confidenceHint')}</p>
               </div>
 
-              <!-- Frame Skip -->
-              <div>
-                <div class="flex items-center justify-between mb-2">
-                <label class="input-label" for="ai-frame-skip">{t('settings.ai.frameSkip')}</label>
-                  <span class="text-sm font-medium th-text-primary">{aiFrameSkip}</span>
+              <!-- HTTP Backend Config -->
+              {#if aiBackend === 'http'}
+                <div class="p-4 rounded-lg border th-border bg-gray-50 dark:bg-gray-800/50 space-y-4">
+                  <h4 class="font-medium th-text-primary">HTTP 配置</h4>
+                  <div>
+                    <label class="input-label" for="ai-http-endpoint">检测服务地址</label>
+                    <input
+                      id="ai-http-endpoint"
+                      type="text"
+                      class="input mt-1"
+                      bind:value={aiHttpEndpoint}
+                      placeholder="http://192.168.1.100:8080/api/detect"
+                    />
+                    <p class="text-xs th-text-tertiary mt-1">支持 YOLO 服务、云厂商 API 或任意 HTTP AI 服务</p>
+                  </div>
+                  <div>
+                    <label class="input-label" for="ai-http-apikey">API Key (可选)</label>
+                    <input
+                      id="ai-http-apikey"
+                      type="password"
+                      class="input mt-1"
+                      bind:value={aiHttpApiKey}
+                      placeholder="sk-xxxx"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label" for="ai-http-timeout">请求超时 (ms)</label>
+                    <input
+                      id="ai-http-timeout"
+                      type="number"
+                      class="input mt-1"
+                      bind:value={aiHttpTimeout}
+                      min="1000"
+                      max="60000"
+                    />
+                  </div>
                 </div>
-                <input
-                  id="ai-frame-skip"
+              {/if}
 
-                  type="range"
-                  class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
-                  bind:value={aiFrameSkip}
-                  min="1"
-                  max="10"
-                  step="1"
-                />
-                <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.frameSkipHint')}</p>
-              </div>
+              <!-- Webhook Backend Config -->
+              {#if aiBackend === 'webhook'}
+                <div class="p-4 rounded-lg border th-border bg-gray-50 dark:bg-gray-800/50 space-y-4">
+                  <h4 class="font-medium th-text-primary">Webhook 配置</h4>
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <div class="font-medium th-text-primary">启用 Webhook 接收</div>
+                      <div class="text-sm th-text-secondary">接受外部 AI 服务的检测结果推送</div>
+                    </div>
+                    <button
+                      type="button"
+                      class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors {aiWebhookEnabled ? 'bg-purple-600' : 'th-bg-tertiary'}"
+                      onclick={() => { aiWebhookEnabled = !aiWebhookEnabled; }}
+                      aria-label="启用 Webhook 接收"
+                    >
+                      <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {aiWebhookEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+                    </button>
+                  </div>
+                  <div class="p-3 rounded-md bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
+                    <div class="text-sm text-blue-800 dark:text-blue-200">
+                      <div class="font-medium mb-1">Webhook 端点:</div>
+                      <code class="text-xs">POST /api/ai/webhook</code>
+                      <div class="mt-2 font-medium mb-1">请求格式:</div>
+                      <pre class="text-xs overflow-x-auto">{`{
+  "camera_id": "cam-1",
+  "detections": [
+    {"label": "person", "confidence": 0.95, "box": [0.1, 0.2, 0.3, 0.4]}
+  ]
+}`}</pre>
+                    </div>
+                  </div>
+                </div>
+              {/if}
 
-              <!-- Model & Backend Info -->
+              <!-- Common Settings -->
               <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div class="p-3 rounded-md th-bg-hover border th-border">
-                  <div class="text-xs th-text-tertiary mb-1">{t('settings.ai.modelInfo')}</div>
-                  <div class="text-sm font-medium th-text-primary">{t('settings.ai.modelName')}</div>
+                <!-- Confidence Threshold -->
+                <div>
+                  <div class="flex items-center justify-between mb-2">
+                    <label class="input-label" for="ai-confidence-threshold">{t('settings.ai.confidenceThreshold')}</label>
+                    <span class="text-sm font-medium th-text-primary">{Math.round(aiConfidenceThreshold * 100)}%</span>
+                  </div>
+                  <input
+                    id="ai-confidence-threshold"
+                    type="range"
+                    class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
+                    bind:value={aiConfidenceThreshold}
+                    min="0.1"
+                    max="0.9"
+                    step="0.1"
+                  />
+                  <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.confidenceHint')}</p>
                 </div>
-                <div class="p-3 rounded-md th-bg-hover border th-border">
-                  <div class="text-xs th-text-tertiary mb-1">{t('settings.ai.backendInfo')}</div>
-                  <div class="text-sm font-medium th-text-primary">{aiDetectedBackend}</div>
+
+                <!-- Frame Skip -->
+                <div>
+                  <div class="flex items-center justify-between mb-2">
+                    <label class="input-label" for="ai-frame-skip">{t('settings.ai.frameSkip')}</label>
+                    <span class="text-sm font-medium th-text-primary">{aiFrameSkip}</span>
+                  </div>
+                  <input
+                    id="ai-frame-skip"
+                    type="range"
+                    class="w-full h-2 rounded-full appearance-none cursor-pointer th-bg-tertiary accent-blue-600"
+                    bind:value={aiFrameSkip}
+                    min="1"
+                    max="10"
+                    step="1"
+                  />
+                  <p class="text-xs th-text-tertiary mt-1">{t('settings.ai.frameSkipHint')}</p>
                 </div>
+              </div>
+
+              <!-- Inference Timeout -->
+              <div>
+                <label class="input-label" for="ai-inference-timeout">推理超时 (ms)</label>
+                <input
+                  id="ai-inference-timeout"
+                  type="number"
+                  class="input mt-1 w-full"
+                  bind:value={aiInferenceTimeout}
+                  min="1000"
+                  max="60000"
+                />
+                <p class="text-xs th-text-tertiary mt-1">单帧推理的最大等待时间</p>
               </div>
 
               <!-- Save AI Settings -->
@@ -1679,8 +1837,12 @@ type="button"
                 <button
                   type="button"
                   class="btn btn-primary"
-                  onclick={saveAiSettingsLocal}
+                  onclick={saveAiBackendSettings}
+                  disabled={aiSaving}
                 >
+                  {#if aiSaving}
+                    <span class="spinner mr-2"></span>
+                  {/if}
                   {t('settings.save')}
                 </button>
               </div>
