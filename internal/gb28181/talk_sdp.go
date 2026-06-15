@@ -34,10 +34,15 @@ func buildTalkSDP(serverID, mediaIP string, port int, mode TransportMode, ssrc s
 	}
 
 	// TCP 模式添加 setup 和 connection 属性
+	// 注意：a=setup 表示本端的角色
+	//       passive = 本端被动等待连接（对于NVR来说，就是NVR监听，设备连接）
+	//       active = 本端主动连接（对于NVR来说，就是NVR连接设备）
 	if mode == TransportTCPPassive || mode == TransportTCPActive {
 		if mode == TransportTCPPassive {
+			// NVR被动等待设备连接
 			sdpLines = append(sdpLines, "a=setup:passive")
 		} else {
+			// NVR主动连接设备
 			sdpLines = append(sdpLines, "a=setup:active")
 		}
 		sdpLines = append(sdpLines, "a=connection:new")

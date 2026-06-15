@@ -15,18 +15,20 @@ const BroadcastNotifyTimeout = 10 * time.Second
 
 // TalkManager 管理所有对讲会话
 type TalkManager struct {
-	mu       sync.RWMutex
-	sessions map[string]*TalkSession // key: deviceID_channelID
-	client   *sipgo.Client
-	cfg      *Config
+	mu         sync.RWMutex
+	sessions   map[string]*TalkSession // key: deviceID_channelID
+	client     *sipgo.Client
+	cfg        *Config
+	deviceStore *DeviceStore
 }
 
 // NewTalkManager 创建新的 TalkManager
-func NewTalkManager(client *sipgo.Client, cfg *Config) *TalkManager {
+func NewTalkManager(client *sipgo.Client, cfg *Config, store *DeviceStore) *TalkManager {
 	return &TalkManager{
-		sessions: make(map[string]*TalkSession),
-		client:   client,
-		cfg:      cfg,
+		sessions:   make(map[string]*TalkSession),
+		client:     client,
+		cfg:        cfg,
+		deviceStore: store,
 	}
 }
 
@@ -140,6 +142,7 @@ func (tm *TalkManager) OnInvite(req *sip.Request, tx sip.ServerTransaction) {
 	sdpBody := string(req.Body())
 
 	slog.Info("[Talk] OnInvite received", "device_id", deviceID, "channel_id", channelID, "sdp_len", len(sdpBody))
+	slog.Debug("[Talk] OnInvite SDP", "sdp", sdpBody)
 
 	// 解析设备 SDP
 	peerIP, peerPort, isTCP, setupActive, deviceSSRC, payloadType, err := parseTalkSDP(sdpBody)
@@ -150,6 +153,9 @@ func (tm *TalkManager) OnInvite(req *sip.Request, tx sip.ServerTransaction) {
 	}
 
 	// 查找匹配的会话（同时匹配 deviceID 和 channelID）
+	// 1. 先用 deviceID + channelID 精确匹配
+	// 2. 如果找不到，只用 deviceID 匹配
+	// 3. 如果还是找不到，用 channelID 查找设备，再用设备ID查找session
 	tm.mu.RLock()
 	var session *TalkSession
 	for _, s := range tm.sessions {
@@ -158,10 +164,39 @@ func (tm *TalkManager) OnInvite(req *sip.Request, tx sip.ServerTransaction) {
 			break
 		}
 	}
+	if session == nil {
+		// Fallback: 只匹配 deviceID
+		for _, s := range tm.sessions {
+			if s.DeviceID == deviceID {
+				session = s
+				slog.Info("[Talk] OnInvite: matched by deviceID only",
+					"session_channel_id", s.ChannelID,
+					"request_channel_id", channelID)
+				break
+			}
+		}
+	}
+	// Fallback: fromUser might be channelID, find device by channelID
+	if session == nil && tm.deviceStore != nil {
+		tm.deviceStore.RangeDevices(func(devID string, dev *Device) bool {
+			if ch, ok := dev.GetChannel(deviceID); ok {
+				// Found device with this channelID, try to find session by deviceID
+				for _, s := range tm.sessions {
+					if s.DeviceID == devID {
+						session = s
+						slog.Info("[Talk] OnInvite: found session by channelID lookup",
+							"device_id", devID, "channel_id", ch.ChannelID)
+						return false
+					}
+				}
+			}
+			return true
+		})
+	}
 	tm.mu.RUnlock()
 
 	if session == nil {
-		slog.Warn("[Talk] OnInvite: no session found", "device_id", deviceID)
+		slog.Warn("[Talk] OnInvite: no session found", "device_id", deviceID, "channel_id", channelID)
 		tx.Respond(sip.NewResponseFromRequest(req, 404, "Not Found", nil))
 		return
 	}
@@ -178,15 +213,18 @@ func (tm *TalkManager) OnInvite(req *sip.Request, tx sip.ServerTransaction) {
 	}
 
 	// 根据传输模式准备连接
+	// 注意：a=setup:active 表示设备是主动方，NVR应该被动等待连接
+	//       a=setup:passive 表示设备是被动方，NVR应该主动连接设备
 	transportMode := TransportUDP
 	if isTCP {
 		if setupActive {
-			transportMode = TransportTCPActive
-			// TCP 主动：NVR 连接设备
-			go session.connectTCP(peerIP, peerPort)
-		} else {
+			// 设备主动连接NVR -> NVR使用TCP被动模式（监听等待连接）
 			transportMode = TransportTCPPassive
-			// TCP 被动：等待设备连接（已在 StartTalk 中启动监听）
+			// TCP 被动：已在 StartTalk 中启动监听，等待设备连接
+		} else {
+			// 设备被动等待NVR连接 -> NVR使用TCP主动模式（连接设备）
+			transportMode = TransportTCPActive
+			go session.connectTCP(peerIP, peerPort)
 		}
 	}
 	session.TransportMode = transportMode
