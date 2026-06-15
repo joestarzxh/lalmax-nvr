@@ -197,6 +197,24 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		} else {
 			logger.Info("GB28181 recording via direct RTSP pull", "camera_id", cam.ID)
 		}
+		// Auto-detect encoding via RTSP probe (handles device-side encoding changes)
+		probeURL := firstNonEmpty(recordingSourceURL, cam.URL)
+		if probeURL != "" {
+			detectedEncoding := cm.probeGB28181Encoding(probeURL, cam)
+			if detectedEncoding != "" && detectedEncoding != cam.Encoding {
+				logger.Warn("GB28181 encoding mismatch detected, using actual encoding",
+					"camera_id", cam.ID,
+					"configured", cam.Encoding,
+					"detected", detectedEncoding)
+				cam.Encoding = detectedEncoding
+				// Update database with correct encoding
+				if cm.db != nil {
+					if err := cm.db.UpsertCamera(context.Background(), cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding, cameraRTSPTransport(cam)); err != nil {
+						logger.Error("failed to update camera encoding in database", "camera_id", cam.ID, "error", err)
+					}
+				}
+			}
+		}
 		switch cam.Encoding {
 		case string(model.FormatH264), "": // Default to H264 if encoding unknown
 			h264Cfg := recorder.H264Config{
@@ -235,6 +253,22 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 			return nil
 		}
 	case string(model.ProtoRTSP):
+		// Auto-detect encoding if configured encoding might be wrong
+		detectedEncoding := cm.probeRTSPEncoding(cam)
+		if detectedEncoding != "" && detectedEncoding != cam.Encoding {
+			logger.Warn("encoding mismatch detected, using actual encoding",
+				"camera_id", cam.ID,
+				"configured", cam.Encoding,
+				"detected", detectedEncoding)
+			cam.Encoding = detectedEncoding
+			// Update database with correct encoding
+			if cm.db != nil {
+				if err := cm.db.UpsertCamera(context.Background(), cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding, cameraRTSPTransport(cam)); err != nil {
+					logger.Error("failed to update camera encoding in database", "camera_id", cam.ID, "error", err)
+				}
+			}
+		}
+
 		switch cam.Encoding {
 		case string(model.FormatH264):
 			if recordingSourceURL != "" {
@@ -2022,4 +2056,80 @@ func (cm *CameraManager) getCameraConfigByID(id string) *config.CameraConfig {
 		}
 	}
 	return nil
+}
+
+// probeRTSPEncoding probes an RTSP stream to detect the actual video encoding.
+// Returns the detected encoding (h264, h265, mjpeg) or empty string if detection fails.
+// This is used to auto-correct encoding mismatches between config and actual stream.
+func (cm *CameraManager) probeRTSPEncoding(cam config.CameraConfig) string {
+	// Only probe for RTSP protocol
+	if cam.Protocol != string(model.ProtoRTSP) {
+		return ""
+	}
+
+	// Skip probing if encoding is empty or already correct
+	if cam.Encoding == "" {
+		return ""
+	}
+
+	// Determine the URL to probe
+	probeURL := cam.URL
+	if probeURL == "" {
+		return ""
+	}
+
+	// Create probe config
+	probeCfg := recorder.RTSPProbeConfig{
+		RTSPURL:       probeURL,
+		RTSPTransport: cameraRTSPTransport(cam),
+		Username:      cam.Username,
+		Password:      cam.Password,
+		Timeout:       10 * time.Second,
+	}
+
+	// Probe the stream
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	result, err := recorder.ProbeRTSPEncoding(ctx, probeCfg)
+	if err != nil {
+		logger.Debug("RTSP encoding probe failed",
+			"camera_id", cam.ID,
+			"url", probeURL,
+			"error", err)
+		return ""
+	}
+
+	// Return detected encoding if it differs from config
+	if result.DetectedEncoding != "" && result.DetectedEncoding != cam.Encoding {
+		return result.DetectedEncoding
+	}
+
+	return ""
+}
+
+// probeGB28181Encoding probes a GB28181 RTSP stream to detect the actual video encoding.
+// This handles cases where the device encoding changes (e.g., user switches from H264 to H265 on camera).
+func (cm *CameraManager) probeGB28181Encoding(rtspURL string, cam config.CameraConfig) string {
+	probeCfg := recorder.RTSPProbeConfig{
+		RTSPURL:       rtspURL,
+		RTSPTransport: cameraRTSPTransport(cam),
+		Username:      cam.Username,
+		Password:      cam.Password,
+		Timeout:       10 * time.Second,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	result, err := recorder.ProbeRTSPEncoding(ctx, probeCfg)
+	if err != nil {
+		logger.Debug("GB28181 encoding probe failed",
+			"camera_id", cam.ID,
+			"url", rtspURL,
+			"error", err)
+		return ""
+	}
+
+	return result.DetectedEncoding
 }

@@ -142,7 +142,7 @@ func (tm *TalkManager) OnInvite(req *sip.Request, tx sip.ServerTransaction) {
 	sdpBody := string(req.Body())
 
 	slog.Info("[Talk] OnInvite received", "device_id", deviceID, "channel_id", channelID, "sdp_len", len(sdpBody))
-	slog.Debug("[Talk] OnInvite SDP", "sdp", sdpBody)
+	slog.Info("[Talk] OnInvite device SDP", "sdp", sdpBody)
 
 	// 解析设备 SDP
 	peerIP, peerPort, isTCP, setupActive, deviceSSRC, payloadType, err := parseTalkSDP(sdpBody)

@@ -215,6 +215,12 @@ func (ts *TalkSession) sendAudioData(data []byte) error {
 		if tcpConn == nil {
 			return fmt.Errorf("TCP connection not ready")
 		}
+		// GB28181 TCP传输格式：2字节长度前缀 + RTP包
+		length := make([]byte, 2)
+		binary.BigEndian.PutUint16(length, uint16(len(packet)))
+		if _, err := tcpConn.Write(length); err != nil {
+			return err
+		}
 		_, err := tcpConn.Write(packet)
 		return err
 
