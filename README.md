@@ -124,6 +124,7 @@ See [Configuration](docs/en/configuration.md) for full reference.
 | [Getting Started](docs/en/getting-started.md) | Installation, first camera setup |
 | [Configuration](docs/en/configuration.md) | Full config reference |
 | [API Reference](docs/en/api-reference.md) | REST API documentation |
+| [GB28181 Guide](docs/en/gb28181-guide.md) | GB28181 device setup, recording, playback, intercom |
 | [ONVIF Guide](docs/en/onvif-guide.md) | ONVIF camera setup, PTZ, troubleshooting |
 | [Camera Guide](docs/en/camera-guide.md) | Camera protocol setup |
 | [Stream Management](docs/en/stream-management-design.md) | Runtime stream inventory and binding |

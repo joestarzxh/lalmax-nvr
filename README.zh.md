@@ -124,6 +124,7 @@ media:
 | [快速入门](docs/zh/getting-started.md) | 安装、添加第一个摄像头 |
 | [配置说明](docs/zh/configuration.md) | 完整配置参考 |
 | [API 文档](docs/zh/api-reference.md) | REST API 接口文档 |
+| [GB28181 指南](docs/zh/gb28181-guide.md) | 国标设备设置、录像、回放、对讲 |
 | [ONVIF 指南](docs/zh/onvif-guide.md) | ONVIF 摄像头设置、云台控制 |
 | [摄像头指南](docs/zh/camera-guide.md) | 摄像头协议设置 |
 | [流管理](docs/zh/stream-management-design.md) | 运行时流清单和绑定 |
