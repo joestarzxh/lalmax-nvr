@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/metrics"
@@ -15,7 +14,7 @@ import (
 )
 
 // Manager handles file system storage for camera recordings.
-// It provides atomic writes via a .tmp → rename pattern.
+// It provides atomic writes via a .tmp 闂?rename pattern.
 type Manager struct {
 	rootDir string
 	metrics *metrics.Metrics
@@ -231,18 +230,13 @@ func (m *Manager) DeleteCameraDir(cameraID string) error {
 
 // GetDiskUsage returns total and used disk space for the filesystem containing rootDir.
 func (m *Manager) GetDiskUsage() (total int64, used int64, err error) {
-	var stat syscall.Statfs_t
-
-	if err := syscall.Statfs(m.rootDir, &stat); err != nil {
+	totalBytes, freeBytes, err := filesystemSpace(m.rootDir)
+	if err != nil {
 		return 0, 0, fmt.Errorf("storage: failed to stat filesystem: %w", err)
 	}
 
-	// Total space in bytes
-	total = int64(stat.Blocks * uint64(stat.Bsize))
-	// Free space in bytes
-	free := int64(stat.Bfree * uint64(stat.Bsize))
-	// Used = total - free
-	used = total - free
+	total = int64(totalBytes)
+	used = int64(totalBytes - freeBytes)
 
 	// Update storage metrics
 	if m.metrics != nil {

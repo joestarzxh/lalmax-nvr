@@ -5,13 +5,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
-	"syscall"
+
+	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
 
 // TranscodeEngine handles a single transcode job by wrapping FFmpeg execution.
@@ -64,7 +64,7 @@ func (e *TranscodeEngine) Transcode(
 
 	// 3. Execute FFmpeg.
 	cmd := exec.CommandContext(ctx, e.ffmpegPath, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureProcessGroup(cmd)
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -123,8 +123,6 @@ func checkDiskSpace(outputPath, inputPath string) error {
 		return nil
 	}
 
-	var stat syscall.Statfs_t
-
 	// Resolve to an existing directory for Statfs — the output file may not exist yet.
 	dir := outputPath
 	for {
@@ -146,11 +144,10 @@ func checkDiskSpace(outputPath, inputPath string) error {
 		}
 		return fmt.Errorf("statfs %s: %w", dir, statErr)
 	}
-	if err := syscall.Statfs(dir, &stat); err != nil {
+	_, freeBytes, err := storage.FilesystemSpace(dir)
+	if err != nil {
 		return fmt.Errorf("statfs %s: %w", dir, err)
 	}
-
-	freeBytes := stat.Bavail * uint64(stat.Bsize)
 	required := uint64(inputSize) * 2
 
 	if freeBytes < required {
@@ -213,15 +210,3 @@ func parseProgress(stderr io.Reader, totalSeconds float64, cb func(float64)) {
 	}
 }
 
-// --- Process management ---
-
-// killProcessGroup sends SIGKILL to the entire process group to ensure
-// FFmpeg and any child processes are terminated.
-func killProcessGroup(cmd *exec.Cmd) {
-	if cmd.Process == nil {
-		return
-	}
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
-		slog.Warn("failed to kill ffmpeg process group", "pid", cmd.Process.Pid, "error", err)
-	}
-}

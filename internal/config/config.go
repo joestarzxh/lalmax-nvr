@@ -1,4 +1,4 @@
-package config
+﻿package config
 
 import (
 	"fmt"
@@ -13,6 +13,15 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
+)
+
+const (
+	DefaultLalmaxHTTPPort = 12090
+	DefaultLalmaxHTTPAddr = "http://127.0.0.1:12090"
+	DefaultLalRTMPPort    = 11935
+	DefaultLalRTSPPort    = 15544
+	DefaultLalHTTPPort    = 18080
+	DefaultSRTPort        = 19000
 )
 
 type Config struct {
@@ -258,7 +267,7 @@ type HLSConfig struct {
 	LalFragmentNum        int  `yaml:"lal_fragment_num,omitempty"`         // Number of live playlist entries (default 6)
 	LalCleanupMode        int  `yaml:"lal_cleanup_mode,omitempty"`         // 0=never, 1=end, 2=ASAP (default 1)
 	LalUseMemory          bool   `yaml:"lal_use_memory,omitempty"`           // Use in-memory storage for TS segments
-	LalTempDir            string `yaml:"lal_temp_dir,omitempty"`             // HLS TS文件临时目录 (default "hls-temp")
+	LalTempDir            string `yaml:"lal_temp_dir,omitempty"`             // HLS TS鏂囦欢涓存椂鐩綍 (default "hls-temp")
 
 	// lalmax (fMP4/LL-HLS) settings
 	LalmaxSegmentDuration int `yaml:"lalmax_segment_duration,omitempty"` // fMP4 segment duration in seconds (default 1)
@@ -298,7 +307,7 @@ type XiaomiConfig struct {
 }
 
 // SRTConfig configures the SRT ingest server.
-// SRT is served by lalmax on its default port (:9000).
+// SRT is served by lalmax on its default port (:19000).
 // Camera pushes should use streamid format: #!::h=<camera_id>,m=publish
 type SRTConfig struct {
 	Enabled *bool `yaml:"enabled"` // default false
@@ -306,11 +315,11 @@ type SRTConfig struct {
 }
 
 // RTMPConfig configures the RTMP ingest server.
-// RTMP is served by lalmax on its default port (:1935).
+// RTMP is served by lalmax on its default port (:11935).
 type RTMPConfig struct {
 	Enabled    *bool             `yaml:"enabled"`     // default false
 	Port       int               `yaml:"port,omitempty"`
-	StreamKeys map[string]string `yaml:"stream_keys"` // camera_id → stream_key
+	StreamKeys map[string]string `yaml:"stream_keys"` // camera_id 鈫?stream_key
 }
 
 // GB28181Config configures the GB28181 SIP signaling server.
@@ -533,7 +542,7 @@ func Validate(cfg *Config) error {
 		proto := c.Protocol
 		enc := c.Encoding
 		if strings.Contains(proto, "_") {
-			// Old combined format like "rtsp_h264" — parse and validate
+			// Old combined format like "rtsp_h264" 鈥?parse and validate
 			parsedProto, parsedEnc, err := model.ParseLegacyProtocol(proto)
 			if err != nil {
 				return fmt.Errorf("camera[%d].protocol invalid: %s", i, proto)
@@ -841,7 +850,7 @@ func (cfg *Config) ApplyDefaults() {
 	if strings.TrimSpace(cfg.Storage.SegmentDuration) == "" {
 		cfg.Storage.SegmentDuration = "30s"
 	}
-	// Media — lalmax enabled by default
+	// Media 鈥?lalmax enabled by default
 	if !cfg.Media.Enabled {
 		cfg.Media.Enabled = true
 	}
@@ -849,7 +858,7 @@ func (cfg *Config) ApplyDefaults() {
 		cfg.Media.Mode = "embedded"
 	}
 	if strings.TrimSpace(cfg.Media.LalmaxHTTPAddr) == "" {
-		cfg.Media.LalmaxHTTPAddr = "http://127.0.0.1:1290"
+		cfg.Media.LalmaxHTTPAddr = DefaultLalmaxHTTPAddr
 	}
 	if strings.TrimSpace(cfg.Media.LalmaxPublicURL) == "" {
 		cfg.Media.LalmaxPublicURL = cfg.Media.LalmaxHTTPAddr
@@ -1036,7 +1045,7 @@ func (cfg *Config) ApplyDefaults() {
 		*cfg.RTMP.Enabled = false
 	}
 	if cfg.RTMP.Port == 0 {
-		cfg.RTMP.Port = 1935
+		cfg.RTMP.Port = DefaultLalRTMPPort
 	}
 	if cfg.RTMP.StreamKeys == nil {
 		cfg.RTMP.StreamKeys = make(map[string]string)
@@ -1058,7 +1067,7 @@ func (cfg *Config) ApplyDefaults() {
 		*cfg.SRT.Enabled = false
 	}
 	if cfg.SRT.Port == 0 {
-		cfg.SRT.Port = 9000
+		cfg.SRT.Port = DefaultSRTPort
 	}
 
 	// GB28181 defaults
@@ -1296,3 +1305,5 @@ func EncryptConfigFile(path string) ([]string, error) {
 
 	return plaintextFields, nil
 }
+
+

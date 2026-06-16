@@ -1,4 +1,4 @@
-package media
+﻿package media
 
 import (
 	"bufio"
@@ -13,9 +13,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 )
 
-// lal ErrorCodeGroupNotFound — group not in lalmax yet (e.g. GB28181 RTP port open, no packets).
+// lal ErrorCodeGroupNotFound 鈥?group not in lalmax yet (e.g. GB28181 RTP port open, no packets).
 const lalErrorCodeGroupNotFound = 1001
 
 type LalmaxHTTPConfig struct {
@@ -61,15 +63,15 @@ func NewLalmaxHTTP(cfg LalmaxHTTPConfig) (*LalmaxHTTP, error) {
 	// Set default lal ports if not specified
 	rtmpPort := cfg.RTMPPort
 	if rtmpPort == 0 {
-		rtmpPort = 1935
+		rtmpPort = config.DefaultLalRTMPPort
 	}
 	rtspPort := cfg.RTSPPort
 	if rtspPort == 0 {
-		rtspPort = 5544
+		rtspPort = config.DefaultLalRTSPPort
 	}
 	httpPort := cfg.HTTPPort
 	if httpPort == 0 {
-		httpPort = 8080
+		httpPort = config.DefaultLalHTTPPort
 	}
 	return &LalmaxHTTP{
 		baseURL:   baseURL,
@@ -242,7 +244,7 @@ func (e *LalmaxHTTP) BuildPlayURL(ctx context.Context, req PlayURLRequest) (*Pla
 	}
 
 	// Determine the base URL based on protocol
-	// lalmax protocols (ll-hls, webrtc, fmp4) use lalmax port (1290)
+	// lalmax protocols (ll-hls, webrtc, fmp4) use the lalmax HTTP port.
 	// lal protocols (rtmp, rtsp, flv) use their respective ports
 	u := e.getBaseURLForProtocol(proto)
 	switch proto {
@@ -319,8 +321,8 @@ func (e *LalmaxHTTP) BuildPlayURL(ctx context.Context, req PlayURLRequest) (*Pla
 }
 
 // getBaseURLForProtocol returns the appropriate base URL for the given protocol.
-// lal protocols (flv, ws-flv, hls) use the lal HTTP port (default 8080).
-// lalmax protocols (ll-hls, webrtc, fmp4) use the lalmax port (default 1290).
+// lal protocols (flv, ws-flv, hls) use the lal HTTP port (default 18080).
+// lalmax protocols (ll-hls, webrtc, fmp4) use the lalmax HTTP port (default 12090).
 func (e *LalmaxHTTP) getBaseURLForProtocol(proto string) url.URL {
 	switch proto {
 	case "flv", "http-flv", "ws-flv", "websocket-flv", "hls", "hls-ts":
@@ -742,3 +744,4 @@ func (e *LalmaxHTTP) SubscribeSRTEvents(ctx context.Context) (<-chan SRTEvent, e
 	}()
 	return out, nil
 }
+

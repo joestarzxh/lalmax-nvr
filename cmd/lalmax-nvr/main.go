@@ -37,8 +37,8 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware/remotelog"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/mqtt"
-	"github.com/lalmax-pro/lalmax-nvr/internal/rtmp"
 	"github.com/lalmax-pro/lalmax-nvr/internal/recorder"
+	"github.com/lalmax-pro/lalmax-nvr/internal/rtmp"
 	"github.com/lalmax-pro/lalmax-nvr/internal/srt"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 	"github.com/lalmax-pro/lalmax-nvr/internal/streamhistory"
@@ -350,10 +350,10 @@ type App struct {
 	watcher    *config.Watcher
 
 	// Core infrastructure
-	db      *storage.DB
-	store   *storage.Manager
-	metrics *metrics.Metrics
-	authMW  func(http.Handler) http.Handler
+	db          *storage.DB
+	store       *storage.Manager
+	metrics     *metrics.Metrics
+	authMW      func(http.Handler) http.Handler
 	multiUserMW func(http.Handler) http.Handler
 
 	// Managers
@@ -1285,6 +1285,8 @@ func newMediaEngine(cfg *config.Config, opts ...interface{}) (media.Engine, erro
 		PublicURL:             cfg.Media.LalmaxPublicURL,
 		ConfigPath:            cfg.Media.LalmaxConfigPath,
 		RTMPPort:              cfg.RTMP.Port,
+		RTSPPort:              cfg.Media.RTSPPort,
+		HTTPPort:              cfg.Media.HTTPPort,
 		RTMPEnabled:           cfg.RTMP.Enabled != nil && *cfg.RTMP.Enabled,
 		SRTPort:               cfg.SRT.Port,
 		SRTEnabled:            cfg.SRT.Enabled != nil && *cfg.SRT.Enabled,

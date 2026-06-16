@@ -23,6 +23,8 @@ type EmbeddedLalmaxConfig struct {
 	PublicURL   string
 	ConfigPath  string
 	RTMPPort    int
+	RTSPPort    int
+	HTTPPort    int
 	RTMPEnabled bool
 	SRTPort     int
 	SRTEnabled  bool
@@ -56,6 +58,35 @@ type EmbeddedLalmax struct {
 	svrOpts    []lalmaxserver.LalMaxServerOption
 }
 
+func applyEmbeddedPortDefaults(cfg *EmbeddedLalmaxConfig) {
+	if cfg.HTTPAddr == "" {
+		cfg.HTTPAddr = config.DefaultLalmaxHTTPAddr
+	}
+	if cfg.RTMPPort == 0 {
+		cfg.RTMPPort = config.DefaultLalRTMPPort
+	}
+	if cfg.RTSPPort == 0 {
+		cfg.RTSPPort = config.DefaultLalRTSPPort
+	}
+	if cfg.HTTPPort == 0 {
+		cfg.HTTPPort = config.DefaultLalHTTPPort
+	}
+	if cfg.SRTPort == 0 {
+		cfg.SRTPort = config.DefaultSRTPort
+	}
+}
+
+func lalmaxListenAddr(httpAddr string) string {
+	parsed, err := url.Parse(httpAddr)
+	if err != nil || parsed.Host == "" {
+		return fmt.Sprintf(":%d", config.DefaultLalmaxHTTPPort)
+	}
+	if port := parsed.Port(); port != "" {
+		return ":" + port
+	}
+	return fmt.Sprintf(":%d", config.DefaultLalmaxHTTPPort)
+}
+
 func NewEmbeddedLalmax(cfg EmbeddedLalmaxConfig, svrOpts ...lalmaxserver.LalMaxServerOption) (*EmbeddedLalmax, error) {
 	if cfg.HTTPAddr == "" {
 		cfg.HTTPAddr = "http://127.0.0.1:1290"
@@ -66,12 +97,22 @@ func NewEmbeddedLalmax(cfg EmbeddedLalmaxConfig, svrOpts ...lalmaxserver.LalMaxS
 	if cfg.SRTPort == 0 {
 		cfg.SRTPort = 9000
 	}
+	if cfg.HTTPAddr == "http://127.0.0.1:1290" {
+		cfg.HTTPAddr = config.DefaultLalmaxHTTPAddr
+	}
+	if cfg.RTMPPort == 1935 {
+		cfg.RTMPPort = config.DefaultLalRTMPPort
+	}
+	if cfg.SRTPort == 9000 {
+		cfg.SRTPort = config.DefaultSRTPort
+	}
+	applyEmbeddedPortDefaults(&cfg)
 	httpEngine, err := NewLalmaxHTTP(LalmaxHTTPConfig{
 		BaseURL:   cfg.HTTPAddr,
 		PublicURL: firstNonEmpty(cfg.PublicURL, cfg.HTTPAddr),
 		RTMPPort:  cfg.RTMPPort,
-		RTSPPort:  5544,
-		HTTPPort:  8080,
+		RTSPPort:  cfg.RTSPPort,
+		HTTPPort:  cfg.HTTPPort,
 	})
 	if err != nil {
 		return nil, err
@@ -175,12 +216,12 @@ func (e *EmbeddedLalmax) Restart(ctx context.Context, rtmpPort, srtPort int, rtm
 
 	if cfgPath != "" {
 		if _, err := os.Stat(cfgPath); err == nil {
-			// File exists — patch only rtmp/srt fields
+			// File exists 闁?patch only rtmp/srt fields
 			if err := patchLalmaxConfig(cfgPath, rtmpEnabled, srtEnabled, rtmpAddr, srtAddr); err != nil {
 				return fmt.Errorf("patch lalmax config: %w", err)
 			}
 		} else {
-			// File doesn't exist — generate full config
+			// File doesn't exist 闁?generate full config
 			raw, err := embeddedConfigJSON(e.cfg)
 			if err != nil {
 				return fmt.Errorf("generate config: %w", err)
@@ -324,11 +365,11 @@ func loadEmbeddedLalmaxConfig(cfg EmbeddedLalmaxConfig) (*lalmaxconfig.Config, e
 		if _, err := os.Stat(cfg.ConfigPath); err == nil {
 			rtmpPort := cfg.RTMPPort
 			if rtmpPort == 0 {
-				rtmpPort = 1935
+				rtmpPort = config.DefaultLalRTMPPort
 			}
 			srtPort := cfg.SRTPort
 			if srtPort == 0 {
-				srtPort = 9000
+				srtPort = config.DefaultSRTPort
 			}
 			if err := patchLalmaxConfig(
 				cfg.ConfigPath,
@@ -360,7 +401,7 @@ func loadEmbeddedLalmaxConfig(cfg EmbeddedLalmaxConfig) (*lalmaxconfig.Config, e
 			}
 			return c, nil
 		}
-		// File doesn't exist — generate default config and save it
+		// File doesn't exist 闁?generate default config and save it
 		raw, err := embeddedConfigJSON(cfg)
 		if err != nil {
 			return nil, err
@@ -402,7 +443,7 @@ func patchLalmaxConfig(path string, rtmpEnabled, srtEnabled bool, rtmpAddr, srtA
 		return fmt.Errorf("parse lalmax config: %w", err)
 	}
 
-	// Patch lal section (rtmp)
+	// Patch lal section (rtmp/rtsp/httpflv defaults used by embedded mode).
 	lal := map[string]json.RawMessage{}
 	if lalRaw, ok := raw["lal"]; ok {
 		if err := json.Unmarshal(lalRaw, &lal); err != nil {
@@ -422,19 +463,60 @@ func patchLalmaxConfig(path string, rtmpEnabled, srtEnabled bool, rtmpAddr, srtA
 		return fmt.Errorf("marshal rtmp config: %w", err)
 	}
 	lal["rtmp"] = patchedRTMP
+
+	rtsp := map[string]any{}
+	if rtspRaw, ok := lal["rtsp"]; ok {
+		if err := json.Unmarshal(rtspRaw, &rtsp); err != nil {
+			return fmt.Errorf("parse rtsp config: %w", err)
+		}
+	}
+	rtsp["addr"] = fmt.Sprintf(":%d", config.DefaultLalRTSPPort)
+	patchedRTSP, err := json.Marshal(rtsp)
+	if err != nil {
+		return fmt.Errorf("marshal rtsp config: %w", err)
+	}
+	lal["rtsp"] = patchedRTSP
+
+	defaultHTTP := map[string]any{}
+	if httpRaw, ok := lal["default_http"]; ok {
+		if err := json.Unmarshal(httpRaw, &defaultHTTP); err != nil {
+			return fmt.Errorf("parse default_http config: %w", err)
+		}
+	}
+	defaultHTTP["http_listen_addr"] = fmt.Sprintf(":%d", config.DefaultLalHTTPPort)
+	patchedHTTP, err := json.Marshal(defaultHTTP)
+	if err != nil {
+		return fmt.Errorf("marshal default_http config: %w", err)
+	}
+	lal["default_http"] = patchedHTTP
+
 	patchedLal, err := json.Marshal(lal)
 	if err != nil {
 		return fmt.Errorf("marshal lal config: %w", err)
 	}
 	raw["lal"] = patchedLal
 
-	// Patch lalmax section (srt_config)
+	// Patch lalmax section (http_config/srt_config).
 	lalmax := map[string]json.RawMessage{}
 	if maxRaw, ok := raw["lalmax"]; ok {
 		if err := json.Unmarshal(maxRaw, &lalmax); err != nil {
 			return fmt.Errorf("parse lalmax config: %w", err)
 		}
 	}
+
+	httpCfg := map[string]any{}
+	if httpRaw, ok := lalmax["http_config"]; ok {
+		if err := json.Unmarshal(httpRaw, &httpCfg); err != nil {
+			return fmt.Errorf("parse http_config: %w", err)
+		}
+	}
+	httpCfg["http_listen_addr"] = fmt.Sprintf(":%d", config.DefaultLalmaxHTTPPort)
+	patchedHTTPConfig, err := json.Marshal(httpCfg)
+	if err != nil {
+		return fmt.Errorf("marshal http_config: %w", err)
+	}
+	lalmax["http_config"] = patchedHTTPConfig
+
 	srt := map[string]any{}
 	if srtRaw, ok := lalmax["srt_config"]; ok {
 		if err := json.Unmarshal(srtRaw, &srt); err != nil {
@@ -448,6 +530,7 @@ func patchLalmaxConfig(path string, rtmpEnabled, srtEnabled bool, rtmpAddr, srtA
 		return fmt.Errorf("marshal srt config: %w", err)
 	}
 	lalmax["srt_config"] = patchedSRT
+
 	patchedLalmax, err := json.Marshal(lalmax)
 	if err != nil {
 		return fmt.Errorf("marshal lalmax config: %w", err)
@@ -752,14 +835,14 @@ func embeddedConfigJSON(cfg EmbeddedLalmaxConfig) ([]byte, error) {
 			"rtmp":         map[string]any{"enable": cfg.RTMPEnabled, "addr": rtmpAddr},
 			"rtsp": map[string]any{
 				"enable":      true,
-				"addr":        ":5544",
+				"addr":        fmt.Sprintf(":%d", config.DefaultLalRTSPPort),
 				"auth_enable": cfg.RTSPAuthEnable,
 				"auth_method": cfg.RTSPAuthMethod,
 				"username":    cfg.RTSPUsername,
 				"password":    cfg.RTSPPassword,
 			},
 			"httpflv":      map[string]any{"enable": true, "url_pattern": "/"},
-			"default_http": map[string]any{"http_listen_addr": ":8080"},
+			"default_http": map[string]any{"http_listen_addr": fmt.Sprintf(":%d", config.DefaultLalHTTPPort)},
 			"http_api":     map[string]any{"enable": false},
 			"httpts":       map[string]any{"enable": false},
 			"hls": map[string]any{

@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
@@ -48,7 +47,7 @@ func (c *TranscodeCleaner) VerifyAndClean(
 	inputFormat string,
 	replaceOriginal bool,
 ) error {
-	// Verify output first — never delete original until output is confirmed valid.
+	// Verify output first 闂?never delete original until output is confirmed valid.
 	if err := c.verifyOutput(outputPath, inputPath); err != nil {
 		// Rollback: remove partial/invalid output.
 		c.RollbackFailedTranscode(outputPath)
@@ -70,7 +69,7 @@ func (c *TranscodeCleaner) VerifyAndClean(
 // verifyOutput checks that the transcoded file is valid:
 //  1. File exists and has non-zero size
 //  2. FFprobe validation passes (has a video stream)
-//  3. Output duration matches input duration within ±5% tolerance
+//  3. Output duration matches input duration within 闂?% tolerance
 func (c *TranscodeCleaner) verifyOutput(outputPath, inputPath string) error {
 	// 1. File exists and is non-empty.
 	info, err := os.Stat(outputPath)
@@ -86,7 +85,7 @@ func (c *TranscodeCleaner) verifyOutput(outputPath, inputPath string) error {
 		return fmt.Errorf("ffprobe validation: %w", err)
 	}
 
-	// 3. Duration check — only if we can probe both files.
+	// 3. Duration check 闂?only if we can probe both files.
 	inputMedia, errIn := GetMediaInfo(c.ffprobePath, inputPath)
 	outputMedia, errOut := GetMediaInfo(c.ffprobePath, outputPath)
 
@@ -104,8 +103,8 @@ func (c *TranscodeCleaner) verifyOutput(outputPath, inputPath string) error {
 }
 
 // replaceOriginal deletes the original file or directory.
-// For MJPEG format, inputPath is a directory of JPEG frames → use RemoveAll.
-// For H.264/H.265, inputPath is a single MP4 file → use Remove.
+// For MJPEG format, inputPath is a directory of JPEG frames 闂?use RemoveAll.
+// For H.264/H.265, inputPath is a single MP4 file 闂?use Remove.
 func (c *TranscodeCleaner) replaceOriginal(inputPath, inputFormat string) error {
 	if inputFormat == "mjpeg" {
 		if err := os.RemoveAll(inputPath); err != nil && !os.IsNotExist(err) {
@@ -141,16 +140,13 @@ func CheckDiskSpaceForTranscode(inputPath, outputDir string, safetyFactor float6
 
 	inputSize, err := dirSize(inputPath)
 	if err != nil {
-		// Cannot determine input size — skip check.
+		// Cannot determine input size 闂?skip check.
 		return nil
 	}
 
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(outputDir, &stat); err != nil {
-		return fmt.Errorf("statfs %s: %w", outputDir, err)
+	_, freeBytes, err := storage.FilesystemSpace(outputDir)
+	if err != nil {
 	}
-
-	freeBytes := stat.Bavail * uint64(stat.Bsize)
 	required := uint64(float64(inputSize) * safetyFactor)
 
 	if freeBytes < required {
@@ -229,7 +225,7 @@ func CleanOrphanedTranscodes(ctx context.Context, dataDir string, db DBTaskListe
 			return nil // has active task, keep it
 		}
 
-		// Orphaned — delete it
+		// Orphaned 闂?delete it
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			slog.Warn("failed to delete orphaned transcoded file", "path", path, "error", err)
 			return nil // non-fatal, continue walking

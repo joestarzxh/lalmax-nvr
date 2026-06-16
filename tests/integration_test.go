@@ -24,6 +24,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/require"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
+	"github.com/lalmax-pro/lalmax-nvr/internal/ai/webhook"
 	"github.com/lalmax-pro/lalmax-nvr/internal/api"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
@@ -37,7 +39,28 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/wsstream"
 )
 
-// --- Shared helpers ---
+// setupAIHandlerWithWebhook wires a webhook AI manager onto a test API handler.
+func setupAIHandlerWithWebhook(t *testing.T, db *storage.DB, store *storage.Manager) (*api.Handler, *ai.Manager) {
+	t.Helper()
+	h := newAPI(db, store)
+	mgr := ai.NewManager(config.AIConfig{Enabled: true, Backend: "webhook"})
+	h.SetAIManager(mgr)
+	return h, mgr
+}
+
+// postAIWebhook posts a detection payload to /api/ai/webhook.
+func postAIWebhook(t *testing.T, h http.Handler, result webhook.DetectionResult) {
+	t.Helper()
+	body, err := json.Marshal(webhook.DetectRequest{
+		CameraID:   result.CameraID,
+		PTS:        result.PTS,
+		Timestamp:  result.Timestamp,
+		Detections: result.Detections,
+	})
+	require.NoError(t, err)
+	rr := do(t, h, "POST", "/api/ai/webhook", bytes.NewReader(body))
+	require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())
+}
 
 // setupEnv creates a temp dir with an initialized SQLite DB and storage manager.
 func setupEnv(t *testing.T) (*storage.DB, *storage.Manager) {
@@ -1448,60 +1471,6 @@ func TestDatabaseLockingConcurrency(t *testing.T) {
 // Test 24: SSE Event Lifecycle
 // ============================================================================
 
-// mockAIDetector is a mock AIDetector for SSE lifecycle testing.
-type mockAIDetector struct {
-	mu         sync.Mutex
-	callbacks  map[string]engine.OnDetectionFunc
-	cbID       int64
-}
-
-func newMockAIDetector() *mockAIDetector {
-	return &mockAIDetector{
-		callbacks: make(map[string]engine.OnDetectionFunc),
-	}
-}
-
-func (m *mockAIDetector) OnDetection(cb engine.OnDetectionFunc) string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.cbID++
-	id := fmt.Sprintf("mock-cb-%d", m.cbID)
-	m.callbacks[id] = cb
-	return id
-}
-
-func (m *mockAIDetector) UnregisterCallback(id string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	_, ok := m.callbacks[id]
-	delete(m.callbacks, id)
-	return ok
-}
-
-// EnableCamera / DisableCamera / IsEnabled / EnabledCameras / StopAll — no-ops for SSE test.
-func (m *mockAIDetector) EnableCamera(camID string, hub *model.StreamHub) error { return nil }
-func (m *mockAIDetector) DisableCamera(camID string)              {}
-func (m *mockAIDetector) IsEnabled(camID string) bool            { return false }
-func (m *mockAIDetector) EnabledCameras() []string               { return nil }
-func (m *mockAIDetector) StopAll()                                {}
-
-// triggerDetection invokes all registered callbacks with a test detection.
-func (m *mockAIDetector) triggerDetection() {
-	m.mu.Lock()
-	cbs := make([]engine.OnDetectionFunc, 0, len(m.callbacks))
-	for _, cb := range m.callbacks {
-		cbs = append(cbs, cb)
-	}
-	m.mu.Unlock()
-	for _, cb := range cbs {
-		cb(engine.DetectionResult{
-			CameraID:   "cam-sse-test",
-			PTStime:    1234567890,
-			Detections: []ai.Detection{{Label: "person", Confidence: 0.95, Box: [4]float32{0.1, 0.2, 0.3, 0.4}}},
-		})
-	}
-}
-
 // readSSEEvent reads the next SSE data line from the reader.
 func readSSEEvent(t *testing.T, r *bufio.Reader) []byte {
 	t.Helper()
@@ -1517,11 +1486,7 @@ func readSSEEvent(t *testing.T, r *bufio.Reader) []byte {
 
 func TestSSEEventLifecycle(t *testing.T) {
 	db, store := setupEnv(t)
-	h := newAPI(db, store)
-
-	// Create mock AI detector and set it on the handler.
-	mockDet := newMockAIDetector()
-	h.SetAIComponents(nil, mockDet)
+	h, _ := setupAIHandlerWithWebhook(t, db, store)
 
 	// Use httptest.Server for real TCP SSE streaming.
 	server := httptest.NewServer(h.Routes())
@@ -1547,10 +1512,17 @@ func TestSSEEventLifecycle(t *testing.T) {
 	sseReader := bufio.NewReader(sseResp.Body)
 
 	// --- Step 3: Trigger detection and verify SSE event ---
-	mockDet.triggerDetection()
+	time.Sleep(50 * time.Millisecond)
+	postAIWebhook(t, h.Routes(), webhook.DetectionResult{
+		CameraID: "cam-sse-test",
+		PTS:      1234567890,
+		Detections: []webhook.Detection{
+			{Label: "person", Confidence: 0.95, Box: [4]float32{0.1, 0.2, 0.3, 0.4}},
+		},
+	})
 
 	eventData := readSSEEvent(t, sseReader)
-	var det engine.DetectionResult
+	var det webhook.DetectionResult
 	require.NoError(t, json.Unmarshal(eventData, &det), "event data: %s", eventData)
 	require.Equal(t, "cam-sse-test", det.CameraID)
 	require.Len(t, det.Detections, 1)
@@ -1572,7 +1544,13 @@ func TestSSEEventLifecycle(t *testing.T) {
 
 	// --- Step 6: Verify no panic on subsequent detection ---
 	require.NotPanics(t, func() {
-		mockDet.triggerDetection()
+		postAIWebhook(t, h.Routes(), webhook.DetectionResult{
+			CameraID: "cam-sse-test",
+			PTS:      1234567891,
+			Detections: []webhook.Detection{
+				{Label: "person", Confidence: 0.95, Box: [4]float32{0.1, 0.2, 0.3, 0.4}},
+			},
+		})
 	})
 	t.Log("no panic on post-disconnect detection trigger")
 }
@@ -1723,111 +1701,9 @@ func eventuallyWS(t *testing.T, fn func() bool, timeout, interval time.Duration)
 // Test 26: AI Endpoints Integration
 // ===========================================================================
 
-// mockAIEngineForInt implements api.AIEngine for integration testing.
-type mockAIEngineForInt struct {
-	available bool
-	name      string
-	modelPath string
-}
-
-func (m *mockAIEngineForInt) IsAvailable() bool { return m.available }
-func (m *mockAIEngineForInt) Name() string      { return m.name }
-func (m *mockAIEngineForInt) ModelPath() string  { return m.modelPath }
-
-// mockAIDetectorForInt implements api.AIDetector for integration endpoint testing.
-type mockAIDetectorForInt struct {
-	mu         sync.Mutex
-	enabled    map[string]bool
-	callbacks  map[string]engine.OnDetectionFunc
-	cbID       int64
-	enableErr  error
-}
-
-func newMockAIDetectorForInt() *mockAIDetectorForInt {
-	return &mockAIDetectorForInt{
-		enabled:   make(map[string]bool),
-		callbacks: make(map[string]engine.OnDetectionFunc),
-	}
-}
-
-func (m *mockAIDetectorForInt) EnableCamera(camID string, hub *model.StreamHub) error {
-	if m.enableErr != nil {
-		return m.enableErr
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.enabled[camID] = true
-	return nil
-}
-
-func (m *mockAIDetectorForInt) DisableCamera(camID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.enabled, camID)
-}
-
-func (m *mockAIDetectorForInt) IsEnabled(camID string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.enabled[camID]
-}
-
-func (m *mockAIDetectorForInt) EnabledCameras() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	ids := make([]string, 0, len(m.enabled))
-	for id := range m.enabled {
-		ids = append(ids, id)
-	}
-	return ids
-}
-
-func (m *mockAIDetectorForInt) OnDetection(cb engine.OnDetectionFunc) string {
-	if cb == nil {
-		return ""
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.cbID++
-	id := fmt.Sprintf("int-cb-%d", m.cbID)
-	m.callbacks[id] = cb
-	return id
-}
-
-func (m *mockAIDetectorForInt) UnregisterCallback(id string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	_, ok := m.callbacks[id]
-	delete(m.callbacks, id)
-	return ok
-}
-
-func (m *mockAIDetectorForInt) StopAll() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.enabled = make(map[string]bool)
-}
-
-// fireDetection invokes all registered callbacks (for SSE test within integration).
-func (m *mockAIDetectorForInt) fireDetection(result engine.DetectionResult) {
-	m.mu.Lock()
-	cbs := make([]engine.OnDetectionFunc, 0, len(m.callbacks))
-	for _, cb := range m.callbacks {
-		cbs = append(cbs, cb)
-	}
-	m.mu.Unlock()
-	for _, cb := range cbs {
-		cb(result)
-	}
-}
-
 func TestAIEndpointsIntegration(t *testing.T) {
 	db, store := setupEnv(t)
-	h := newAPI(db, store)
-
-	eng := &mockAIEngineForInt{available: true, name: "test-engine", modelPath: "yolov11n.onnx"}
-	det := newMockAIDetectorForInt()
-	h.SetAIComponents(eng, det)
+	h, _ := setupAIHandlerWithWebhook(t, db, store)
 
 	// ----------------------------------------------------------------
 	// 1. GET /api/ai/status — returns current status
@@ -1838,8 +1714,7 @@ func TestAIEndpointsIntegration(t *testing.T) {
 	var statusResp map[string]interface{}
 	parseJSON(t, rr, &statusResp)
 	require.Equal(t, true, statusResp["available"])
-	require.Equal(t, "running", statusResp["engine_status"])
-	require.Equal(t, "yolov11n.onnx", statusResp["model"])
+	require.Equal(t, "webhook", statusResp["backend"])
 
 	// ----------------------------------------------------------------
 	// 2. POST /api/ai/enable — missing camera_id → 400
@@ -1853,7 +1728,6 @@ func TestAIEndpointsIntegration(t *testing.T) {
 	// ----------------------------------------------------------------
 	// 3. POST /api/ai/enable — valid body but camMgr nil → 503
 	// ----------------------------------------------------------------
-	// Insert camera so DB lookup succeeds, then camMgr check fails with 503.
 	err := db.UpsertCamera(context.Background(), "cam-test", "Test", "rtsp_h264", "", "rtsp://192.168.1.1/stream", "", "", true, "", "", "")
 	require.NoError(t, err)
 	rr = do(t, h.Routes(), "POST", "/api/ai/enable", strings.NewReader(`{"camera_id":"cam-test"}`))
@@ -1876,15 +1750,13 @@ func TestAIEndpointsIntegration(t *testing.T) {
 	require.Equal(t, "cam-nope", disableResp["camera_id"])
 
 	// ----------------------------------------------------------------
-	// 6. POST /api/ai/disable — with detector disabled first → 200
+	// 6. POST /api/ai/disable — idempotent disable for another camera → 200
 	// ----------------------------------------------------------------
-	det.EnableCamera("cam-toggle", model.NewStreamHub())
-	require.True(t, det.IsEnabled("cam-toggle"))
 	rr = do(t, h.Routes(), "POST", "/api/ai/disable", strings.NewReader(`{"camera_id":"cam-toggle"}`))
 	require.Equal(t, http.StatusOK, rr.Code)
 	parseJSON(t, rr, &disableResp)
 	require.Equal(t, "disabled", disableResp["status"])
-	require.False(t, det.IsEnabled("cam-toggle"))
+	require.Equal(t, "cam-toggle", disableResp["camera_id"])
 
 	// ----------------------------------------------------------------
 	// 7. SSE /api/ai/events — verify headers and event format
@@ -1905,23 +1777,22 @@ func TestAIEndpointsIntegration(t *testing.T) {
 
 	sseReader := bufio.NewReader(sseResp.Body)
 
-	// Fire a detection event and read it from the SSE stream.
-	det.fireDetection(engine.DetectionResult{
+	time.Sleep(50 * time.Millisecond)
+	postAIWebhook(t, h.Routes(), webhook.DetectionResult{
 		CameraID: "cam-ai-int",
-		PTStime:  98765,
-		Detections: []ai.Detection{
+		PTS:      98765,
+		Detections: []webhook.Detection{
 			{Label: "car", Confidence: 0.88, Box: [4]float32{0.0, 0.1, 0.5, 0.6}},
 		},
 	})
 
 	eventData := readSSEEvent(t, sseReader)
-	var detResult engine.DetectionResult
+	var detResult webhook.DetectionResult
 	require.NoError(t, json.Unmarshal(eventData, &detResult), "event data: %s", eventData)
 	require.Equal(t, "cam-ai-int", detResult.CameraID)
 	require.Len(t, detResult.Detections, 1)
 	require.Equal(t, "car", detResult.Detections[0].Label)
 
-	// Disconnect SSE client.
 	sseCancel()
 	sseResp.Body.Close()
 }

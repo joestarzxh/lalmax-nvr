@@ -67,6 +67,7 @@ func NewManager(cfg config.AIConfig) *Manager {
 
 	case "webhook":
 		m.receiver = webhook.NewReceiver()
+		m.receiver.OnDetection(m.dispatchDetection)
 		logger.Info("AI webhook backend initialized")
 
 	case "disabled", "":
@@ -291,11 +292,20 @@ func (m *Manager) processFrame(camID string, pts int64, au [][]byte) {
 	}
 
 	// Dispatch to callbacks
+	m.dispatchDetection(result)
+}
+
+func (m *Manager) dispatchDetection(result webhook.DetectionResult) {
 	m.mu.RLock()
+	callbacks := make([]webhook.CallbackFunc, 0, len(m.callbacks))
 	for _, cb := range m.callbacks {
-		go cb(result)
+		callbacks = append(callbacks, cb)
 	}
 	m.mu.RUnlock()
+
+	for _, cb := range callbacks {
+		go cb(result)
+	}
 }
 
 // concatNALUs concatenates NALU access units into a single buffer with start codes.

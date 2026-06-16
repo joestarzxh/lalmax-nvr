@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/metrics"
@@ -361,7 +359,7 @@ func (q *TranscodeQueue) runWorker(ctx context.Context, task *storage.TranscodeT
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
 
 	// Process group for clean kill — prevents orphaned FFmpeg on RPi
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureProcessGroup(cmd)
 
 	// Capture stderr for progress parsing
 	stderr, err := cmd.StderrPipe()
@@ -377,7 +375,7 @@ func (q *TranscodeQueue) runWorker(ctx context.Context, task *storage.TranscodeT
 
 	// Set low priority (nice 10) — don't starve recording pipeline
 	pid := cmd.Process.Pid
-	if err := syscall.Setpriority(syscall.PRIO_PROCESS, pid, 10); err != nil {
+	if err := setLowPriority(pid); err != nil {
 		queueLogger.Warn("failed to set process priority", "pid", pid, "error", err)
 	}
 
@@ -643,7 +641,7 @@ func atomicRename(src, dst string) error {
 	}
 
 	// Cross-device link — fall back to copy + remove
-	if !errors.Is(err, syscall.EXDEV) {
+	if !isCrossDeviceError(err) {
 		return err
 	}
 
