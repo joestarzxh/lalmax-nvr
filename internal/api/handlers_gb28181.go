@@ -257,21 +257,15 @@ func (h *GB28181Handler) RecordInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	startTime, err := time.Parse(time.RFC3339, req.StartTime)
+	startTime, err := parseTime(req.StartTime)
 	if err != nil {
-		startTime, err = time.Parse("2006-01-02T15:04:05", req.StartTime)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid start_time format"})
-			return
-		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid start_time format"})
+		return
 	}
-	endTime, err := time.Parse(time.RFC3339, req.EndTime)
+	endTime, err := parseTime(req.EndTime)
 	if err != nil {
-		endTime, err = time.Parse("2006-01-02T15:04:05", req.EndTime)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid end_time format"})
-			return
-		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid end_time format"})
+		return
 	}
 
 	records, err := h.svr.QueryRecordInfo(req.DeviceID, req.ChannelID, startTime, endTime)
@@ -309,21 +303,15 @@ func (h *GB28181Handler) Playback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	startTime, err := time.Parse(time.RFC3339, req.StartTime)
+	startTime, err := parseTime(req.StartTime)
 	if err != nil {
-		startTime, err = time.Parse("2006-01-02T15:04:05", req.StartTime)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid start_time format"})
-			return
-		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid start_time format"})
+		return
 	}
-	endTime, err := time.Parse(time.RFC3339, req.EndTime)
+	endTime, err := parseTime(req.EndTime)
 	if err != nil {
-		endTime, err = time.Parse("2006-01-02T15:04:05", req.EndTime)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid end_time format"})
-			return
-		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid end_time format"})
+		return
 	}
 
 	streamID := req.StreamID
@@ -345,9 +333,13 @@ func (h *GB28181Handler) Playback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build play URLs for all supported protocols
+	playURLs := buildGB28181PlayURLs(r.Context(), h.mediaEngine, streamID, "rtp")
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"ssrc":      ssrc,
 		"stream_id": streamID,
+		"urls":      playURLs,
 	})
 }
 
@@ -417,6 +409,70 @@ func (h *GB28181Handler) PlaySeek(w http.ResponseWriter, r *http.Request) {
 		SeekTime:  req.SeekTime,
 	}); err != nil {
 		slog.Error("GB28181 play seek failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// PlayPause pauses playback.
+func (h *GB28181Handler) PlayPause(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
+	var req struct {
+		DeviceID  string `json:"device_id"`
+		ChannelID string `json:"channel_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.DeviceID == "" || req.ChannelID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		return
+	}
+
+	if err := h.svr.PlayPause(&gb28181.PlayPauseInput{
+		DeviceID:  req.DeviceID,
+		ChannelID: req.ChannelID,
+	}); err != nil {
+		slog.Error("GB28181 play pause failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// PlayResume resumes playback.
+func (h *GB28181Handler) PlayResume(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
+	var req struct {
+		DeviceID  string `json:"device_id"`
+		ChannelID string `json:"channel_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.DeviceID == "" || req.ChannelID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		return
+	}
+
+	if err := h.svr.PlayResume(&gb28181.PlayPauseInput{
+		DeviceID:  req.DeviceID,
+		ChannelID: req.ChannelID,
+	}); err != nil {
+		slog.Error("GB28181 play resume failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -643,6 +699,58 @@ func (h *GB28181Handler) StopBroadcast(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// ==================== Platform Events API ====================
+
+// ListPlatformEvents returns platform events history.
+func (h *GB28181Handler) ListPlatformEvents(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"events": []interface{}{},
+			"total":  0,
+		})
+		return
+	}
+
+	var platformID int64
+	fmt.Sscanf(r.URL.Query().Get("platform_id"), "%d", &platformID)
+	eventType := r.URL.Query().Get("event_type")
+	limit := 50
+	offset := 0
+	fmt.Sscanf(r.URL.Query().Get("limit"), "%d", &limit)
+	fmt.Sscanf(r.URL.Query().Get("offset"), "%d", &offset)
+
+	events, total, err := h.db.ListPlatformEvents(r.Context(), platformID, eventType, limit, offset)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"events": events,
+		"total":  total,
+	})
+}
+
+// GetPlatformStatus returns the current status of all platforms.
+func (h *GB28181Handler) GetPlatformStatus(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"platforms": []interface{}{},
+		})
+		return
+	}
+
+	statuses, err := h.db.GetPlatformStatus(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"platforms": statuses,
+	})
+}
+
 // ==================== Alarm API ====================
 
 // ListAlarms returns alarm records.
@@ -694,21 +802,15 @@ func (h *GB28181Handler) StartDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	startTime, err := time.Parse(time.RFC3339, req.StartTime)
+	startTime, err := parseTime(req.StartTime)
 	if err != nil {
-		startTime, err = time.Parse("2006-01-02T15:04:05", req.StartTime)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid start_time format"})
-			return
-		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid start_time format"})
+		return
 	}
-	endTime, err := time.Parse(time.RFC3339, req.EndTime)
+	endTime, err := parseTime(req.EndTime)
 	if err != nil {
-		endTime, err = time.Parse("2006-01-02T15:04:05", req.EndTime)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid end_time format"})
-			return
-		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid end_time format"})
+		return
 	}
 
 	dm := h.svr.GetDownloadManager()
@@ -758,6 +860,81 @@ func (h *GB28181Handler) StopDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// BatchDownloadRequest is the request body for batch downloading.
+type BatchDownloadRequest struct {
+	DeviceID  string   `json:"device_id"`
+	ChannelID string   `json:"channel_id"`
+	Segments  []struct {
+		StartTime string `json:"start_time"`
+		EndTime   string `json:"end_time"`
+	} `json:"segments"`
+}
+
+// BatchDownload starts multiple recording downloads from a device.
+func (h *GB28181Handler) BatchDownload(w http.ResponseWriter, r *http.Request) {
+	if h.svr == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+		return
+	}
+	var req BatchDownloadRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.DeviceID == "" || req.ChannelID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		return
+	}
+
+	if len(req.Segments) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "segments is required"})
+		return
+	}
+
+	dm := h.svr.GetDownloadManager()
+	if dm == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "download manager not initialized"})
+		return
+	}
+
+	var results []map[string]interface{}
+	var errors []string
+
+	for i, seg := range req.Segments {
+		startTime, err := parseTime(seg.StartTime)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("segment %d: invalid start_time", i))
+			continue
+		}
+		endTime, err := parseTime(seg.EndTime)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("segment %d: invalid end_time", i))
+			continue
+		}
+
+		ds, err := dm.StartDownload(req.DeviceID, req.ChannelID, startTime, endTime, h.svr.GetDeviceStore())
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("segment %d: %v", i, err))
+			continue
+		}
+
+		results = append(results, map[string]interface{}{
+			"download_id": ds.ID,
+			"file_path":   ds.FilePath,
+			"status":      ds.Status,
+			"start_time":  seg.StartTime,
+			"end_time":    seg.EndTime,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"downloads": results,
+		"errors":    errors,
+		"total":     len(results),
+	})
 }
 
 // ListDownloads returns download records.
@@ -1013,4 +1190,53 @@ func (h *GB28181Handler) HandleStopTalkWhip(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status": "stopped",
 	})
+}
+
+// buildGB28181PlayURLs builds play URLs for all supported protocols.
+func buildGB28181PlayURLs(ctx context.Context, engine media.Engine, streamID, appName string) []map[string]string {
+	if engine == nil {
+		return nil
+	}
+	protocols := []string{"ws-flv", "flv", "hls", "ll-hls", "webrtc", "fmp4", "rtmp", "rtsp"}
+	urls := make([]map[string]string, 0, len(protocols))
+	for _, protocol := range protocols {
+		playURL, err := engine.BuildPlayURL(ctx, media.PlayURLRequest{
+			StreamID: streamID,
+			AppName:  appName,
+			Protocol: protocol,
+		})
+		if err != nil || playURL == nil || playURL.URL == "" {
+			continue
+		}
+		urls = append(urls, map[string]string{
+			"protocol": protocol,
+			"url":      playURL.URL,
+		})
+	}
+	return urls
+}
+
+// parseTime parses time strings in various formats and converts to local time.
+func parseTime(s string) (time.Time, error) {
+	// Try RFC3339 first (handles Z suffix for UTC)
+	t, err := time.Parse(time.RFC3339, s)
+	if err == nil {
+		return t.In(time.Local), nil
+	}
+	// Try RFC3339 without Z - treat as local time
+	t, err = time.ParseInLocation("2006-01-02T15:04:05", s, time.Local)
+	if err == nil {
+		return t, nil
+	}
+	// Try with milliseconds
+	t, err = time.ParseInLocation("2006-01-02T15:04:05.000", s, time.Local)
+	if err == nil {
+		return t, nil
+	}
+	// Try RFC3339 with milliseconds and Z
+	t, err = time.Parse("2006-01-02T15:04:05.000Z", s)
+	if err == nil {
+		return t.In(time.Local), nil
+	}
+	return time.Time{}, fmt.Errorf("cannot parse time: %s", s)
 }

@@ -88,7 +88,6 @@
     { href: '#/recording-plans', labelKey: 'nav.recording_plans', route: '/recording-plans', icon: Clock },
     { href: '#/events', labelKey: 'nav.events', route: '/events', icon: Bell },
     { href: '#/streams', labelKey: 'nav.streams', route: '/streams', icon: Radio },
-    { href: '#/gb28181', labelKey: 'nav.gb28181', route: '/gb28181', icon: Link },
     { href: '#/ai', labelKey: 'nav.ai_detection', route: '/ai', icon: Brain },
     { href: '#/users', labelKey: 'nav.users', route: '/users', icon: Users },
     { href: '#/stats', labelKey: 'nav.stats', route: '/stats', icon: BarChart3 },

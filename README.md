@@ -50,6 +50,7 @@ Camera ──→ lalmax (media engine) ──→ HLS / HTTP-FLV / WebRTC / fMP4 
 
 - **Media Engine**: lalmax-powered relay — unified ingest, no duplicate camera pulls
 - **Camera Protocols**: RTSP (H.264/H.265/MJPEG), HTTP JPEG, ONVIF discovery & management
+- **GB28181**: Full SIP-based device management, cascade platform support, recording query & playback with timeline, multi-protocol streaming (ws-flv, flv, hls, webrtc, etc.), playback control (pause/resume/speed/seek), batch download, platform event history
 - **Recording**: Automatic MP4 segments, multi-camera concurrent, per-camera retention, audio capture (AAC + G.711)
 - **Recording Playback**: Visual timeline with 24h overview, hour-level zoom, inline video player, mouse wheel zoom/pan
 - **Live View**: Multi-protocol — WebCodecs, fMP4, WebRTC, HTTP-FLV, HLS, LL-HLS

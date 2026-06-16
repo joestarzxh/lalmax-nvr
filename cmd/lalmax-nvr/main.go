@@ -876,6 +876,8 @@ func (a *App) buildRouter() http.Handler {
 		r.Post("/api/gb28181/playback", gbHandler.Playback)
 		r.Post("/api/gb28181/playback/speed", gbHandler.PlaySpeed)
 		r.Post("/api/gb28181/playback/seek", gbHandler.PlaySeek)
+		r.Post("/api/gb28181/playback/pause", gbHandler.PlayPause)
+		r.Post("/api/gb28181/playback/resume", gbHandler.PlayResume)
 		// Platform cascading
 		r.Get("/api/gb28181/platforms", gbHandler.ListPlatforms)
 		r.Post("/api/gb28181/platforms", gbHandler.AddPlatform)
@@ -889,8 +891,12 @@ func (a *App) buildRouter() http.Handler {
 		r.Post("/api/gb28181/talk/stop", gbHandler.HandleStopTalkWhip)
 		// Alarm
 		r.Get("/api/gb28181/alarms", gbHandler.ListAlarms)
+		// Platform Events (Cascade History)
+		r.Get("/api/gb28181/platform/events", gbHandler.ListPlatformEvents)
+		r.Get("/api/gb28181/platform/status", gbHandler.GetPlatformStatus)
 		// Download
 		r.Post("/api/gb28181/download/start", gbHandler.StartDownload)
+		r.Post("/api/gb28181/download/batch", gbHandler.BatchDownload)
 		r.Post("/api/gb28181/download/stop", gbHandler.StopDownload)
 		r.Get("/api/gb28181/downloads", gbHandler.ListDownloads)
 	})

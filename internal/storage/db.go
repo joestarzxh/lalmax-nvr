@@ -414,6 +414,12 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='20' WHERE key='schema_version'")
 
+	// Migration v20 → v21: platform events for cascade history
+	if err := d.initPlatformEvents(); err != nil {
+		return err
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='21' WHERE key='schema_version'")
+
 	return nil
 
 }

@@ -7,14 +7,19 @@
     xiaomiDevices, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap,
     enableCamera, disableCamera, getHealthStatus, getSnapshotUrl,
     ApiRequestError, queryDeviceRecords, startDevicePlayback,
-    setPlaybackSpeed, seekPlayback,
+    setPlaybackSpeed, seekPlayback, pausePlayback, resumePlayback,
     listGB28181Alarms, startBroadcast, stopBroadcast,
     listArchives, restoreArchiveGroup, setArchiveRetention, deleteArchiveGroup,
-    listArchiveRecordings, deleteArchiveRecording, getCameraRecordingStats
+    listArchiveRecordings, deleteArchiveRecording, getCameraRecordingStats,
+    transformRecords, startDownload, batchDownload,
+    listGB28181Platforms, addGB28181Platform, deleteGB28181Platform,
+    listPlatformEvents, getPlatformStatus, getTimelineData
   } from '$lib/api';
   import type { 
     GB28181Device, StreamInfo, Camera, XiaomiDevice, ProtocolInfo, CameraHealth,
-    DeviceRecordItem, GB28181Alarm, ArchiveGroup, Recording
+    DeviceRecordItem, GB28181Alarm, ArchiveGroup, Recording,
+    GB28181Platform, AddPlatformRequest, PlatformEvent, PlatformStatus,
+    DeviceRecordResponse
   } from '$lib/api';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
@@ -25,7 +30,8 @@
     Monitor, Search, Pencil, Pause, RotateCw, Eye,
     MoreVertical, Archive, Trash2, Image, Settings,
     Film, AlertTriangle, Download, Mic, MicOff, X,
-    ChevronDown, ChevronRight, Clock, FastForward, Rewind
+    ChevronDown, ChevronRight, Clock, FastForward, Rewind,
+    CheckSquare, Link, Plus, Server, WifiOff as WifiOffIcon, Bell
   } from 'lucide-svelte';
   import DiscoveryPanel from '$lib/components/DiscoveryPanel.svelte';
   import CameraCard from '$lib/components/CameraCard.svelte';
@@ -51,8 +57,28 @@
   let gb28181Cameras = $state<Map<string, Camera>>(new Map()); // streamId -> Camera
 
   // GB28181 sub-tabs
-  type GB28181SubTab = 'devices' | 'records' | 'alarms';
+  type GB28181SubTab = 'devices' | 'records' | 'alarms' | 'platforms' | 'platform_events';
   let gb28181SubTab = $state<GB28181SubTab>('devices');
+
+  // GB28181 platforms state
+  let platforms = $state<GB28181Platform[]>([]);
+  let platformsLoading = $state(false);
+  let showAddPlatformDialog = $state(false);
+  let platformForm = $state<AddPlatformRequest>({
+    name: '', enable: true, server_gb_id: '', server_ip: '',
+    server_port: 5060, transport: 'UDP', expires: 3600,
+    keep_timeout: 60, max_timeout_count: 3,
+  });
+
+  // GB28181 platform events state
+  let platformEvents = $state<PlatformEvent[]>([]);
+  let platformEventsLoading = $state(false);
+  let platformEventsTotal = $state(0);
+  let platformEventsOffset = $state(0);
+  const platformEventsLimit = 50;
+  let platformStatuses = $state<PlatformStatus[]>([]);
+  let selectedPlatformId = $state<number | undefined>(undefined);
+  let selectedEventType = $state('');
 
   // GB28181 records state
   let recordDeviceId = $state('');
@@ -67,6 +93,13 @@
   let playbackSeekTime = $state(0);
   let speedLoading = $state(false);
   let seekLoading = $state(false);
+  let isPaused = $state(false);
+  let selectedRecords = $state<Set<number>>(new Set());
+  let selectMode = $state(false);
+  let downloading = $state(false);
+  let showTimeline = $state(true);
+  let timelineData = $state<Array<{date: string, segments: Array<{start: number, end: number, startTime: string, endTime: string}>}>>([]);
+  let rawRecordResponse = $state<DeviceRecordResponse | null>(null);
 
   // GB28181 alarms state
   let alarms = $state<GB28181Alarm[]>([]);
@@ -156,6 +189,8 @@
     { id: 'devices' as GB28181SubTab, label: '设备列表', icon: Monitor },
     { id: 'records' as GB28181SubTab, label: '设备录像', icon: Film },
     { id: 'alarms' as GB28181SubTab, label: '报警记录', icon: AlertTriangle },
+    { id: 'platforms' as GB28181SubTab, label: '级联管理', icon: Link },
+    { id: 'platform_events' as GB28181SubTab, label: '级联历史', icon: Clock },
   ];
 
   // Check if current tab supports discovery
@@ -362,9 +397,27 @@
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     return {
-      start: today.toISOString().replace('Z', '').slice(0, 19),
-      end: now.toISOString().replace('Z', '').slice(0, 19),
+      start: formatDateTimeLocal(today),
+      end: formatDateTimeLocal(now),
     };
+  }
+
+  function formatDateTimeLocal(date: Date): string {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    const h = String(date.getHours()).padStart(2, '0');
+    const min = String(date.getMinutes()).padStart(2, '0');
+    const s = String(date.getSeconds()).padStart(2, '0');
+    return `${y}-${m}-${d}T${h}:${min}:${s}`;
+  }
+
+  function ensureSeconds(timeStr: string): string {
+    // If time string is like "2026-06-16T10:56", add ":00" for seconds
+    if (timeStr && timeStr.length === 16) {
+      return timeStr + ':00';
+    }
+    return timeStr;
   }
 
   function getSelectedDeviceChannels() {
@@ -383,15 +436,19 @@
     }
     recordLoading = true;
     records = [];
+    timelineData = [];
+    rawRecordResponse = null;
     playbackStreamUrl = '';
     try {
       const res = await queryDeviceRecords({
         device_id: recordDeviceId,
         channel_id: recordChannelId,
-        start_time: recordStartTime,
-        end_time: recordEndTime,
+        start_time: ensureSeconds(recordStartTime),
+        end_time: ensureSeconds(recordEndTime),
       });
-      records = res.records || [];
+      rawRecordResponse = res;
+      records = transformRecords(res);
+      timelineData = getTimelineData(res);
       if (records.length === 0) {
         showToast('未找到录像记录', 'info');
       }
@@ -410,10 +467,19 @@
         start_time: record.start_time,
         end_time: record.end_time,
       });
-      if (res.url) {
+      playbackStreamId = res.stream_id || `${recordDeviceId}_${recordChannelId}_playback`;
+      
+      // Handle multi-protocol URLs
+      if (res.urls && res.urls.length > 0) {
+        // Find ws-flv protocol or use first one
+        const wsFlv = res.urls.find(u => u.protocol === 'ws-flv');
+        const url = wsFlv ? wsFlv.url : res.urls[0].url;
+        const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        playbackStreamUrl = url.startsWith('ws') ? url : `${wsProto}//${location.host}${url}`;
+      } else if (res.url) {
+        // Backward compat: single URL
         const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
         playbackStreamUrl = res.url.startsWith('ws') ? res.url : `${wsProto}//${location.host}${res.url}`;
-        playbackStreamId = res.stream_id || `${recordDeviceId}_${recordChannelId}_playback`;
       }
     } catch (e) {
       showToast(e instanceof Error ? e.message : '播放失败', 'error');
@@ -449,10 +515,104 @@
       });
       playbackSeekTime = seconds;
       showToast(`已拖动到 ${seconds}秒`, 'success');
+      
+      // Reconnect player after seek by temporarily clearing and resetting the URL
+      const currentUrl = playbackStreamUrl;
+      playbackStreamUrl = '';
+      setTimeout(() => {
+        playbackStreamUrl = currentUrl;
+      }, 500);
     } catch (e) {
       showToast(e instanceof Error ? e.message : '拖动失败', 'error');
     } finally {
       seekLoading = false;
+    }
+  }
+
+  async function handlePause() {
+    if (!recordDeviceId || !recordChannelId) return;
+    try {
+      await pausePlayback({
+        device_id: recordDeviceId,
+        channel_id: recordChannelId,
+      });
+      isPaused = true;
+      showToast('已暂停', 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '暂停失败', 'error');
+    }
+  }
+
+  async function handleResume() {
+    if (!recordDeviceId || !recordChannelId) return;
+    try {
+      await resumePlayback({
+        device_id: recordDeviceId,
+        channel_id: recordChannelId,
+      });
+      isPaused = false;
+      showToast('已恢复播放', 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '恢复失败', 'error');
+    }
+  }
+
+  async function handleDownloadSingle(record: DeviceRecordItem) {
+    if (!recordDeviceId || !recordChannelId) return;
+    downloading = true;
+    try {
+      const res = await startDownload({
+        device_id: recordDeviceId,
+        channel_id: recordChannelId,
+        start_time: record.start_time,
+        end_time: record.end_time,
+      });
+      showToast(`下载已开始: ${res.file_path}`, 'success');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '下载失败', 'error');
+    } finally {
+      downloading = false;
+    }
+  }
+
+  async function handleBatchDownload() {
+    if (!recordDeviceId || !recordChannelId || selectedRecords.size === 0) return;
+    downloading = true;
+    try {
+      const segments = Array.from(selectedRecords).map(idx => ({
+        start_time: records[idx].start_time,
+        end_time: records[idx].end_time,
+      }));
+      const res = await batchDownload({
+        device_id: recordDeviceId,
+        channel_id: recordChannelId,
+        segments,
+      });
+      showToast(`已开始 ${res.total} 个下载任务`, 'success');
+      selectMode = false;
+      selectedRecords = new Set();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '批量下载失败', 'error');
+    } finally {
+      downloading = false;
+    }
+  }
+
+  function toggleRecordSelection(index: number) {
+    const newSet = new Set(selectedRecords);
+    if (newSet.has(index)) {
+      newSet.delete(index);
+    } else {
+      newSet.add(index);
+    }
+    selectedRecords = newSet;
+  }
+
+  function toggleSelectAll() {
+    if (selectedRecords.size === records.length) {
+      selectedRecords = new Set();
+    } else {
+      selectedRecords = new Set(records.map((_, i) => i));
     }
   }
 
@@ -497,6 +657,119 @@
     if (tab === 'alarms' && alarms.length === 0) {
       loadAlarms();
     }
+    if (tab === 'platforms' && platforms.length === 0) {
+      loadPlatforms();
+    }
+    if (tab === 'platform_events') {
+      loadPlatformEvents();
+      loadPlatformStatuses();
+    }
+  }
+
+  // GB28181 Platforms functions
+  async function loadPlatforms() {
+    platformsLoading = true;
+    try {
+      const res = await listGB28181Platforms();
+      platforms = res.platforms || [];
+    } catch (e) {
+      showToast('加载级联平台失败', 'error');
+    } finally {
+      platformsLoading = false;
+    }
+  }
+
+  function resetPlatformForm() {
+    platformForm = {
+      name: '', enable: true, server_gb_id: '', server_ip: '',
+      server_port: 5060, transport: 'UDP', expires: 3600,
+      keep_timeout: 60, max_timeout_count: 3,
+    };
+  }
+
+  async function handleAddPlatform() {
+    if (!platformForm.server_gb_id || !platformForm.server_ip) {
+      showToast('请填写必填字段', 'error');
+      return;
+    }
+    try {
+      await addGB28181Platform(platformForm);
+      showToast('平台添加成功', 'success');
+      showAddPlatformDialog = false;
+      resetPlatformForm();
+      await loadPlatforms();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '添加失败', 'error');
+    }
+  }
+
+  async function handleDeletePlatform(id: number) {
+    if (!confirm('确定删除此级联平台？')) return;
+    try {
+      await deleteGB28181Platform(id);
+      showToast('平台已删除', 'success');
+      await loadPlatforms();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '删除失败', 'error');
+    }
+  }
+
+  // Platform Events functions
+  async function loadPlatformEvents() {
+    platformEventsLoading = true;
+    try {
+      const res = await listPlatformEvents(selectedPlatformId, selectedEventType || undefined, platformEventsLimit, platformEventsOffset);
+      platformEvents = res.events || [];
+      platformEventsTotal = res.total || 0;
+    } catch (e) {
+      showToast('加载级联历史失败', 'error');
+    } finally {
+      platformEventsLoading = false;
+    }
+  }
+
+  async function loadPlatformStatuses() {
+    try {
+      const res = await getPlatformStatus();
+      platformStatuses = res.platforms || [];
+    } catch (e) {
+      console.error('Failed to load platform statuses:', e);
+    }
+  }
+
+  function platformEventsNextPage() {
+    if (platformEventsOffset + platformEventsLimit < platformEventsTotal) {
+      platformEventsOffset += platformEventsLimit;
+      loadPlatformEvents();
+    }
+  }
+
+  function platformEventsPrevPage() {
+    if (platformEventsOffset > 0) {
+      platformEventsOffset = Math.max(0, platformEventsOffset - platformEventsLimit);
+      loadPlatformEvents();
+    }
+  }
+
+  function getEventTypeLabel(type: string) {
+    const labels: Record<string, string> = {
+      'register': '注册',
+      'unregister': '注销',
+      'keepalive': '心跳',
+      'online': '上线',
+      'offline': '离线',
+      'stream_start': '推流开始',
+      'stream_stop': '推流停止',
+    };
+    return labels[type] || type;
+  }
+
+  function getEventTypeClass(type: string) {
+    if (type === 'register' || type === 'online') return 'bg-green-100 text-green-800';
+    if (type === 'unregister' || type === 'offline') return 'bg-red-100 text-red-800';
+    if (type === 'stream_start') return 'bg-blue-100 text-blue-800';
+    if (type === 'stream_stop') return 'bg-gray-100 text-gray-800';
+    return 'bg-gray-100 text-gray-600';
   }
 
   function handleONVIFSubTabChange(tab: ONVIFSubTab) {
@@ -541,6 +814,19 @@
   function formatTime(timeStr: string): string {
     if (!timeStr) return '-';
     try { return new Date(timeStr).toLocaleString('zh-CN'); } catch { return timeStr; }
+  }
+
+  function calcDuration(startStr: string, endStr: string): string {
+    try {
+      const start = new Date(startStr).getTime();
+      const end = new Date(endStr).getTime();
+      const diff = Math.abs(end - start) / 1000;
+      if (diff < 60) return `${Math.round(diff)}秒`;
+      if (diff < 3600) return `${Math.round(diff / 60)}分钟`;
+      const h = Math.floor(diff / 3600);
+      const m = Math.round((diff % 3600) / 60);
+      return `${h}小时${m}分`;
+    } catch { return '-'; }
   }
 
   // Camera management functions
@@ -1434,6 +1720,23 @@
               </div>
               <!-- Playback controls -->
               <div class="mt-4 space-y-3">
+                <!-- Pause/Resume control -->
+                <div class="flex items-center gap-3">
+                  <span class="text-sm th-text-secondary flex items-center gap-1">
+                    <Play size={14} /> 控制:
+                  </span>
+                  <div class="flex gap-1">
+                    {#if isPaused}
+                      <button class="btn btn-sm btn-primary" onclick={handleResume}>
+                        <Play size={14} class="mr-1" /> 继续
+                      </button>
+                    {:else}
+                      <button class="btn btn-sm btn-ghost" onclick={handlePause}>
+                        <Pause size={14} class="mr-1" /> 暂停
+                      </button>
+                    {/if}
+                  </div>
+                </div>
                 <!-- Speed control -->
                 <div class="flex items-center gap-3">
                   <span class="text-sm th-text-secondary flex items-center gap-1">
@@ -1472,40 +1775,145 @@
             </div>
           {/if}
 
+          <!-- Timeline view -->
+          {#if timelineData.length > 0 && showTimeline}
+            <div class="card border th-border p-4 mb-4">
+              <div class="flex items-center justify-between mb-3">
+                <h3 class="text-sm font-semibold th-text-primary">录像时间轴</h3>
+                <button class="btn btn-ghost btn-sm" onclick={() => showTimeline = false}>
+                  <X size={14} />
+                </button>
+              </div>
+              {#each timelineData as day}
+                <div class="mb-3 last:mb-0">
+                  <div class="text-xs font-medium th-text-secondary mb-1">{day.date}</div>
+                  <div class="relative h-8 bg-gray-100 dark:bg-gray-800 rounded overflow-hidden">
+                    <!-- Hour markers -->
+                    {#each Array(24) as _, h}
+                      <div class="absolute top-0 bottom-0 border-l border-gray-200 dark:border-gray-700" 
+                           style="left: {(h / 24) * 100}%">
+                        {#if h % 6 === 0}
+                          <span class="absolute -top-0 text-[10px] th-text-tertiary" style="left: 2px">{h}时</span>
+                        {/if}
+                      </div>
+                    {/each}
+                    <!-- Recording segments -->
+                    {#each day.segments as seg}
+                      {@const startHour = new Date(seg.start * 1000).getHours() + new Date(seg.start * 1000).getMinutes() / 60}
+                      {@const endHour = new Date(seg.end * 1000).getHours() + new Date(seg.end * 1000).getMinutes() / 60}
+                      {@const durationHours = Math.max(endHour - startHour, 0.5)}
+                      <button
+                        class="absolute top-1 bottom-1 bg-blue-500 hover:bg-blue-600 rounded-sm cursor-pointer transition-colors"
+                        style="left: {(startHour / 24) * 100}%; width: {(durationHours / 24) * 100}%"
+                        title="{seg.startTime} - {seg.endTime}"
+                        onclick={() => {
+                          const rec = records.find(r => 
+                            new Date(r.start_time).getTime() / 1000 === seg.start
+                          );
+                          if (rec) handlePlayRecord(rec);
+                        }}
+                      ></button>
+                    {/each}
+                  </div>
+                </div>
+              {/each}
+              <div class="flex justify-between text-[10px] th-text-tertiary mt-1">
+                <span>00:00</span>
+                <span>06:00</span>
+                <span>12:00</span>
+                <span>18:00</span>
+                <span>24:00</span>
+              </div>
+            </div>
+          {/if}
+
           <!-- Records list -->
           {#if records.length > 0}
             <div class="card border th-border overflow-hidden">
-              <div class="px-4 py-3 border-b th-border">
-                <span class="text-sm th-text-secondary">共 {records.length} 条录像</span>
+              <div class="px-4 py-3 border-b th-border flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <span class="text-sm th-text-secondary">共 {records.length} 条录像</span>
+                  {#if selectMode}
+                    <button class="btn btn-sm btn-ghost" onclick={toggleSelectAll}>
+                      {selectedRecords.size === records.length ? '取消全选' : '全选'}
+                    </button>
+                    <button 
+                      class="btn btn-sm btn-primary" 
+                      onclick={handleBatchDownload}
+                      disabled={selectedRecords.size === 0 || downloading}
+                    >
+                      <Download size={14} class="mr-1" />
+                      下载选中 ({selectedRecords.size})
+                    </button>
+                    <button class="btn btn-sm btn-ghost" onclick={() => { selectMode = false; selectedRecords = new Set(); }}>
+                      取消
+                    </button>
+                  {:else}
+                    <button class="btn btn-sm btn-ghost" onclick={() => selectMode = true}>
+                      <CheckSquare size={14} class="mr-1" /> 批量下载
+                    </button>
+                  {/if}
+                </div>
+                <div class="flex items-center gap-2">
+                  {#if !showTimeline && timelineData.length > 0}
+                    <button class="btn btn-ghost btn-sm" onclick={() => showTimeline = true}>
+                      <Film size={14} class="mr-1" /> 显示时间轴
+                    </button>
+                  {/if}
+                </div>
               </div>
-              <div class="overflow-x-auto max-h-96 overflow-y-auto">
-                <table class="w-full">
-                  <thead class="sticky top-0 bg-white dark:bg-gray-900">
-                    <tr class="border-b th-border">
-                      <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">文件名</th>
-                      <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">开始时间</th>
-                      <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">结束时间</th>
-                      <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">类型</th>
-                      <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {#each records as rec}
-                      <tr class="border-b th-border hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                        <td class="px-4 py-3 text-sm font-mono th-text-primary max-w-xs truncate">{rec.name || rec.path || '-'}</td>
-                        <td class="px-4 py-3 text-sm th-text-secondary">{formatTime(rec.start_time)}</td>
-                        <td class="px-4 py-3 text-sm th-text-secondary">{formatTime(rec.end_time)}</td>
-                        <td class="px-4 py-3 text-sm th-text-secondary">{rec.type || '-'}</td>
-                        <td class="px-4 py-3 text-sm">
+            <div class="overflow-x-auto max-h-96 overflow-y-auto">
+              <table class="w-full">
+                <thead class="sticky top-0 bg-white dark:bg-gray-900">
+                  <tr class="border-b th-border">
+                    {#if selectMode}
+                      <th class="px-2 py-3 w-10"></th>
+                    {/if}
+                    <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">日期</th>
+                    <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">开始时间</th>
+                    <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">结束时间</th>
+                    <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">时长</th>
+                    <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each records as rec, i}
+                    <tr class="border-b th-border hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                      {#if selectMode}
+                        <td class="px-2 py-3">
+                          <button class="p-1" onclick={() => toggleRecordSelection(i)}>
+                            {#if selectedRecords.has(i)}
+                              <CheckSquare size={16} class="text-blue-500" />
+                            {:else}
+                              <Square size={16} class="th-text-tertiary" />
+                            {/if}
+                          </button>
+                        </td>
+                      {/if}
+                      <td class="px-4 py-3 text-sm th-text-primary">{rec.date || '-'}</td>
+                      <td class="px-4 py-3 text-sm th-text-secondary">{formatTime(rec.start_time)}</td>
+                      <td class="px-4 py-3 text-sm th-text-secondary">{formatTime(rec.end_time)}</td>
+                      <td class="px-4 py-3 text-sm th-text-secondary">{calcDuration(rec.start_time, rec.end_time)}</td>
+                      <td class="px-4 py-3 text-sm">
+                        <div class="flex gap-1">
                           <button class="btn btn-sm btn-primary" onclick={() => handlePlayRecord(rec)}>
                             <Play size={14} class="mr-1" /> 播放
                           </button>
-                        </td>
-                      </tr>
-                    {/each}
-                  </tbody>
-                </table>
-              </div>
+                          <button 
+                            class="btn btn-sm btn-ghost" 
+                            onclick={() => handleDownloadSingle(rec)}
+                            disabled={downloading}
+                            title="下载此录像"
+                          >
+                            <Download size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
             </div>
           {:else if !recordLoading && recordDeviceId && recordChannelId && records.length === 0}
             <div class="flex flex-col items-center justify-center py-8 th-bg-secondary rounded-lg">
@@ -1566,6 +1974,162 @@
                   <button onclick={alarmsPrevPage} class="btn btn-sm btn-secondary" disabled={alarmsOffset === 0}>上一页</button>
                   <span class="text-sm th-text-secondary px-2 py-1">{Math.floor(alarmsOffset / alarmsLimit) + 1} / {Math.ceil(alarmsTotal / alarmsLimit)}</span>
                   <button onclick={alarmsNextPage} class="btn btn-sm btn-secondary" disabled={alarmsOffset + alarmsLimit >= alarmsTotal}>下一页</button>
+                </div>
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+      <!-- GB28181 Platforms Sub Tab -->
+      {:else if gb28181SubTab === 'platforms'}
+        <div class="flex justify-end mb-4">
+          <button onclick={() => { resetPlatformForm(); showAddPlatformDialog = true; }} class="btn btn-primary flex items-center gap-2">
+            <Plus size={14} />
+            添加平台
+          </button>
+        </div>
+
+        {#if platformsLoading}
+          <div class="flex justify-center py-12"><RefreshCw class="w-6 h-6 animate-spin th-text-secondary" /></div>
+        {:else if platforms.length === 0}
+          <div class="flex flex-col items-center justify-center py-12 th-bg-secondary rounded-lg">
+            <Server class="w-12 h-12 th-text-tertiary mb-4" />
+            <p class="text-lg th-text-secondary">暂无级联平台</p>
+            <p class="text-sm th-text-tertiary mt-1">点击"添加平台"按钮配置上级平台</p>
+          </div>
+        {:else}
+          <div class="space-y-4">
+            {#each platforms as platform}
+              <div class="th-bg-secondary rounded-lg border th-border p-4">
+                <div class="flex items-start justify-between">
+                  <div class="flex items-center gap-3">
+                    <div class="p-2 rounded-lg {platform.status ? 'bg-green-100' : 'bg-gray-100'}">
+                      {#if platform.status}
+                        <Wifi class="w-5 h-5 text-green-600" />
+                      {:else}
+                        <WifiOffIcon class="w-5 h-5 text-gray-400" />
+                      {/if}
+                    </div>
+                    <div>
+                      <h3 class="font-semibold th-text-primary">{platform.name || platform.server_gb_id}</h3>
+                      <p class="text-sm th-text-secondary">
+                        {platform.server_ip}:{platform.server_port} · {platform.transport}
+                        {#if platform.status} · <span class="text-green-600">已注册</span>
+                        {:else} · <span class="text-gray-500">未连接</span>{/if}
+                      </p>
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="px-2 py-1 text-xs rounded-full {platform.enable ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'}">
+                      {platform.enable ? '已启用' : '已禁用'}
+                    </span>
+                    <button onclick={() => handleDeletePlatform(platform.id)} class="btn btn-sm btn-danger flex items-center gap-1">
+                      <Trash2 class="w-3 h-3" /> 删除
+                    </button>
+                  </div>
+                </div>
+                <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                  <div><span class="th-text-tertiary">上级 ID:</span><span class="th-text-primary ml-1 font-mono text-xs">{platform.server_gb_id}</span></div>
+                  <div><span class="th-text-tertiary">本端 ID:</span><span class="th-text-primary ml-1 font-mono text-xs">{platform.device_gb_id}</span></div>
+                  <div><span class="th-text-tertiary">本端 IP:</span><span class="th-text-primary ml-1">{platform.device_ip}:{platform.device_port}</span></div>
+                  <div><span class="th-text-tertiary">平台 ID:</span><span class="th-text-primary ml-1 font-mono text-xs">#{platform.id}</span></div>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+      <!-- GB28181 Platform Events Sub Tab -->
+      {:else if gb28181SubTab === 'platform_events'}
+        <!-- Platform Status Overview -->
+        {#if platformStatuses.length > 0}
+          <div class="mb-6">
+            <h3 class="text-sm font-semibold th-text-secondary mb-3">平台状态概览</h3>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {#each platformStatuses as status}
+                <div class="th-bg-secondary rounded-lg border th-border p-3">
+                  <div class="flex items-center gap-2 mb-2">
+                    <div class="w-2 h-2 rounded-full {status.is_online ? 'bg-green-500' : 'bg-gray-400'}"></div>
+                    <span class="text-sm font-medium th-text-primary">{status.platform_name || `平台 #${status.platform_id}`}</span>
+                  </div>
+                  <div class="text-xs th-text-tertiary">
+                    {status.server_ip}:{status.server_port}
+                  </div>
+                  <div class="text-xs th-text-tertiary mt-1">
+                    最后事件: {getEventTypeLabel(status.last_event_type)} · {formatTime(status.last_event_time)}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
+        <!-- Filters -->
+        <div class="flex gap-3 mb-4">
+          <select class="input" bind:value={selectedPlatformId} onchange={() => { platformEventsOffset = 0; loadPlatformEvents(); }}>
+            <option value={undefined}>所有平台</option>
+            {#each platforms as p}
+              <option value={p.id}>{p.name || p.server_gb_id}</option>
+            {/each}
+          </select>
+          <select class="input" bind:value={selectedEventType} onchange={() => { platformEventsOffset = 0; loadPlatformEvents(); }}>
+            <option value="">所有类型</option>
+            <option value="register">注册</option>
+            <option value="unregister">注销</option>
+            <option value="online">上线</option>
+            <option value="offline">离线</option>
+            <option value="stream_start">推流开始</option>
+            <option value="stream_stop">推流停止</option>
+          </select>
+          <button class="btn btn-secondary" onclick={loadPlatformEvents}>
+            <RefreshCw size={14} />
+          </button>
+        </div>
+
+        {#if platformEventsLoading && platformEvents.length === 0}
+          <div class="flex justify-center py-12"><RefreshCw class="w-6 h-6 animate-spin th-text-secondary" /></div>
+        {:else if platformEvents.length === 0}
+          <div class="flex flex-col items-center justify-center py-12 th-bg-secondary rounded-lg">
+            <Clock class="w-12 h-12 th-text-tertiary mb-4" />
+            <p class="text-lg th-text-secondary">暂无级联历史</p>
+          </div>
+        {:else}
+          <div class="th-bg-secondary rounded-lg border th-border overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="w-full">
+                <thead>
+                  <tr class="border-b th-border bg-gray-50 dark:bg-gray-800">
+                    <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">时间</th>
+                    <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">平台</th>
+                    <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">事件类型</th>
+                    <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">服务器地址</th>
+                    <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">详情</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each platformEvents as event}
+                    <tr class="border-b th-border hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                      <td class="px-4 py-3 text-sm th-text-secondary whitespace-nowrap">{formatTime(event.created_at)}</td>
+                      <td class="px-4 py-3 text-sm th-text-primary">{event.platform_name || `#${event.platform_id}`}</td>
+                      <td class="px-4 py-3 text-sm">
+                        <span class="px-2 py-1 text-xs rounded-full {getEventTypeClass(event.event_type)}">
+                          {getEventTypeLabel(event.event_type)}
+                        </span>
+                      </td>
+                      <td class="px-4 py-3 text-sm font-mono th-text-secondary">{event.server_ip}:{event.server_port}</td>
+                      <td class="px-4 py-3 text-sm th-text-secondary max-w-xs truncate">{event.details || '-'}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+            {#if platformEventsTotal > platformEventsLimit}
+              <div class="flex items-center justify-between px-4 py-3 border-t th-border">
+                <span class="text-sm th-text-secondary">共 {platformEventsTotal} 条</span>
+                <div class="flex gap-2">
+                  <button onclick={platformEventsPrevPage} class="btn btn-sm btn-secondary" disabled={platformEventsOffset === 0}>上一页</button>
+                  <span class="text-sm th-text-secondary px-2 py-1">{Math.floor(platformEventsOffset / platformEventsLimit) + 1} / {Math.ceil(platformEventsTotal / platformEventsLimit)}</span>
+                  <button onclick={platformEventsNextPage} class="btn btn-sm btn-secondary" disabled={platformEventsOffset + platformEventsLimit >= platformEventsTotal}>下一页</button>
                 </div>
               </div>
             {/if}
@@ -2063,6 +2627,58 @@
           <button onclick={confirmDeleteRecordingFn} class="btn btn-danger">
             {t('recordings.deleteConfirm')}
           </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Add Platform Dialog -->
+  {#if showAddPlatformDialog}
+    <div class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" role="dialog" aria-modal="true">
+      <div class="card max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
+        <h3 class="text-lg font-semibold th-text-primary mb-4">添加级联平台</h3>
+        <div class="space-y-4">
+          <div>
+            <label for="platform-name" class="input-label">平台名称</label>
+            <input id="platform-name" type="text" class="input mt-1 w-full" bind:value={platformForm.name} placeholder="上级视频平台" />
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label for="platform-server-id" class="input-label">上级 SIP ID *</label>
+              <input id="platform-server-id" type="text" class="input mt-1 w-full" bind:value={platformForm.server_gb_id} placeholder="34020000002000000002" />
+            </div>
+            <div>
+              <label for="platform-server-ip" class="input-label">上级 IP *</label>
+              <input id="platform-server-ip" type="text" class="input mt-1 w-full" bind:value={platformForm.server_ip} placeholder="192.168.1.200" />
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label for="platform-server-port" class="input-label">上级端口</label>
+              <input id="platform-server-port" type="number" class="input mt-1 w-full" bind:value={platformForm.server_port} />
+            </div>
+            <div>
+              <label for="platform-transport" class="input-label">传输协议</label>
+              <select id="platform-transport" class="input mt-1 w-full" bind:value={platformForm.transport}>
+                <option value="UDP">UDP</option>
+                <option value="TCP">TCP</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label for="platform-username" class="input-label">用户名</label>
+              <input id="platform-username" type="text" class="input mt-1 w-full" bind:value={platformForm.username} />
+            </div>
+            <div>
+              <label for="platform-password" class="input-label">密码</label>
+              <input id="platform-password" type="password" class="input mt-1 w-full" bind:value={platformForm.password} />
+            </div>
+          </div>
+        </div>
+        <div class="flex gap-3 justify-end mt-6">
+          <button onclick={() => { showAddPlatformDialog = false; resetPlatformForm(); }} class="btn btn-secondary">取消</button>
+          <button onclick={handleAddPlatform} class="btn btn-primary">添加</button>
         </div>
       </div>
     </div>

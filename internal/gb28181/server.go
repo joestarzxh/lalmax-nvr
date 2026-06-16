@@ -207,6 +207,16 @@ func (s *Server) PlaySeek(in *PlaySeekInput) error {
 	return s.gb.PlaySeek(in)
 }
 
+// PlayPause pauses playback.
+func (s *Server) PlayPause(in *PlayPauseInput) error {
+	return s.gb.PlayPause(in)
+}
+
+// PlayResume resumes playback.
+func (s *Server) PlayResume(in *PlayPauseInput) error {
+	return s.gb.PlayResume(in)
+}
+
 // IsStreamPlaying reports whether the given stream ID has an active GB28181 play session.
 func (s *Server) IsStreamPlaying(streamID string) bool {
 	return globalStreams.IsStreamPlaying(streamID)

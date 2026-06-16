@@ -133,12 +133,30 @@ func (g *GB28181API) handleRecordInfoResponse(deviceID string, body []byte) {
 	defer state.mu.Unlock()
 
 	state.total += len(msg.Item)
-	for _, item := range msg.Item {
+	slog.Info("[RecordInfo] Response received",
+		"device_id", deviceID,
+		"sn", msg.SN,
+		"sum_num", msg.SumNum,
+		"items_count", len(msg.Item),
+		"state_start", state.start,
+	)
+	for i, item := range msg.Item {
 		s, _ := time.ParseInLocation("2006-01-02T15:04:05", item.StartTime, time.Local)
 		e, _ := time.ParseInLocation("2006-01-02T15:04:05", item.EndTime, time.Local)
 		sint := s.Unix()
 		eint := e.Unix()
+		slog.Info("[RecordInfo] Item parsed",
+			"index", i,
+			"start_time_str", item.StartTime,
+			"end_time_str", item.EndTime,
+			"start_unix", sint,
+			"end_unix", eint,
+		)
 		if sint < state.start {
+			slog.Info("[RecordInfo] Clamping start time",
+				"original", sint,
+				"clamped_to", state.start,
+			)
 			sint = state.start
 		}
 		if eint > state.end {
@@ -147,8 +165,15 @@ func (g *GB28181API) handleRecordInfoResponse(deviceID string, body []byte) {
 		state.data = append(state.data, []int64{sint, eint})
 	}
 
-	// Check if we've received all items
-	if state.total >= msg.SumNum && msg.SumNum > 0 {
+	// Check if we've received all items or if there are no items
+	if msg.SumNum == 0 {
+		// No recordings found, send empty result immediately
+		slog.Info("[RecordInfo] No recordings found", "device_id", deviceID, "sn", msg.SN)
+		select {
+		case state.resp <- Records{}:
+		default:
+		}
+	} else if state.total >= msg.SumNum {
 		result := aggregateRecordList(state.data)
 		select {
 		case state.resp <- result:
@@ -159,7 +184,7 @@ func (g *GB28181API) handleRecordInfoResponse(deviceID string, body []byte) {
 
 // recordInfoXML generates the XML body for a RecordInfo query.
 func recordInfoXML(channelID string, sn int, start, end time.Time) []byte {
-	return []byte(fmt.Sprintf(`<?xml version="1.0" encoding="GB2312"?>
+	xml := fmt.Sprintf(`<?xml version="1.0" encoding="GB2312"?>
 <Query>
 <CmdType>RecordInfo</CmdType>
 <SN>%d</SN>
@@ -168,10 +193,14 @@ func recordInfoXML(channelID string, sn int, start, end time.Time) []byte {
 <EndTime>%s</EndTime>
 <Secrecy>0</Secrecy>
 <Type>time</Type>
-</Query>`, sn, channelID, start.Format("2006-01-02T15:04:05"), end.Format("2006-01-02T15:04:05")))
+</Query>`, sn, channelID, start.Format("2006-01-02T15:04:05"), end.Format("2006-01-02T15:04:05"))
+	slog.Info("[RecordInfo] Query XML", "channel_id", channelID, "sn", sn,
+		"start", start.Format(time.RFC3339), "end", end.Format(time.RFC3339),
+		"start_local", start.Format("2006-01-02T15:04:05"), "end_local", end.Format("2006-01-02T15:04:05"))
+	return []byte(xml)
 }
 
-// aggregateRecordList merges overlapping time segments and groups by date.
+// aggregateRecordList groups time segments by date without merging adjacent segments.
 func aggregateRecordList(data [][]int64) Records {
 	if len(data) == 0 {
 		return Records{}
@@ -182,11 +211,11 @@ func aggregateRecordList(data [][]int64) Records {
 		return data[i][0] < data[j][0]
 	})
 
-	// Merge overlapping/adjacent segments
+	// Only merge truly overlapping segments (not adjacent)
 	merged := [][]int64{}
 	current := data[0]
 	for i := 1; i < len(data); i++ {
-		if data[i][0] <= current[1] {
+		if data[i][0] < current[1] { // Overlapping: next start < current end
 			if data[i][1] > current[1] {
 				current[1] = data[i][1]
 			}

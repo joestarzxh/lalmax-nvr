@@ -11,14 +11,18 @@
     startDevicePlayback,
     setPlaybackSpeed,
     seekPlayback,
+    transformRecords,
+    getTimelineData,
+    startDownload,
+    batchDownload,
   } from '$lib/api';
-  import type { GB28181Platform, GB28181Alarm, GB28181Download, AddPlatformRequest, GB28181Device, DeviceRecordItem } from '$lib/api';
+  import type { GB28181Platform, GB28181Alarm, GB28181Download, AddPlatformRequest, GB28181Device, DeviceRecordItem, DeviceRecordResponse } from '$lib/api';
   import { showToast } from '$lib/toast';
   import FlvPlayer from '../components/FlvPlayer.svelte';
   import {
     Link, AlertTriangle, Download, RefreshCw, Plus, Trash2,
     Server, Wifi, WifiOff, X, Bell, CheckCircle, Clock,
-    Search, Play, Film, FastForward, Rewind,
+    Search, Play, Film, FastForward, Rewind, CheckSquare, Square,
   } from 'lucide-svelte';
 
   type TabId = 'platforms' | 'alarms' | 'downloads' | 'records';
@@ -190,6 +194,19 @@
     try { return new Date(timeStr).toLocaleString('zh-CN'); } catch { return timeStr; }
   }
 
+  function calcDuration(startStr: string, endStr: string): string {
+    try {
+      const start = new Date(startStr).getTime();
+      const end = new Date(endStr).getTime();
+      const diff = Math.abs(end - start) / 1000;
+      if (diff < 60) return `${Math.round(diff)}秒`;
+      if (diff < 3600) return `${Math.round(diff / 60)}分钟`;
+      const h = Math.floor(diff / 3600);
+      const m = Math.round((diff % 3600) / 60);
+      return `${h}小时${m}分`;
+    } catch { return '-'; }
+  }
+
   // --- Device Recording state ---
   let devices = $state<GB28181Device[]>([]);
   let recordDeviceId = $state('');
@@ -204,6 +221,14 @@
   let playbackSeekTime = $state(0);
   let speedLoading = $state(false);
   let seekLoading = $state(false);
+  let playbackProtocol = $state('ws-flv');
+  let availableProtocols = $state<Array<{protocol: string, url: string}>>([]);
+  let showTimeline = $state(true);
+  let timelineData = $state<Array<{date: string, segments: Array<{start: number, end: number, startTime: string, endTime: string}>}>>([]);
+  let rawRecordResponse = $state<DeviceRecordResponse | null>(null);
+  let selectedRecords = $state<Set<number>>(new Set());
+  let selectMode = $state(false);
+  let downloading = $state(false);
 
   function getDefaultTimeRange() {
     const now = new Date();
@@ -239,6 +264,8 @@
     }
     recordLoading = true;
     records = [];
+    timelineData = [];
+    rawRecordResponse = null;
     playbackStreamUrl = '';
     try {
       const res = await queryDeviceRecords({
@@ -247,7 +274,9 @@
         start_time: recordStartTime,
         end_time: recordEndTime,
       });
-      records = res.records || [];
+      rawRecordResponse = res;
+      records = transformRecords(res);
+      timelineData = getTimelineData(res);
       if (records.length === 0) {
         showToast('未找到录像记录', 'info');
       }
@@ -266,13 +295,36 @@
         start_time: record.start_time,
         end_time: record.end_time,
       });
-      if (res.url) {
-        const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        playbackStreamUrl = res.url.startsWith('ws') ? res.url : `${wsProto}//${location.host}${res.url}`;
-        playbackStreamId = res.stream_id || `${recordDeviceId}_${recordChannelId}_playback`;
+      playbackStreamId = res.stream_id || `${recordDeviceId}_${recordChannelId}_playback`;
+      
+      // Handle multi-protocol URLs
+      if (res.urls && res.urls.length > 0) {
+        availableProtocols = res.urls;
+        // Find preferred protocol or default to ws-flv
+        const preferred = res.urls.find(u => u.protocol === playbackProtocol) || res.urls[0];
+        playbackProtocol = preferred.protocol;
+        playbackStreamUrl = buildPlayUrl(preferred.url);
+      } else if (res.url) {
+        // Backward compat: single URL
+        availableProtocols = [{ protocol: 'ws-flv', url: res.url }];
+        playbackStreamUrl = buildPlayUrl(res.url);
       }
     } catch (e) {
       showToast(e instanceof Error ? e.message : '播放失败', 'error');
+    }
+  }
+
+  function buildPlayUrl(url: string): string {
+    if (url.startsWith('ws://') || url.startsWith('wss://')) return url;
+    const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${wsProto}//${location.host}${url}`;
+  }
+
+  function switchPlaybackProtocol(protocol: string) {
+    const found = availableProtocols.find(u => u.protocol === protocol);
+    if (found) {
+      playbackProtocol = protocol;
+      playbackStreamUrl = buildPlayUrl(found.url);
     }
   }
 
@@ -309,6 +361,73 @@
       showToast(e instanceof Error ? e.message : '拖动失败', 'error');
     } finally {
       seekLoading = false;
+    }
+  }
+
+  async function handleDownloadSingle(record: DeviceRecordItem) {
+    if (!recordDeviceId || !recordChannelId) return;
+    downloading = true;
+    try {
+      const res = await startDownload({
+        device_id: recordDeviceId,
+        channel_id: recordChannelId,
+        start_time: record.start_time,
+        end_time: record.end_time,
+      });
+      showToast(`下载已开始: ${res.file_path}`, 'success');
+      // Switch to downloads tab to show progress
+      switchTab('downloads');
+      loadDownloads();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '下载失败', 'error');
+    } finally {
+      downloading = false;
+    }
+  }
+
+  async function handleBatchDownload() {
+    if (!recordDeviceId || !recordChannelId || selectedRecords.size === 0) return;
+    downloading = true;
+    try {
+      const segments = Array.from(selectedRecords).map(idx => ({
+        start_time: records[idx].start_time,
+        end_time: records[idx].end_time,
+      }));
+      const res = await batchDownload({
+        device_id: recordDeviceId,
+        channel_id: recordChannelId,
+        segments,
+      });
+      showToast(`已开始 ${res.total} 个下载任务`, 'success');
+      if (res.errors && res.errors.length > 0) {
+        console.warn('Download errors:', res.errors);
+      }
+      selectMode = false;
+      selectedRecords = new Set();
+      switchTab('downloads');
+      loadDownloads();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : '批量下载失败', 'error');
+    } finally {
+      downloading = false;
+    }
+  }
+
+  function toggleRecordSelection(index: number) {
+    const newSet = new Set(selectedRecords);
+    if (newSet.has(index)) {
+      newSet.delete(index);
+    } else {
+      newSet.add(index);
+    }
+    selectedRecords = newSet;
+  }
+
+  function toggleSelectAll() {
+    if (selectedRecords.size === records.length) {
+      selectedRecords = new Set();
+    } else {
+      selectedRecords = new Set(records.map((_, i) => i));
     }
   }
 
@@ -596,6 +715,24 @@
             </div>
             <!-- Playback controls -->
             <div class="mt-4 space-y-3">
+              <!-- Protocol selector -->
+              {#if availableProtocols.length > 1}
+                <div class="flex items-center gap-3">
+                  <span class="text-sm th-text-secondary flex items-center gap-1">
+                    <Video size={14} /> 协议:
+                  </span>
+                  <div class="flex gap-1 flex-wrap">
+                    {#each availableProtocols as p}
+                      <button
+                        class="btn btn-sm {playbackProtocol === p.protocol ? 'btn-primary' : 'btn-ghost'}"
+                        onclick={() => switchPlaybackProtocol(p.protocol)}
+                      >
+                        {p.protocol}
+                      </button>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
               <!-- Speed control -->
               <div class="flex items-center gap-3">
                 <span class="text-sm th-text-secondary flex items-center gap-1">
@@ -634,34 +771,139 @@
           </div>
         {/if}
 
+        <!-- Timeline view -->
+        {#if timelineData.length > 0 && showTimeline}
+          <div class="card border th-border p-4">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="text-sm font-semibold th-text-primary">录像时间轴</h3>
+              <button class="btn btn-ghost btn-sm" onclick={() => showTimeline = false}>
+                <X size={14} />
+              </button>
+            </div>
+            {#each timelineData as day}
+              <div class="mb-3 last:mb-0">
+                <div class="text-xs font-medium th-text-secondary mb-1">{day.date}</div>
+                <div class="relative h-8 bg-gray-100 dark:bg-gray-800 rounded overflow-hidden">
+                  <!-- Hour markers -->
+                  {#each Array(24) as _, h}
+                    <div class="absolute top-0 bottom-0 border-l border-gray-200 dark:border-gray-700" 
+                         style="left: {(h / 24) * 100}%">
+                      {#if h % 6 === 0}
+                        <span class="absolute -top-0 text-[10px] th-text-tertiary" style="left: 2px">{h}时</span>
+                      {/if}
+                    </div>
+                  {/each}
+                  <!-- Recording segments -->
+                  {#each day.segments as seg}
+                    {@const startHour = new Date(seg.start * 1000).getHours() + new Date(seg.start * 1000).getMinutes() / 60}
+                    {@const endHour = new Date(seg.end * 1000).getHours() + new Date(seg.end * 1000).getMinutes() / 60}
+                    {@const durationHours = Math.max(endHour - startHour, 0.5)}
+                    <button
+                      class="absolute top-1 bottom-1 bg-blue-500 hover:bg-blue-600 rounded-sm cursor-pointer transition-colors"
+                      style="left: {(startHour / 24) * 100}%; width: {(durationHours / 24) * 100}%"
+                      title="{seg.startTime} - {seg.endTime}"
+                      onclick={() => {
+                        const rec = records.find(r => 
+                          new Date(r.start_time).getTime() / 1000 === seg.start
+                        );
+                        if (rec) handlePlayRecord(rec);
+                      }}
+                    ></button>
+                  {/each}
+                </div>
+              </div>
+            {/each}
+            <div class="flex justify-between text-[10px] th-text-tertiary mt-1">
+              <span>00:00</span>
+              <span>06:00</span>
+              <span>12:00</span>
+              <span>18:00</span>
+              <span>24:00</span>
+            </div>
+          </div>
+        {/if}
+
         <!-- Records list -->
         {#if records.length > 0}
           <div class="card border th-border overflow-hidden">
-            <div class="px-4 py-3 border-b th-border">
-              <span class="text-sm th-text-secondary">共 {records.length} 条录像</span>
+            <div class="px-4 py-3 border-b th-border flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <span class="text-sm th-text-secondary">共 {records.length} 条录像</span>
+                {#if selectMode}
+                  <button class="btn btn-sm btn-ghost" onclick={toggleSelectAll}>
+                    {selectedRecords.size === records.length ? '取消全选' : '全选'}
+                  </button>
+                  <button 
+                    class="btn btn-sm btn-primary" 
+                    onclick={handleBatchDownload}
+                    disabled={selectedRecords.size === 0 || downloading}
+                  >
+                    <Download size={14} class="mr-1" />
+                    下载选中 ({selectedRecords.size})
+                  </button>
+                  <button class="btn btn-sm btn-ghost" onclick={() => { selectMode = false; selectedRecords = new Set(); }}>
+                    取消
+                  </button>
+                {:else}
+                  <button class="btn btn-sm btn-ghost" onclick={() => selectMode = true}>
+                    <CheckSquare size={14} class="mr-1" /> 批量下载
+                  </button>
+                {/if}
+              </div>
+              <div class="flex items-center gap-2">
+                {#if !showTimeline && timelineData.length > 0}
+                  <button class="btn btn-ghost btn-sm" onclick={() => showTimeline = true}>
+                    <Film size={14} class="mr-1" /> 显示时间轴
+                  </button>
+                {/if}
+              </div>
             </div>
             <div class="overflow-x-auto max-h-96 overflow-y-auto">
               <table class="w-full">
                 <thead class="sticky top-0 bg-white dark:bg-gray-900">
                   <tr class="border-b th-border">
-                    <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">文件名</th>
+                    {#if selectMode}
+                      <th class="px-2 py-3 w-10"></th>
+                    {/if}
+                    <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">日期</th>
                     <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">开始时间</th>
                     <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">结束时间</th>
-                    <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">类型</th>
+                    <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">时长</th>
                     <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">操作</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {#each records as rec}
+                  {#each records as rec, i}
                     <tr class="border-b th-border hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                      <td class="px-4 py-3 text-sm font-mono th-text-primary max-w-xs truncate">{rec.name || rec.path || '-'}</td>
+                      {#if selectMode}
+                        <td class="px-2 py-3">
+                          <button class="p-1" onclick={() => toggleRecordSelection(i)}>
+                            {#if selectedRecords.has(i)}
+                              <CheckSquare size={16} class="text-blue-500" />
+                            {:else}
+                              <Square size={16} class="th-text-tertiary" />
+                            {/if}
+                          </button>
+                        </td>
+                      {/if}
+                      <td class="px-4 py-3 text-sm th-text-primary">{rec.date || '-'}</td>
                       <td class="px-4 py-3 text-sm th-text-secondary">{formatTime(rec.start_time)}</td>
                       <td class="px-4 py-3 text-sm th-text-secondary">{formatTime(rec.end_time)}</td>
-                      <td class="px-4 py-3 text-sm th-text-secondary">{rec.type || '-'}</td>
+                      <td class="px-4 py-3 text-sm th-text-secondary">{calcDuration(rec.start_time, rec.end_time)}</td>
                       <td class="px-4 py-3 text-sm">
-                        <button class="btn btn-sm btn-primary" onclick={() => handlePlayRecord(rec)}>
-                          <Play size={14} class="mr-1" /> 播放
-                        </button>
+                        <div class="flex gap-1">
+                          <button class="btn btn-sm btn-primary" onclick={() => handlePlayRecord(rec)}>
+                            <Play size={14} class="mr-1" /> 播放
+                          </button>
+                          <button 
+                            class="btn btn-sm btn-ghost" 
+                            onclick={() => handleDownloadSingle(rec)}
+                            disabled={downloading}
+                            title="下载此录像"
+                          >
+                            <Download size={14} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   {/each}

@@ -18,10 +18,6 @@
   import TranscodingHistory from './routes/TranscodingHistory.svelte';
   import Devices from './routes/Devices.svelte';
   import Status from './routes/Status.svelte';
-  import GB28181Platforms from './routes/GB28181Platforms.svelte';
-  import GB28181Alarms from './routes/GB28181Alarms.svelte';
-  import GB28181Downloads from './routes/GB28181Downloads.svelte';
-  import GB28181 from './routes/GB28181.svelte';
   import DeviceGroups from './routes/DeviceGroups.svelte';
   import RecordingPlans from './routes/RecordingPlans.svelte';
   import Users from './routes/Users.svelte';
@@ -149,10 +145,6 @@
       return { route: 'dashboard', params: { tab } };
     }
 
-    if (segments[0] === 'gb28181-platforms' || segments[0] === 'gb28181-alarms' || segments[0] === 'gb28181-downloads' || segments[0] === 'gb28181') {
-      return { route: 'gb28181', params: {} };
-    }
-
     if (segments[0] === 'device-groups') {
       return { route: 'device-groups', params: {} };
     }
@@ -273,8 +265,6 @@
         <Dashboard initialTab={params.tab || 'dashboard'} />
       {:else if currentRoute === 'transcoding-history'}
         <TranscodingHistory />
-      {:else if currentRoute === 'gb28181'}
-        <GB28181 />
       {:else if currentRoute === 'device-groups'}
         <DeviceGroups />
       {:else if currentRoute === 'recording-plans'}

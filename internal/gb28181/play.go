@@ -10,7 +10,6 @@ import (
 
 	"github.com/emiago/sipgo/sip"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
-	sdp "github.com/panjjo/gosdp"
 )
 
 // PlayInput contains parameters for starting a GB28181 play session.
@@ -52,6 +51,12 @@ type PlaySeekInput struct {
 	DeviceID  string
 	ChannelID string
 	SeekTime  int64 // seconds from start
+}
+
+// PlayPauseInput contains parameters for pausing playback.
+type PlayPauseInput struct {
+	DeviceID  string
+	ChannelID string
 }
 
 // StopPlayInput contains parameters for stopping a play session.
@@ -263,11 +268,11 @@ func (g *GB28181API) PlaySpeed(in *PlaySpeedInput) error {
 		return fmt.Errorf("playback session missing dialog info")
 	}
 
-	// Build RTSP-style INFO body for speed control
+	// wvp format: PLAY RTSP/1.0 with Application/MANSRTSP content type
 	infoBody := fmt.Sprintf("PLAY RTSP/1.0\r\nCSeq: %d\r\nScale: %.6f\r\n",
-		time.Now().Unix(), in.Speed)
+		time.Now().Unix()%100000000, in.Speed)
 
-	return g.sendSIPInfo(stream, infoBody)
+	return g.sendSIPInfo(stream, infoBody, "Application", "MANSRTSP")
 }
 
 // PlaySeek seeks to a position in playback via SIP INFO.
@@ -282,53 +287,110 @@ func (g *GB28181API) PlaySeek(in *PlaySeekInput) error {
 		return fmt.Errorf("playback session missing dialog info")
 	}
 
-	// Build RTSP-style INFO body for seek
-	infoBody := fmt.Sprintf("PLAY RTSP/1.0\r\nCSeq: %d\r\nRange: npt=%d-\r\n",
-		time.Now().Unix(), in.SeekTime)
+	// wvp format for seek
+	infoBody := fmt.Sprintf("PLAY RTSP/1.0\r\nCSeq: %d\r\nRange: npt=%d.000-\r\n",
+		time.Now().Unix()%100000000, in.SeekTime)
 
-	return g.sendSIPInfo(stream, infoBody)
+	return g.sendSIPInfo(stream, infoBody, "Application", "MANSRTSP")
+}
+
+// PlayPause pauses playback via SIP INFO.
+func (g *GB28181API) PlayPause(in *PlayPauseInput) error {
+	key := "play:" + in.DeviceID + ":" + in.ChannelID
+	stream, ok := g.streams.loadStream(key)
+	if !ok {
+		return fmt.Errorf("no active playback for %s:%s", in.DeviceID, in.ChannelID)
+	}
+
+	if stream.CallID == "" || stream.RemoteURI == "" {
+		return fmt.Errorf("playback session missing dialog info")
+	}
+
+	infoBody := fmt.Sprintf("PAUSE RTSP/1.0\r\nCSeq: %d\r\nPauseTime: now\r\n",
+		time.Now().Unix()%100000000)
+
+	return g.sendSIPInfo(stream, infoBody, "Application", "MANSRTSP")
+}
+
+// PlayResume resumes playback via SIP INFO.
+func (g *GB28181API) PlayResume(in *PlayPauseInput) error {
+	key := "play:" + in.DeviceID + ":" + in.ChannelID
+	stream, ok := g.streams.loadStream(key)
+	if !ok {
+		return fmt.Errorf("no active playback for %s:%s", in.DeviceID, in.ChannelID)
+	}
+
+	if stream.CallID == "" || stream.RemoteURI == "" {
+		return fmt.Errorf("playback session missing dialog info")
+	}
+
+	infoBody := fmt.Sprintf("PLAY RTSP/1.0\r\nCSeq: %d\r\nRange: npt=now-\r\n",
+		time.Now().Unix()%100000000)
+
+	return g.sendSIPInfo(stream, infoBody, "Application", "MANSRTSP")
 }
 
 // sendSIPInfo sends a SIP INFO request to the device for playback control.
-func (g *GB28181API) sendSIPInfo(stream *Streams, body string) error {
-	recipient := stream.RemoteURI
-	var recipientUri sip.Uri
-	if err := sip.ParseUri(recipient, &recipientUri); err != nil {
-		// Fallback to device address
-		dev, ok := g.store.Load(stream.DeviceID)
-		if !ok {
-			return fmt.Errorf("device not found: %s", stream.DeviceID)
-		}
-		recipientUri = sip.Uri{
-			Scheme: "sip",
-			User:   stream.ChannelID,
-			Host:   getHost(dev.Address),
-			Port:   getPort(dev.Address),
-		}
+func (g *GB28181API) sendSIPInfo(stream *Streams, body string, contentType string, contentSubType string) error {
+	dev, ok := g.store.Load(stream.DeviceID)
+	if !ok {
+		return fmt.Errorf("device not found: %s", stream.DeviceID)
 	}
 
-	req := sip.NewRequest(sip.INFO, recipientUri)
+	// Use device address for SIP INFO
+	recipient := sip.Uri{
+		Scheme: "sip",
+		User:   stream.ChannelID,
+		Host:   getHost(dev.Address),
+		Port:   getPort(dev.Address),
+	}
+
+	req := sip.NewRequest(sip.INFO, recipient)
 	req.SetBody([]byte(body))
-	req.AppendHeader(sip.NewHeader("Content-Type", "application/vnd.3gpp.sms"))
+	req.AppendHeader(sip.NewHeader("Content-Type", contentType+"/"+contentSubType))
+	
+	// Set Call-ID from the INVITE dialog
 	callID := sip.CallIDHeader(stream.CallID)
 	req.AppendHeader(&callID)
+	
+	// Set From/To with tags from the INVITE dialog
 	req.AppendHeader(&sip.FromHeader{
 		Address: sip.Uri{Scheme: "sip", User: g.cfg.ID, Host: g.cfg.Host},
+		Params:  sip.HeaderParams(sip.NewParams()),
 	})
+	if stream.FromTag != "" {
+		req.From().Params.Add("tag", stream.FromTag)
+	}
+	
 	req.AppendHeader(&sip.ToHeader{
-		Address: sip.Uri{Scheme: "sip", User: stream.ChannelID},
+		Address: sip.Uri{Scheme: "sip", User: stream.ChannelID, Host: getHost(dev.Address)},
+		Params:  sip.HeaderParams(sip.NewParams()),
 	})
+	if stream.ToTag != "" {
+		req.To().Params.Add("tag", stream.ToTag)
+	}
+	
+	// Set CSeq
+	cseq := sip.CSeqHeader{SeqNo: uint32(time.Now().Unix() % 100000000), MethodName: sip.INFO}
+	req.AppendHeader(&cseq)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	slog.Info("[SIP] INFO sending", 
+		"recipient", recipient.String(),
+		"call_id", stream.CallID,
+		"from_tag", stream.FromTag,
+		"to_tag", stream.ToTag,
+		"body", body)
+	
 	resp, err := g.client.Do(ctx, req)
 	if err != nil {
 		slog.Error("[SIP] INFO send failed", "error", err)
 		return fmt.Errorf("SIP INFO failed: %w", err)
 	}
 
-	slog.Info("[SIP] INFO response", "status", resp.StatusCode)
+	slog.Info("[SIP] INFO response", "status", resp.StatusCode, "reason", resp.Reason)
 	if !resp.IsSuccess() {
 		return fmt.Errorf("SIP INFO rejected: %d %s", resp.StatusCode, resp.Reason)
 	}
@@ -411,8 +473,11 @@ func (g *GB28181API) sipPlaybackInvite(ch *Channel, in *PlaybackInput, port int)
 		"media_port", port,
 		"ssrc", ssrc,
 		"start_time", in.StartTime,
+		"start_time_unix", in.StartTime.Unix(),
 		"end_time", in.EndTime,
+		"end_time_unix", in.EndTime.Unix(),
 	)
+	slog.Info("[SIP] Playback SDP", "sdp", string(body))
 
 	req := sip.NewRequest(sip.INVITE, recipient)
 	req.SetBody(body)
@@ -529,9 +594,9 @@ func (g *GB28181API) doInvite(req *sip.Request, ch *Channel) (*InviteResult, err
 }
 
 func buildPlaySDP(deviceID, channelID, ip string, port int, streamMode int8, ssrc string, playback bool, startTime, endTime time.Time) []byte {
-	protocol := "TCP/RTP/AVP"
-	if streamMode == 0 {
-		protocol = "RTP/AVP"
+	protocol := "RTP/AVP"
+	if streamMode == 1 || streamMode == 2 {
+		protocol = "TCP/RTP/AVP"
 	}
 
 	name := "Play"
@@ -539,59 +604,42 @@ func buildPlaySDP(deviceID, channelID, ip string, port int, streamMode int8, ssr
 		name = "Playback"
 	}
 
-	video := sdp.Media{
-		Description: sdp.MediaDescription{
-			Type:     "video",
-			Port:     port,
-			Formats:  []string{"96", "97", "98", "99"},
-			Protocol: protocol,
-		},
+	// Build SDP following GB28181 standard format
+	lines := []string{
+		"v=0",
+		fmt.Sprintf("o=%s 0 0 IN IP4 %s", deviceID, ip),
+		fmt.Sprintf("s=%s", name),
+		fmt.Sprintf("c=IN IP4 %s", ip),
 	}
-	video.AddAttribute("recvonly")
-	switch streamMode {
-	case 1:
-		video.AddAttribute("setup", "passive")
-		video.AddAttribute("connection", "new")
-	case 2:
-		video.AddAttribute("setup", "active")
-		video.AddAttribute("connection", "new")
-	}
-	video.AddAttribute("rtpmap", "96", "PS/90000")
-	video.AddAttribute("rtpmap", "97", "MPEG4/90000")
-	video.AddAttribute("rtpmap", "98", "H264/90000")
-	video.AddAttribute("rtpmap", "99", "H265/90000")
 
-	timing := []sdp.Timing{{}}
+	// Timing line
 	if playback {
-		timing = []sdp.Timing{{
-			Start: startTime,
-			End:   endTime,
-		}}
+		lines = append(lines, fmt.Sprintf("t=%d %d", startTime.Unix(), endTime.Unix()))
+	} else {
+		lines = append(lines, "t=0 0")
 	}
 
-	msg := &sdp.Message{
-		Version: 0,
-		Origin: sdp.Origin{
-			Username:    deviceID,
-			NetworkType: "IN",
-			AddressType: "IP4",
-			Address:     ip,
-		},
-		Name: name,
-		URI:  fmt.Sprintf("%s:0", channelID),
-		Connection: sdp.ConnectionData{
-			NetworkType: "IN",
-			AddressType: "IP4",
-			IP:          net.ParseIP(ip),
-		},
-		Timing: timing,
-		Medias: []sdp.Media{video},
-		SSRC:   ssrc,
+	// Media line - only use payload type 96 (PS) for better compatibility
+	lines = append(lines, fmt.Sprintf("m=video %d %s 96", port, protocol))
+	lines = append(lines, "a=recvonly")
+	lines = append(lines, "a=rtpmap:96 PS/90000")
+
+	// TCP mode attributes
+	if streamMode == 1 {
+		lines = append(lines, "a=setup:passive")
+		lines = append(lines, "a=connection:new")
+	} else if streamMode == 2 {
+		lines = append(lines, "a=setup:active")
+		lines = append(lines, "a=connection:new")
 	}
 
-	body := msg.Append(nil).AppendTo(nil)
-	body = append(body, "f=\r\n"...)
-	return body
+	// GB28181 specific: SSRC in y= line
+	lines = append(lines, fmt.Sprintf("y=%s", ssrc))
+
+	// f= line (optional media description)
+	lines = append(lines, "f=")
+
+	return []byte(strings.Join(lines, "\r\n") + "\r\n")
 }
 
 func getHost(addr string) string {

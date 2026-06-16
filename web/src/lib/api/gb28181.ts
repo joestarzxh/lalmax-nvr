@@ -177,14 +177,6 @@ export async function listGB28181Alarms(deviceId?: string, limit = 50, offset = 
 }
 
 // Download API
-export async function startDownload(deviceId: string, channelId: string, startTime: string, endTime: string, signal?: AbortSignal): Promise<{ download_id: number; file_path: string; status: string }> {
-  return apiRequest<{ download_id: number; file_path: string; status: string }>('/gb28181/download/start', {
-    method: 'POST',
-    body: JSON.stringify({ device_id: deviceId, channel_id: channelId, start_time: startTime, end_time: endTime }),
-    signal,
-  });
-}
-
 export async function stopDownload(deviceId: string, channelId: string, downloadId: number, signal?: AbortSignal): Promise<{ status: string }> {
   return apiRequest<{ status: string }>('/gb28181/download/stop', {
     method: 'POST',
@@ -205,19 +197,55 @@ export async function listGB28181Downloads(deviceId?: string, channelId?: string
 // --- Device Recording Query ---
 
 export interface DeviceRecordItem {
-  name: string;
-  path: string;
   start_time: string;
   end_time: string;
-  type?: string;
-  size?: number;
+  date?: string;
+}
+
+export interface RecordTimeSegment {
+  start: number; // Unix timestamp
+  end: number;   // Unix timestamp
+}
+
+export interface RecordDayData {
+  date: string;  // "2006-01-02"
+  items: RecordTimeSegment[];
 }
 
 export interface DeviceRecordResponse {
-  device_id: string;
-  channel_id: string;
-  total: number;
-  records: DeviceRecordItem[];
+  day_total: number;
+  time_num: number;
+  data: RecordDayData[];
+}
+
+// Transform backend response to flat record list
+export function transformRecords(response: DeviceRecordResponse): DeviceRecordItem[] {
+  const records: DeviceRecordItem[] = [];
+  for (const day of response.data || []) {
+    for (const item of day.items || []) {
+      records.push({
+        start_time: new Date(item.start * 1000).toISOString(),
+        end_time: new Date(item.end * 1000).toISOString(),
+        date: day.date,
+      });
+    }
+  }
+  return records;
+}
+
+// Get timeline data grouped by day
+export function getTimelineData(response: DeviceRecordResponse): Array<{date: string, segments: Array<{start: number, end: number, startTime: string, endTime: string}>}> {
+  const result: Array<{date: string, segments: Array<{start: number, end: number, startTime: string, endTime: string}>}> = [];
+  for (const day of response.data || []) {
+    const segments = (day.items || []).map(item => ({
+      start: item.start,
+      end: item.end,
+      startTime: new Date(item.start * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+      endTime: new Date(item.end * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+    }));
+    result.push({ date: day.date, segments });
+  }
+  return result;
 }
 
 export interface QueryDeviceRecordRequest {
@@ -242,9 +270,16 @@ export interface PlaybackRequest {
   end_time: string;
 }
 
-export interface PlaybackResponse {
-  stream_id: string;
+export interface PlayURL {
+  protocol: string;
   url: string;
+}
+
+export interface PlaybackResponse {
+  ssrc: string;
+  stream_id: string;
+  url?: string;      // backward compat
+  urls?: PlayURL[];   // multi-protocol support
   message?: string;
 }
 
@@ -281,4 +316,113 @@ export async function seekPlayback(data: PlaySeekRequest): Promise<{ status: str
     method: 'POST',
     body: JSON.stringify(data),
   });
+}
+
+export interface PlayPauseRequest {
+  device_id: string;
+  channel_id: string;
+}
+
+export async function pausePlayback(data: PlayPauseRequest): Promise<{ status: string }> {
+  return apiRequest('/gb28181/playback/pause', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function resumePlayback(data: PlayPauseRequest): Promise<{ status: string }> {
+  return apiRequest('/gb28181/playback/resume', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+// Download API
+export interface DownloadRequest {
+  device_id: string;
+  channel_id: string;
+  start_time: string;
+  end_time: string;
+}
+
+export interface DownloadResponse {
+  download_id: number;
+  file_path: string;
+  status: string;
+}
+
+export interface BatchDownloadRequest {
+  device_id: string;
+  channel_id: string;
+  segments: Array<{
+    start_time: string;
+    end_time: string;
+  }>;
+}
+
+export interface BatchDownloadResponse {
+  downloads: DownloadResponse[];
+  errors: string[];
+  total: number;
+}
+
+export async function startDownload(data: DownloadRequest): Promise<DownloadResponse> {
+  return apiRequest('/gb28181/download/start', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function batchDownload(data: BatchDownloadRequest): Promise<BatchDownloadResponse> {
+  return apiRequest('/gb28181/download/batch', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+// Platform Events API
+export interface PlatformEvent {
+  id: number;
+  platform_id: number;
+  platform_name: string;
+  event_type: string;
+  server_ip: string;
+  server_port: number;
+  channel_id: string;
+  stream_id: string;
+  details: string;
+  created_at: string;
+}
+
+export interface PlatformEventsResponse {
+  events: PlatformEvent[];
+  total: number;
+}
+
+export interface PlatformStatus {
+  platform_id: number;
+  platform_name: string;
+  server_ip: string;
+  server_port: number;
+  enable: boolean;
+  is_online: boolean;
+  last_event_type: string;
+  last_event_time: string;
+}
+
+export interface PlatformStatusResponse {
+  platforms: PlatformStatus[];
+}
+
+export async function listPlatformEvents(platformId?: number, eventType?: string, limit = 50, offset = 0): Promise<PlatformEventsResponse> {
+  const params = new URLSearchParams();
+  if (platformId) params.set('platform_id', String(platformId));
+  if (eventType) params.set('event_type', eventType);
+  params.set('limit', String(limit));
+  params.set('offset', String(offset));
+  return apiRequest(`/gb28181/platform/events?${params}`);
+}
+
+export async function getPlatformStatus(): Promise<PlatformStatusResponse> {
+  return apiRequest('/gb28181/platform/status');
 }

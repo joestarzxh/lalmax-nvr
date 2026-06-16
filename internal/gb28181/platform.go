@@ -308,6 +308,19 @@ func (p *Platform) Start() {
 
 // Stop stops the platform.
 func (p *Platform) Stop() {
+	cfg := p.Config
+	if cfg != nil && p.status {
+		// Record unregister event
+		_ = p.store.AddPlatformEvent(context.Background(), storage.PlatformEventRow{
+			PlatformID:   cfg.ID,
+			PlatformName: cfg.Name,
+			EventType:    storage.PlatformEventUnregister,
+			ServerIP:     cfg.ServerIP,
+			ServerPort:   cfg.ServerPort,
+			Details:      "platform stopped",
+		})
+	}
+	p.status = false
 	select {
 	case <-p.quit:
 	default:
@@ -432,12 +445,32 @@ func (p *Platform) Register() error {
 	}
 
 	if res.StatusCode != 200 {
+		// Record failed register event
+		_ = p.store.AddPlatformEvent(context.Background(), storage.PlatformEventRow{
+			PlatformID:   cfg.ID,
+			PlatformName: cfg.Name,
+			EventType:    storage.PlatformEventRegister,
+			ServerIP:     cfg.ServerIP,
+			ServerPort:   cfg.ServerPort,
+			Details:      fmt.Sprintf("rejected: %d", res.StatusCode),
+		})
 		return fmt.Errorf("register rejected: %d", res.StatusCode)
 	}
 
 	p.status = true
 	p.registerCallID = callID
 	_ = p.store.UpdatePlatformStatus(context.Background(), cfg.ID, true)
+
+	// Record successful register event
+	_ = p.store.AddPlatformEvent(context.Background(), storage.PlatformEventRow{
+		PlatformID:   cfg.ID,
+		PlatformName: cfg.Name,
+		EventType:    storage.PlatformEventRegister,
+		ServerIP:     cfg.ServerIP,
+		ServerPort:   cfg.ServerPort,
+		Details:      "registered successfully",
+	})
+
 	slog.Info("[Platform] register success", "name", cfg.Name, "server", cfg.ServerGBID)
 	return nil
 }

@@ -339,13 +339,20 @@ export {
   startBroadcast,
   stopBroadcast,
   listGB28181Alarms,
-  startDownload,
   stopDownload,
   listGB28181Downloads,
   queryDeviceRecords,
   startDevicePlayback,
   setPlaybackSpeed,
   seekPlayback,
+  pausePlayback,
+  resumePlayback,
+  transformRecords,
+  getTimelineData,
+  startDownload,
+  batchDownload,
+  listPlatformEvents,
+  getPlatformStatus,
 } from './gb28181';
 
 export type {
@@ -363,11 +370,21 @@ export type {
   GB28181DownloadsResponse,
   DeviceRecordItem,
   DeviceRecordResponse,
+  RecordTimeSegment,
+  RecordDayData,
   QueryDeviceRecordRequest,
   PlaybackRequest,
   PlaybackResponse,
   PlaySpeedRequest,
   PlaySeekRequest,
+  DownloadRequest,
+  DownloadResponse,
+  BatchDownloadRequest,
+  BatchDownloadResponse,
+  PlatformEvent,
+  PlatformEventsResponse,
+  PlatformStatus,
+  PlatformStatusResponse,
 } from './gb28181';
 
 // Groups — device grouping management
