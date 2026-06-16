@@ -80,8 +80,8 @@ docker compose up -d
 ```bash
 git clone https://github.com/lalmax-pro/lalmax-nvr.git
 cd lalmax-nvr
-./scripts/build.sh
-./scripts/start.sh
+./scripts/unix/build.sh
+./scripts/unix/start.sh
 ```
 
 打开 `http://localhost:9090`。
@@ -89,12 +89,12 @@ cd lalmax-nvr
 其他脚本：
 
 ```bash
-./scripts/stop.sh        # 停止后台进程
-./scripts/restart.sh     # 重启
-./scripts/status.sh      # 查看 PID 和健康检查
-./scripts/logs.sh        # 查看日志
-./scripts/run.sh         # 前台运行
-./scripts/test.sh        # 运行所有 Go 测试
+./scripts/unix/stop.sh        # 停止后台进程
+./scripts/unix/restart.sh     # 重启
+./scripts/unix/status.sh      # 查看 PID 和健康检查
+./scripts/unix/logs.sh        # 查看日志
+./scripts/unix/run.sh         # 前台运行
+./scripts/unix/test.sh        # 运行所有 Go 测试
 ```
 
 详见 [`scripts/README.md`](scripts/README.md) 了解环境变量覆盖。

@@ -13,9 +13,9 @@ export NODE_OPTIONS="${NODE_OPTIONS:-} --no-deprecation"
 
 # Cross-compilation: auto-detect or override via GOOS/GOARCH
 # Examples:
-#   ./scripts/build.sh                        # build for current platform
-#   GOOS=linux GOARCH=arm64 ./scripts/build.sh  # cross-compile for linux/arm64
-#   GOOS=linux GOARCH=arm GOARM=7 ./scripts/build.sh  # armv7
+#   ./scripts/unix/build.sh                        # build for current platform
+#   GOOS=linux GOARCH=arm64 ./scripts/unix/build.sh  # cross-compile for linux/arm64
+#   GOOS=linux GOARCH=arm GOARM=7 ./scripts/unix/build.sh  # armv7
 TARGET_OS="${GOOS:-$(go env GOOS)}"
 TARGET_ARCH="${GOARCH:-$(go env GOARCH)}"
 

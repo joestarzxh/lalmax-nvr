@@ -2,7 +2,7 @@
 $ErrorActionPreference = 'Stop'
 
 $ScriptDir = $PSScriptRoot
-$RootDir = Split-Path -Parent $ScriptDir
+$RootDir = Split-Path -Parent (Split-Path -Parent $ScriptDir)
 
 $AppName = 'lalmax-nvr'
 $BinDir = if ($env:BIN_DIR) { $env:BIN_DIR } else { Join-Path $RootDir 'bin' }

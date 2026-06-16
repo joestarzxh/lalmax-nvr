@@ -80,8 +80,8 @@ See [`docker-compose.yml`](docker-compose.yml) for volume mounts and environment
 ```bash
 git clone https://github.com/lalmax-pro/lalmax-nvr.git
 cd lalmax-nvr
-./scripts/build.sh
-./scripts/start.sh
+./scripts/unix/build.sh
+./scripts/unix/start.sh
 ```
 
 Open `http://localhost:9090`.
@@ -89,12 +89,12 @@ Open `http://localhost:9090`.
 Other scripts:
 
 ```bash
-./scripts/stop.sh        # Stop background process
-./scripts/restart.sh     # Restart
-./scripts/status.sh      # Show PID and health check
-./scripts/logs.sh        # Follow logs
-./scripts/run.sh         # Run in foreground
-./scripts/test.sh        # Run all Go tests
+./scripts/unix/stop.sh        # Stop background process
+./scripts/unix/restart.sh     # Restart
+./scripts/unix/status.sh      # Show PID and health check
+./scripts/unix/logs.sh        # Follow logs
+./scripts/unix/run.sh         # Run in foreground
+./scripts/unix/test.sh        # Run all Go tests
 ```
 
 See [`scripts/README.md`](scripts/README.md) for environment variable overrides.

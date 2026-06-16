@@ -1,64 +1,68 @@
 # `lalmax-nvr` Scripts
 
-All scripts run from the project root automatically.
+Platform-specific scripts live in subfolders. Run from the project root.
 
-## Linux / macOS
+## Linux / macOS — `scripts/unix/`
 
 ```sh
-./scripts/build.sh      # build bin/lalmax-nvr
-./scripts/run.sh        # run in foreground
-./scripts/start.sh      # start in background
-./scripts/stop.sh       # stop background process
-./scripts/restart.sh    # restart background process
-./scripts/status.sh     # show pid and /api/health
-./scripts/logs.sh       # follow logs/lalmax-nvr.log
-./scripts/test.sh       # run all Go tests
+./scripts/unix/build.sh      # build bin/lalmax-nvr
+./scripts/unix/run.sh        # run in foreground
+./scripts/unix/start.sh      # start in background
+./scripts/unix/stop.sh       # stop background process
+./scripts/unix/restart.sh    # restart background process
+./scripts/unix/status.sh     # show pid and /api/health
+./scripts/unix/logs.sh       # follow logs/lalmax-nvr.log
+./scripts/unix/test.sh       # run all Go tests
 ```
 
 Environment overrides:
 
 ```sh
-CONFIG_FILE=./lalmax-nvr.dev.yaml ./scripts/start.sh
-BIN_PATH=./bin/lalmax-nvr-dev ./scripts/build.sh
-LINES=200 ./scripts/logs.sh
+CONFIG_FILE=./lalmax-nvr.dev.yaml ./scripts/unix/start.sh
+BIN_PATH=./bin/lalmax-nvr-dev ./scripts/unix/build.sh
+LINES=200 ./scripts/unix/logs.sh
 ```
 
-## Windows
+## Windows — `scripts/windows/`
 
-PowerShell (recommended):
+PowerShell（统一入口 `nvr.ps1`）：
 
 ```powershell
-.\scripts\build.ps1      # build bin/lalmax-nvr.exe
-.\scripts\run.ps1        # run in foreground
-.\scripts\start.ps1      # start in background
-.\scripts\stop.ps1       # stop background process
-.\scripts\restart.ps1    # restart background process
-.\scripts\status.ps1     # show pid and /api/health
-.\scripts\logs.ps1       # follow logs/lalmax-nvr.log
-.\scripts\test.ps1       # run all Go tests
+.\scripts\windows\nvr.ps1 build      # build bin/lalmax-nvr.exe
+.\scripts\windows\nvr.ps1 run        # run in foreground
+.\scripts\windows\nvr.ps1 start      # start in background
+.\scripts\windows\nvr.ps1 stop       # stop background process
+.\scripts\windows\nvr.ps1 restart    # restart background process
+.\scripts\windows\nvr.ps1 status     # show pid and /api/health
+.\scripts\windows\nvr.ps1 logs       # follow logs/lalmax-nvr.log
+.\scripts\windows\nvr.ps1 test       # run all Go tests
 ```
 
-Command Prompt wrappers (`.cmd` files call the PowerShell scripts above):
+Command Prompt（`.bat` 薄包装，内部同样调用 `nvr.ps1`）：
 
 ```cmd
-scripts\build.cmd
-scripts\start.cmd
-scripts\stop.cmd
+scripts\windows\build.bat
+scripts\windows\start.bat
+scripts\windows\stop.bat
 ```
 
 Environment overrides:
 
 ```powershell
-$env:CONFIG_FILE = '.\config\lalmax-nvr.dev.yaml'; .\scripts\start.ps1
-$env:BIN_PATH = '.\bin\lalmax-nvr-dev'; .\scripts\build.ps1
-$env:LINES = '200'; .\scripts\logs.ps1
+$env:CONFIG_FILE = '.\config\lalmax-nvr.dev.yaml'; .\scripts\windows\nvr.ps1 start
+$env:BIN_PATH = '.\bin\lalmax-nvr-dev'; .\scripts\windows\nvr.ps1 build
+$env:LINES = '200'; .\scripts\windows\nvr.ps1 logs
 ```
 
-Cross-compilation examples:
+Cross-compilation:
 
 ```powershell
-$env:GOOS = 'linux'; $env:GOARCH = 'arm64'; .\scripts\build.ps1
+$env:GOOS = 'linux'; $env:GOARCH = 'arm64'; .\scripts\windows\nvr.ps1 build
 ```
+
+Implementation: `scripts/windows/nvr.ps1` + `scripts/windows/env.ps1`.
+
+Unix helpers: `scripts/unix/env.sh`.
 
 ## Runtime files
 
