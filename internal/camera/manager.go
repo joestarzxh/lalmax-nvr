@@ -345,6 +345,17 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 		rec = recorder.NewHTTPJPEGRecorder(httpJpegCfg, cm.store, cm.metrics)
 	case string(model.ProtoONVIF):
 		if recordingSourceURL != "" {
+			if detectedEncoding := cm.probeStreamEncoding(recordingSourceURL, cam); detectedEncoding != "" && detectedEncoding != cm.normalizedRecordingEncoding(cam) {
+				logger.Warn("ONVIF relay encoding mismatch detected, using actual encoding",
+					"camera_id", cam.ID,
+					"configured", cm.normalizedRecordingEncoding(cam),
+					"detected", detectedEncoding)
+				cam.Encoding = detectedEncoding
+				cam.StreamEncoding = strings.ToUpper(detectedEncoding)
+				if err := cm.applyPreparedCameraState(context.Background(), cam); err != nil {
+					logger.Error("failed to update ONVIF camera encoding", "camera_id", cam.ID, "error", err)
+				}
+			}
 			switch cm.normalizedRecordingEncoding(cam) {
 			case string(model.FormatH264):
 				h264Cfg := recorder.H264Config{
@@ -621,9 +632,6 @@ func (cm *CameraManager) prepareCameraForStart(ctx context.Context, cam config.C
 	if cam.Protocol != string(model.ProtoONVIF) || cm.mediaEngine == nil {
 		return cam, nil
 	}
-	if enc := cm.normalizedRecordingEncoding(cam); enc != "" && cam.ProfileToken != "" {
-		return cam, nil
-	}
 
 	profiles, err := cm.loadONVIFProfiles(ctx, cam)
 	if err != nil {
@@ -641,11 +649,19 @@ func (cm *CameraManager) prepareCameraForStart(ctx context.Context, cam config.C
 		cam.ProfileToken = selected.Token
 	}
 	if selected.Encoding != "" {
-		if cam.StreamEncoding == "" {
+		selectedEncoding := strings.ToLower(selected.Encoding)
+		if selectedEncoding == string(model.FormatH264) || selectedEncoding == string(model.FormatH265) {
+			if cam.Encoding != selectedEncoding {
+				logger.Info("corrected ONVIF encoding from selected profile",
+					"camera_id", cam.ID,
+					"configured", cam.Encoding,
+					"detected", selectedEncoding,
+					"profile_token", selected.Token)
+				cam.Encoding = selectedEncoding
+			}
+			cam.StreamEncoding = strings.ToUpper(selectedEncoding)
+		} else if cam.StreamEncoding == "" {
 			cam.StreamEncoding = strings.ToUpper(selected.Encoding)
-		}
-		if cam.Encoding == "" {
-			cam.Encoding = strings.ToLower(selected.Encoding)
 		}
 	}
 	return cam, nil
@@ -2111,6 +2127,10 @@ func (cm *CameraManager) probeRTSPEncoding(cam config.CameraConfig) string {
 // probeGB28181Encoding probes a GB28181 RTSP stream to detect the actual video encoding.
 // This handles cases where the device encoding changes (e.g., user switches from H264 to H265 on camera).
 func (cm *CameraManager) probeGB28181Encoding(rtspURL string, cam config.CameraConfig) string {
+	return cm.probeStreamEncoding(rtspURL, cam)
+}
+
+func (cm *CameraManager) probeStreamEncoding(rtspURL string, cam config.CameraConfig) string {
 	probeCfg := recorder.RTSPProbeConfig{
 		RTSPURL:       rtspURL,
 		RTSPTransport: cameraRTSPTransport(cam),
@@ -2124,7 +2144,7 @@ func (cm *CameraManager) probeGB28181Encoding(rtspURL string, cam config.CameraC
 
 	result, err := recorder.ProbeRTSPEncoding(ctx, probeCfg)
 	if err != nil {
-		logger.Debug("GB28181 encoding probe failed",
+		logger.Debug("RTSP stream encoding probe failed",
 			"camera_id", cam.ID,
 			"url", rtspURL,
 			"error", err)

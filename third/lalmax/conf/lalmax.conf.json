@@ -11,7 +11,7 @@
       "ice_tcp_mux_port": 4888
     },
     "http_config": {
-      "http_listen_addr": ":1290",
+      "http_listen_addr": ":12090",
       "enable_https": true,
       "https_listen_addr": ":1233",
       "https_cert_file": "./conf/cert.pem",

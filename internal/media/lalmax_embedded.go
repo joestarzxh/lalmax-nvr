@@ -89,21 +89,12 @@ func lalmaxListenAddr(httpAddr string) string {
 
 func NewEmbeddedLalmax(cfg EmbeddedLalmaxConfig, svrOpts ...lalmaxserver.LalMaxServerOption) (*EmbeddedLalmax, error) {
 	if cfg.HTTPAddr == "" {
-		cfg.HTTPAddr = "http://127.0.0.1:1290"
-	}
-	if cfg.RTMPPort == 0 {
-		cfg.RTMPPort = 1935
-	}
-	if cfg.SRTPort == 0 {
-		cfg.SRTPort = 9000
-	}
-	if cfg.HTTPAddr == "http://127.0.0.1:1290" {
 		cfg.HTTPAddr = config.DefaultLalmaxHTTPAddr
 	}
-	if cfg.RTMPPort == 1935 {
+	if cfg.RTMPPort == 0 {
 		cfg.RTMPPort = config.DefaultLalRTMPPort
 	}
-	if cfg.SRTPort == 9000 {
+	if cfg.SRTPort == 0 {
 		cfg.SRTPort = config.DefaultSRTPort
 	}
 	applyEmbeddedPortDefaults(&cfg)
@@ -769,7 +760,7 @@ func (e *EmbeddedLalmax) applyRuntimeHLSSettings(server *lalmaxserver.LalMaxServ
 }
 
 func embeddedConfigJSON(cfg EmbeddedLalmaxConfig) ([]byte, error) {
-	addr := ":1290"
+	addr := fmt.Sprintf(":%d", config.DefaultLalmaxHTTPPort)
 	if parsed, err := url.Parse(cfg.HTTPAddr); err == nil && parsed.Host != "" {
 		host := parsed.Host
 		if strings.Contains(host, ":") {

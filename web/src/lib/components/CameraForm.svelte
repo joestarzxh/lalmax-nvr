@@ -221,6 +221,13 @@
     return false;
   }
 
+  function handleProtocolChange() {
+    if (formProtocol === 'onvif') {
+      formEncoding = '';
+      formStreamEncoding = '';
+    }
+  }
+
   function validate(): boolean {
     validationErrors = {};
     if (!formName.trim()) validationErrors['name'] = t('cameras.nameRequired');
@@ -351,7 +358,7 @@
     <!-- Protocol -->
     <div>
       <label for="cam-protocol" class="input-label">{t('cameras.protocol')}</label>
-      <select id="cam-protocol" class="input" bind:value={formProtocol}>
+      <select id="cam-protocol" class="input" bind:value={formProtocol} onchange={handleProtocolChange}>
         {#each protocols.filter(p => p.addable !== false) as proto (proto.id)}
           <option value={proto.id}>{proto.label}</option>
         {/each}

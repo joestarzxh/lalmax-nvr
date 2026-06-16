@@ -138,15 +138,25 @@ func (h *Handler) handleListCameras(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		// Override status for cameras backed by lalmax streams that are idle
-		// If a camera was promoted from a lalmax stream and the stream is not active,
-		// show "offline" instead of "reconnecting"
+		// Override status/codec for cameras backed by lalmax streams.
+		// A relay can be active even while an incorrectly configured recorder is
+		// reconnecting, so expose the live stream state and codec to the UI.
 		if h.mediaEngine != nil {
 			for i := range cameras {
 				if cameras[i].Status == model.StatusRecording || cameras[i].Status == model.StatusReconnecting {
 					streamInfo, err := h.mediaEngine.GetStream(r.Context(), cameras[i].ID)
-					if err == nil && streamInfo != nil && !streamInfo.Active {
-						cameras[i].Status = model.StatusOffline
+					if err == nil && streamInfo != nil {
+						if streamInfo.Active {
+							cameras[i].Status = model.StatusRecording
+						} else {
+							cameras[i].Status = model.StatusOffline
+						}
+						if enc := encodingFromMediaCodec(streamInfo.VideoCodec); enc != "" {
+							cameras[i].Encoding = enc
+							if cameras[i].StreamEncoding == "" {
+								cameras[i].StreamEncoding = strings.ToUpper(enc)
+							}
+						}
 					}
 				}
 			}
@@ -366,8 +376,18 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 		// Override status for cameras backed by lalmax streams that are idle
 		if h.mediaEngine != nil && (row.Status == model.StatusRecording || row.Status == model.StatusReconnecting) {
 			streamInfo, err := h.mediaEngine.GetStream(r.Context(), id)
-			if err == nil && streamInfo != nil && !streamInfo.Active {
-				row.Status = model.StatusOffline
+			if err == nil && streamInfo != nil {
+				if streamInfo.Active {
+					row.Status = model.StatusRecording
+				} else {
+					row.Status = model.StatusOffline
+				}
+				if enc := encodingFromMediaCodec(streamInfo.VideoCodec); enc != "" {
+					row.Encoding = enc
+					if row.StreamEncoding == "" {
+						row.StreamEncoding = strings.ToUpper(enc)
+					}
+				}
 			}
 		}
 	}
@@ -390,6 +410,19 @@ func (h *Handler) handleGetCamera(w http.ResponseWriter, r *http.Request) {
 	h.resolveCameraSourceType(r.Context(), row)
 	cameraRowForAPI(row)
 	writeJSON(w, http.StatusOK, row)
+}
+
+func encodingFromMediaCodec(codec string) string {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "h264", "avc", "avc1":
+		return string(model.FormatH264)
+	case "h265", "hevc", "hev1", "hvc1":
+		return string(model.FormatH265)
+	case "mjpeg", "jpeg":
+		return string(model.FormatMJPEG)
+	default:
+		return ""
+	}
 }
 
 func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {

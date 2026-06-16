@@ -706,7 +706,7 @@ func (h *Handler) mediaHLSResourceURL(ctx context.Context, cameraID, tail string
 	var baseURL *url.URL
 	var err error
 	if isLLHLS {
-		// LL-HLS → lalmax (port 1290)
+		// LL-HLS → lalmax (port 12090)
 		baseURL, err = h.mediaPlayURL(ctx, cameraID, "ll-hls")
 	} else {
 		// Regular HLS → lal (port 8080)
