@@ -321,6 +321,14 @@ func (r *XiaomiRecorder) expandBackoff(backoff time.Duration) time.Duration {
 	return backoff
 }
 
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "no media data") || strings.Contains(msg, "no command data")
+}
+
 // run is the main reconnect loop.
 func (r *XiaomiRecorder) run(ctx context.Context) {
 	defer func() {

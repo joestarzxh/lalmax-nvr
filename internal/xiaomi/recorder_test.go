@@ -874,3 +874,27 @@ func TestXiaomiMetricsNilSafe(t *testing.T) {
 	r.recordXiaomiDisconnect("network")
 	r.recordXiaomiReconnect()
 }
+
+func TestIsTimeoutError(t *testing.T) {
+	t.Helper()
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"cs2_no_media", fmt.Errorf("cs2: no media data for 15s"), true},
+		{"cs2_no_command", fmt.Errorf("cs2: no command data for 15s"), true},
+		{"miss_read_timeout", fmt.Errorf("miss read: cs2: no media data for 15s"), true},
+		{"eof", fmt.Errorf("miss read: EOF"), false},
+		{"connection_refused", fmt.Errorf("miss connect: connection refused"), false},
+		{"random", fmt.Errorf("something else"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Helper()
+			got := isTimeoutError(tt.err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
