@@ -762,9 +762,15 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 	r.mu.Unlock()
 	if m != nil && aid > 0 {
 		pts := time.Since(start)
-		// G.711 audio: 20ms frames at 8kHz = 160 samples per frame.
-		// Duration per frame: 20ms.
-		dur := 20 * time.Millisecond
+		// G.711: 20ms frames at 8kHz = 160 samples per frame.
+		// Opus: 40ms frames (matching streamsvr behavior).
+		var dur time.Duration
+		switch r.audioCodecID {
+		case missCodecOPUS:
+			dur = 40 * time.Millisecond
+		default:
+			dur = 20 * time.Millisecond
+		}
 		if err := m.WriteAudioSample(aid, payload, pts, dur); err != nil {
 			xiaomiLogger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
 		}
