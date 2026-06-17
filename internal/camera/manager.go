@@ -185,7 +185,11 @@ func (cm *CameraManager) createRecorder(cam config.CameraConfig, segDur time.Dur
 	recordingSourceURL := cm.recordingSourceURL(cam)
 	switch cam.Protocol {
 	case "xiaomi":
-		rec = new(xiaomi.XiaomiPlugin).NewRecorder(cam, cm.store, cm.db, cm.metrics)
+		if cm.mediaEngine != nil {
+			rec = new(xiaomi.XiaomiPlugin).NewRecorderWithMediaEngine(cam, cm.store, cm.db, cm.mediaEngine, cm.metrics)
+		} else {
+			rec = new(xiaomi.XiaomiPlugin).NewRecorder(cam, cm.store, cm.db, cm.metrics)
+		}
 		// Wire ErrorReporter for TUTK vendor error detection
 		if xr, ok := rec.(*xiaomi.XiaomiRecorder); ok {
 			xr.SetErrorReporter(cm)
@@ -512,6 +516,11 @@ func (cm *CameraManager) recordingSourceURL(cam config.CameraConfig) string {
 	case "rtmp-pull", "http-flv-pull":
 		// Relay pull protocols always use lalmax RTSP output for recording
 		if cam.Encoding != string(model.FormatH264) && cam.Encoding != string(model.FormatH265) && cam.Encoding != "" {
+			return ""
+		}
+	case "xiaomi":
+		// Xiaomi streams are served via lal, use RTSP for recording
+		if cam.Encoding != string(model.FormatH264) && cam.Encoding != string(model.FormatH265) {
 			return ""
 		}
 	default:
