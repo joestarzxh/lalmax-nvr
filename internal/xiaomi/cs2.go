@@ -205,13 +205,23 @@ func (c *CS2Conn) worker() {
 			}
 
 		case cs2MsgPing:
-		case cs2MsgPong, cs2MsgP2PRdyUDP, cs2MsgP2PRdyTCP, cs2MsgClose, cs2MsgCloseAck: // skip
+		case cs2MsgPong:
+		case cs2MsgP2PRdyUDP, cs2MsgP2PRdyTCP:
+			xiaomiLogger.Info("cs2: received ready message", "type", fmt.Sprintf("0x%02x", buf[1]))
+		case cs2MsgClose:
+			xiaomiLogger.Info("cs2: received close message", "type", fmt.Sprintf("0x%02x", buf[1]))
+			// Send close ACK before exiting
+			_, _ = c.Conn.Write([]byte{cs2Magic, cs2MsgCloseAck, 0, 0})
+			c.setErr(fmt.Errorf("cs2: received close from camera"))
+			return
+		case cs2MsgCloseAck:
+			xiaomiLogger.Info("cs2: received close ACK", "type", fmt.Sprintf("0x%02x", buf[1]))
 		case cs2MsgDrwAck: // only for UDP
 			if c.cmdAck != nil {
 				c.cmdAck()
 			}
 		default:
-			// unknown message type, silently ignore
+			xiaomiLogger.Info("cs2: received unknown message", "type", fmt.Sprintf("0x%02x", buf[1]), "len", n)
 		}
 	}
 }
