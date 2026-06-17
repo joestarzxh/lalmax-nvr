@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/q191201771/lal/pkg/base"
+	"github.com/q191201771/lal/pkg/logic"
 	lalmaxconfig "github.com/q191201771/lalmax/config"
 	lalmaxserver "github.com/q191201771/lalmax/server"
 
@@ -136,6 +138,50 @@ func (e *EmbeddedLalmax) Server() *lalmaxserver.LalMaxServer {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.server
+}
+
+// AddCustomizePubSession registers a custom publish session for feeding frames directly into lal.
+func (e *EmbeddedLalmax) AddCustomizePubSession(_ context.Context, streamName string) (CustomizePubSession, error) {
+	e.mu.Lock()
+	server := e.server
+	e.mu.Unlock()
+	if server == nil {
+		return nil, fmt.Errorf("embedded lalmax server is nil")
+	}
+	ctx, err := server.AddCustomizePubSession(streamName)
+	if err != nil {
+		return nil, err
+	}
+	return &customizePubSessionWrapper{ctx: ctx}, nil
+}
+
+// DelCustomizePubSession removes a custom publish session.
+func (e *EmbeddedLalmax) DelCustomizePubSession(_ context.Context, session CustomizePubSession) error {
+	wrapper, ok := session.(*customizePubSessionWrapper)
+	if !ok {
+		return fmt.Errorf("invalid session type")
+	}
+	e.mu.Lock()
+	server := e.server
+	e.mu.Unlock()
+	if server == nil {
+		return fmt.Errorf("embedded lalmax server is nil")
+	}
+	server.DelCustomizePubSession(wrapper.ctx)
+	return nil
+}
+
+// customizePubSessionWrapper wraps logic.ICustomizePubSessionContext as CustomizePubSession.
+type customizePubSessionWrapper struct {
+	ctx logic.ICustomizePubSessionContext
+}
+
+func (w *customizePubSessionWrapper) FeedAvPacket(packet base.AvPacket) error {
+	return w.ctx.FeedAvPacket(packet)
+}
+
+func (w *customizePubSessionWrapper) FeedRtmpMsg(msg base.RtmpMsg) error {
+	return w.ctx.FeedRtmpMsg(msg)
 }
 
 func (e *EmbeddedLalmax) Start(ctx context.Context) error {

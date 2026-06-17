@@ -67,6 +67,17 @@ func WithAuthentication(auth logic.IAuthentication) LalMaxServerOption {
 	}
 }
 
+// AddCustomizePubSession registers a custom publish session for feeding frames directly into lal.
+// Returns an ICustomizePubSessionContext that can be used to FeedAvPacket/FeedRtmpMsg.
+func (s *LalMaxServer) AddCustomizePubSession(streamName string) (logic.ICustomizePubSessionContext, error) {
+	return s.lalsvr.AddCustomizePubSession(streamName)
+}
+
+// DelCustomizePubSession removes a custom publish session.
+func (s *LalMaxServer) DelCustomizePubSession(ctx logic.ICustomizePubSessionContext) {
+	s.lalsvr.DelCustomizePubSession(ctx)
+}
+
 func NewLalMaxServer(conf *config.Config, opts ...LalMaxServerOption) (*LalMaxServer, error) {
 	var serverOpts lalMaxServerOptions
 	for _, opt := range opts {

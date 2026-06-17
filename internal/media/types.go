@@ -3,7 +3,15 @@ package media
 import (
 	"context"
 	"time"
+
+	"github.com/q191201771/lal/pkg/base"
 )
+
+// CustomizePubSession is a handle for feeding frames directly into lal.
+type CustomizePubSession interface {
+	FeedAvPacket(packet base.AvPacket) error
+	FeedRtmpMsg(msg base.RtmpMsg) error
+}
 
 type Engine interface {
 	Start(ctx context.Context) error
@@ -19,6 +27,11 @@ type Engine interface {
 	GetStream(ctx context.Context, streamID string) (*StreamInfo, error)
 	ListStreams(ctx context.Context) ([]StreamInfo, error)
 	BuildPlayURL(ctx context.Context, req PlayURLRequest) (*PlayURL, error)
+
+	// AddCustomizePubSession registers a custom publish session for feeding frames directly into lal.
+	AddCustomizePubSession(ctx context.Context, streamName string) (CustomizePubSession, error)
+	// DelCustomizePubSession removes a custom publish session.
+	DelCustomizePubSession(ctx context.Context, session CustomizePubSession) error
 
 	SubscribeEvents(ctx context.Context, filter EventFilter) (<-chan Event, error)
 

@@ -745,3 +745,13 @@ func (e *LalmaxHTTP) SubscribeSRTEvents(ctx context.Context) (<-chan SRTEvent, e
 	return out, nil
 }
 
+// AddCustomizePubSession is not supported for HTTP-based lalmax engine.
+func (e *LalmaxHTTP) AddCustomizePubSession(_ context.Context, _ string) (CustomizePubSession, error) {
+	return nil, fmt.Errorf("AddCustomizePubSession not supported for HTTP-based lalmax engine")
+}
+
+// DelCustomizePubSession is not supported for HTTP-based lalmax engine.
+func (e *LalmaxHTTP) DelCustomizePubSession(_ context.Context, _ CustomizePubSession) error {
+	return fmt.Errorf("DelCustomizePubSession not supported for HTTP-based lalmax engine")
+}
+
