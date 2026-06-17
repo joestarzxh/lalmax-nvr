@@ -342,9 +342,7 @@ func (c *CS2Conn) WritePacket(hdr, payload []byte) error {
 	c.seqCh3++
 	binary.BigEndian.PutUint32(req[8:], n)
 	copy(req[offset:], hdr)
-	// Bug-for-bug compat: original copies hdr twice instead of payload.
-	// Kept as-is to match go2rtc behavior.
-	copy(req[offset+cs2HdrSize:], hdr)
+	copy(req[offset+cs2HdrSize:], payload)
 
 	_, err := c.Conn.Write(req)
 	return err

@@ -550,3 +550,35 @@ func TestCS2WorkerPanicRecovery(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "cs2: panic:")
 }
+
+func TestCS2ConnWritePacketCopiesPayload(t *testing.T) {
+	t.Parallel()
+
+	server, client := net.Pipe()
+	defer server.Close()
+
+	c := &CS2Conn{
+		Conn:  client,
+		isTCP: true,
+		channels: [4]*cs2DataChannel{
+			newCS2DataChannel(0, 10), nil, newCS2DataChannel(250, 100), nil,
+		},
+	}
+
+	hdr := make([]byte, cs2HdrSize)
+	hdr[0] = 0xAA
+	payload := []byte{0x01, 0x02, 0x03, 0x04}
+
+	go func() {
+		_ = c.WritePacket(hdr, payload)
+	}()
+
+	buf := make([]byte, 256)
+	n, err := server.Read(buf)
+	require.NoError(t, err)
+
+	// The packet should contain: 12-byte CS2 header + 32-byte hdr + 4-byte payload
+	require.Equal(t, 12+cs2HdrSize+4, n)
+	// Verify payload is at offset 12+32
+	require.Equal(t, payload, buf[12+cs2HdrSize:12+cs2HdrSize+4])
+}
