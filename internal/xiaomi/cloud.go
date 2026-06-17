@@ -405,6 +405,10 @@ func ResolveMISSURL(xiaomiCfg XiaomiCloudConfig, did, model string) (string, err
 	if model != "" {
 		q.Set("model", model)
 	}
+	// Force UDP transport for CS2 - TCP has known 6-second disconnect issue.
+	if vendorName == "cs2" {
+		q.Set("transport", "udp")
+	}
 	if vendorName == "tutk" && resp.Vendor.Params.UID != "" {
 		q.Set("uid", resp.Vendor.Params.UID)
 	}
