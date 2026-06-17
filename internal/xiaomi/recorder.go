@@ -787,10 +787,7 @@ func missCodecToAudio(codecID uint32) (model.AudioCodec, bool) {
 	}
 }
 
-// forwardAudio broadcasts audio data via StreamHub (non-blocking)
-// and writes to the MP4 muxer when an audio track is available.
-// Skips silently when AudioEnabled is false.
-// Unknown codec IDs are skipped with a warning log.
+// forwardAudio feeds audio data to lal via CustomizePubSession.
 func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 	if !r.cfg.AudioEnabled {
 		return
@@ -801,41 +798,43 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 		return
 	}
 
-	// Remember the audio codec ID for muxer track creation.
 	if r.audioCodecID == 0 {
 		r.audioCodecID = codecID
 		xiaomiLogger.Info("audio codec detected", "camera_id", r.cfg.CameraID, "codec_id", codecID, "codec", audioCodec)
 	}
 
-	// Broadcast to live consumers via StreamHub.
-	if r.Hub != nil && r.Hub.AudioConsumerCount() > 0 {
-		pts := time.Since(r.streamStart).Nanoseconds() * 90000 / int64(time.Second)
-		r.Hub.BroadcastAudio(pts, audioCodec, payload)
+	r.mu.Lock()
+	pub := r.pubSession
+	start := r.streamStart
+	r.mu.Unlock()
+	if pub == nil {
+		return
 	}
 
-	// Write audio to MP4 muxer if audio track is available.
-	// Note: The muxer currently only supports AAC tracks, so audioTrackID
-	// remains 0 for G.711. When G.711 muxer support is added, this will
-	// automatically write audio samples to the segment file.
-	r.mu.Lock()
-	m := r.muxer
-	aid := r.audioTrackID
-	start := r.segStart
-	r.mu.Unlock()
-	if m != nil && aid > 0 {
-		pts := time.Since(start)
-		// G.711: 20ms frames at 8kHz = 160 samples per frame.
-		// Opus: 40ms frames (matching streamsvr behavior).
-		var dur time.Duration
-		switch r.audioCodecID {
-		case missCodecOPUS:
-			dur = 40 * time.Millisecond
-		default:
-			dur = 20 * time.Millisecond
+	pts := time.Since(start).Nanoseconds() * 90000 / int64(time.Second)
+
+	var pkt base.AvPacket
+	switch audioCodec {
+	case model.AudioG711:
+		pkt = base.AvPacket{
+			PayloadType: base.AvPacketPtG711A,
+			Timestamp:   pts,
+			Pts:         pts,
+			Payload:     payload,
 		}
-		if err := m.WriteAudioSample(aid, payload, pts, dur); err != nil {
-			xiaomiLogger.Error("failed to write audio sample", "camera_id", r.cfg.CameraID, "error", err)
+	case model.AudioOpus:
+		pkt = base.AvPacket{
+			PayloadType: base.AvPacketPtOpus,
+			Timestamp:   pts,
+			Pts:         pts,
+			Payload:     payload,
 		}
+	default:
+		return
+	}
+
+	if err := pub.FeedAvPacket(pkt); err != nil {
+		xiaomiLogger.Error("failed to feed audio packet to lal", "camera_id", r.cfg.CameraID, "error", err)
 	}
 }
 
