@@ -153,8 +153,8 @@ func (r *XiaomiRecorder) SetErrorReporter(reporter ErrorReporter) {
 // Start begins recording from the Xiaomi camera in a background goroutine.
 func (r *XiaomiRecorder) Start(ctx context.Context) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.status == model.StatusRecording || r.status == model.StatusReconnecting {
+		r.mu.Unlock()
 		return fmt.Errorf("recorder for %q already running", r.cfg.CameraID)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -162,7 +162,20 @@ func (r *XiaomiRecorder) Start(ctx context.Context) error {
 	r.done = make(chan struct{})
 	r.status = model.StatusRecording
 	r.incActive()
-	r.streamStart = time.Now() // Set PTS base for HLS — only once per Start() lifecycle
+	r.streamStart = time.Now()
+
+	// Register with lal if mediaEngine is available
+	if r.cfg.MediaEngine != nil {
+		pubSession, err := r.cfg.MediaEngine.AddCustomizePubSession(ctx, r.cfg.CameraID)
+		if err != nil {
+			r.mu.Unlock()
+			r.decActive()
+			return fmt.Errorf("failed to register with lal: %w", err)
+		}
+		r.pubSession = pubSession
+	}
+	r.mu.Unlock()
+
 	go r.run(ctx)
 	return nil
 }
@@ -170,14 +183,23 @@ func (r *XiaomiRecorder) Start(ctx context.Context) error {
 // Stop terminates the recording goroutine and waits for it to finish.
 func (r *XiaomiRecorder) Stop() error {
 	r.mu.Lock()
+	if r.status == model.StatusStopped {
+		r.mu.Unlock()
+		return nil
+	}
+	r.status = model.StatusStopped
+	r.decActive()
 	if r.cancel != nil {
 		r.cancel()
 	}
-	r.mu.Unlock()
-	if r.done != nil {
-		<-r.done
+	// Clean up lal pub session
+	if r.pubSession != nil && r.cfg.MediaEngine != nil {
+		_ = r.cfg.MediaEngine.DelCustomizePubSession(context.Background(), r.pubSession)
+		r.pubSession = nil
 	}
-	r.decActive()
+	r.mu.Unlock()
+
+	<-r.done
 	return nil
 }
 
