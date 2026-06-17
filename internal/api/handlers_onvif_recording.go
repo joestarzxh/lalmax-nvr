@@ -17,6 +17,7 @@ type ONVIFRecordingResponse struct {
 // ONVIFRecordingSegmentResponse represents the response for ONVIF recording segments.
 type ONVIFRecordingSegmentResponse struct {
 	Segments []onvif.RecordingSegment `json:"segments"`
+	Fallback bool                     `json:"fallback,omitempty"`
 }
 
 // ONVIFReplayResponse represents the response for ONVIF replay URI.
@@ -50,9 +51,9 @@ func (h *Handler) handleGetONVIFRecordings(w http.ResponseWriter, r *http.Reques
 	var startTime, endTime time.Time
 	if st := r.URL.Query().Get("start_time"); st != "" {
 		var err error
-		startTime, err = time.Parse(time.RFC3339, st)
+		startTime, err = parseTime(st)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid start_time format, use RFC3339")
+			writeError(w, http.StatusBadRequest, "invalid start_time format, use RFC3339 or 2006-01-02T15:04:05")
 			return
 		}
 	} else {
@@ -62,9 +63,9 @@ func (h *Handler) handleGetONVIFRecordings(w http.ResponseWriter, r *http.Reques
 
 	if et := r.URL.Query().Get("end_time"); et != "" {
 		var err error
-		endTime, err = time.Parse(time.RFC3339, et)
+		endTime, err = parseTime(et)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid end_time format, use RFC3339")
+			writeError(w, http.StatusBadRequest, "invalid end_time format, use RFC3339 or 2006-01-02T15:04:05")
 			return
 		}
 	} else {
@@ -72,7 +73,11 @@ func (h *Handler) handleGetONVIFRecordings(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Create ONVIF client
-	client := onvif.NewClient(cam.URL, cam.Username, cam.Password)
+	onvifEndpoint := cam.ONVIFEndpoint
+	if onvifEndpoint == "" {
+		onvifEndpoint = cam.URL
+	}
+	client := onvif.NewClient(onvifEndpoint, cam.Username, cam.Password)
 	if err := client.Connect(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to connect to ONVIF device: %v", err))
 		return
@@ -127,17 +132,17 @@ func (h *Handler) handleSearchONVIFRecordings(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	startTime, err := time.Parse(time.RFC3339, startTimeStr)
+	startTime, err := parseTime(startTimeStr)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid start_time format, use RFC3339")
+		writeError(w, http.StatusBadRequest, "invalid start_time format, use RFC3339 or 2006-01-02T15:04:05")
 		return
 	}
 
 	var endTime time.Time
 	if et := r.URL.Query().Get("end_time"); et != "" {
-		endTime, err = time.Parse(time.RFC3339, et)
+		endTime, err = parseTime(et)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid end_time format, use RFC3339")
+			writeError(w, http.StatusBadRequest, "invalid end_time format, use RFC3339 or 2006-01-02T15:04:05")
 			return
 		}
 	} else {
@@ -153,13 +158,17 @@ func (h *Handler) handleSearchONVIFRecordings(w http.ResponseWriter, r *http.Req
 	}
 
 	// Create ONVIF client
-	client := onvif.NewClient(cam.URL, cam.Username, cam.Password)
+	onvifEndpoint := cam.ONVIFEndpoint
+	if onvifEndpoint == "" {
+		onvifEndpoint = cam.URL
+	}
+	client := onvif.NewClient(onvifEndpoint, cam.Username, cam.Password)
 	if err := client.Connect(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to connect to ONVIF device: %v", err))
 		return
 	}
 
-	// Search recordings
+	// Search recordings, fallback to GetRecordings if search service is not supported
 	searchReq := onvif.SearchRequest{
 		StartTime:  startTime,
 		EndTime:    endTime,
@@ -168,7 +177,28 @@ func (h *Handler) handleSearchONVIFRecordings(w http.ResponseWriter, r *http.Req
 
 	segments, err := client.SearchRecordings(r.Context(), searchReq)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to search recordings: %v", err))
+		// Fallback: use GetRecordings when search service is unavailable
+		recordings, recErr := client.GetRecordings(r.Context())
+		if recErr != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to search recordings: %v", err))
+			return
+		}
+
+		// Convert recordings to segments format
+		fallbackSegments := make([]onvif.RecordingSegment, 0, len(recordings))
+		for _, rec := range recordings {
+			fallbackSegments = append(fallbackSegments, onvif.RecordingSegment{
+				Token:          rec.Token,
+				RecordingToken: rec.Token,
+				StartTime:      startTime,
+				EndTime:        endTime,
+			})
+		}
+
+		writeJSON(w, http.StatusOK, ONVIFRecordingSegmentResponse{
+			Segments: fallbackSegments,
+			Fallback: true,
+		})
 		return
 	}
 
@@ -205,7 +235,11 @@ func (h *Handler) handleGetONVIFReplayURI(w http.ResponseWriter, r *http.Request
 	}
 
 	// Create ONVIF client
-	client := onvif.NewClient(cam.URL, cam.Username, cam.Password)
+	onvifEndpoint := cam.ONVIFEndpoint
+	if onvifEndpoint == "" {
+		onvifEndpoint = cam.URL
+	}
+	client := onvif.NewClient(onvifEndpoint, cam.Username, cam.Password)
 	if err := client.Connect(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to connect to ONVIF device: %v", err))
 		return

@@ -293,9 +293,9 @@ func (c *Client) doAuthenticatedSOAPRequestTo(ctx context.Context, endpoint, soa
 		challenge := resp.Header.Get("WWW-Authenticate")
 		switch {
 		case strings.Contains(strings.ToLower(challenge), "digest"):
-			return c.doDigestSOAPRequest(ctx, soapBody, challenge)
+			return c.doDigestSOAPRequestTo(ctx, endpoint, soapBody, challenge)
 		case strings.Contains(strings.ToLower(challenge), "basic"):
-			return c.doBasicSOAPRequest(ctx, soapBody)
+			return c.doBasicSOAPRequestTo(ctx, endpoint, soapBody)
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -305,7 +305,11 @@ func (c *Client) doAuthenticatedSOAPRequestTo(ctx context.Context, endpoint, soa
 }
 
 func (c *Client) doBasicSOAPRequest(ctx context.Context, soapBody string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, strings.NewReader(soapBody))
+	return c.doBasicSOAPRequestTo(ctx, c.endpoint, soapBody)
+}
+
+func (c *Client) doBasicSOAPRequestTo(ctx context.Context, endpoint, soapBody string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(soapBody))
 	if err != nil {
 		return nil, fmt.Errorf("create basic auth request: %w", err)
 	}
@@ -315,7 +319,11 @@ func (c *Client) doBasicSOAPRequest(ctx context.Context, soapBody string) ([]byt
 }
 
 func (c *Client) doDigestSOAPRequest(ctx context.Context, soapBody, challenge string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, strings.NewReader(soapBody))
+	return c.doDigestSOAPRequestTo(ctx, c.endpoint, soapBody, challenge)
+}
+
+func (c *Client) doDigestSOAPRequestTo(ctx context.Context, endpoint, soapBody, challenge string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(soapBody))
 	if err != nil {
 		return nil, fmt.Errorf("create digest auth request: %w", err)
 	}

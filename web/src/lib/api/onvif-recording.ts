@@ -38,6 +38,7 @@ export interface ONVIFRecordingsResponse {
 
 export interface ONVIFRecordingSegmentsResponse {
   segments: ONVIFRecordingSegment[];
+  fallback?: boolean;
 }
 
 export interface ONVIFReplayResponse {

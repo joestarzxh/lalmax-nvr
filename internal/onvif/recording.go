@@ -104,6 +104,13 @@ func (c *Client) GetRecordings(ctx context.Context) ([]Recording, error) {
 		if len(item.Configuration.Content) > 0 {
 			name = item.Configuration.Content[0].Name
 		}
+		// Fallback: use Source.Name or Description if Name is empty
+		if name == "" {
+			name = item.Configuration.Source.Name
+		}
+		if name == "" {
+			name = item.Configuration.Source.Description
+		}
 		rec := Recording{
 			Token:       item.RecordingToken,
 			Name:        name,
@@ -120,6 +127,88 @@ func (c *Client) GetRecordings(ctx context.Context) ([]Recording, error) {
 	}
 
 	return result, nil
+}
+
+// GetRecordingInformation retrieves detailed information about a specific recording.
+func (c *Client) GetRecordingInformation(ctx context.Context, recordingToken string) (*Recording, error) {
+	if !c.ready {
+		return nil, fmt.Errorf("onvif client not connected, call Connect() first")
+	}
+
+	c.soapMu.Lock()
+	defer c.soapMu.Unlock()
+
+	soapBody := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+ xmlns:trc="http://www.onvif.org/ver10/recording/wsdl">
+  <s:Body>
+    <trc:GetRecordingInformation>
+      <trc:RecordingToken>%s</trc:RecordingToken>
+    </trc:GetRecordingInformation>
+  </s:Body>
+</s:Envelope>`, recordingToken)
+
+	body, err := c.doAuthenticatedSOAPRequestTo(ctx, c.recordingEndpoint(), soapBody)
+	if err != nil {
+		return nil, fmt.Errorf("get recording information: %w", err)
+	}
+
+	var envelope struct {
+		Body struct {
+			GetRecordingInformationResponse struct {
+				Recording struct {
+					RecordingToken string `xml:"RecordingToken"`
+					Configuration  struct {
+						Source struct {
+							SourceID    string `xml:"SourceId"`
+							Name        string `xml:"Name"`
+							Location    string `xml:"Location"`
+							Description string `xml:"Description"`
+						} `xml:"Source"`
+						Content []struct {
+							Name string `xml:"Name"`
+						} `xml:"Content"`
+					} `xml:"Configuration"`
+					Tracks struct {
+						Track []struct {
+							TrackToken string `xml:"TrackToken"`
+						} `xml:"Track"`
+					} `xml:"Tracks"`
+				} `xml:"Recording"`
+			} `xml:"GetRecordingInformationResponse"`
+		} `xml:"Body"`
+	}
+
+	if err := xml.Unmarshal(body, &envelope); err != nil {
+		return nil, fmt.Errorf("parse recording information response: %w", err)
+	}
+
+	item := envelope.Body.GetRecordingInformationResponse.Recording
+	name := ""
+	if len(item.Configuration.Content) > 0 {
+		name = item.Configuration.Content[0].Name
+	}
+	if name == "" {
+		name = item.Configuration.Source.Name
+	}
+	if name == "" {
+		name = item.Configuration.Source.Description
+	}
+
+	rec := &Recording{
+		Token:       item.RecordingToken,
+		Name:        name,
+		Description: item.Configuration.Source.Description,
+		Source: RecordingSource{
+			SourceID:    item.Configuration.Source.SourceID,
+			Name:        item.Configuration.Source.Name,
+			Location:    item.Configuration.Source.Location,
+			Description: item.Configuration.Source.Description,
+		},
+		Status: "active",
+	}
+
+	return rec, nil
 }
 
 // SearchRecordings searches for recording segments on an ONVIF device.

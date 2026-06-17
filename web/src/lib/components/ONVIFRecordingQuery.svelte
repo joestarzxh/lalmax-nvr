@@ -24,7 +24,7 @@
   let loading = $state(false);
   let recordings = $state<ONVIFRecording[]>([]);
   let segments = $state<ONVIFRecordingSegment[]>([]);
-  let searchMode = $state<'recordings' | 'segments'>('segments');
+  let searchMode = $state<'recordings' | 'segments'>('recordings');
   
   // Playback state
   let playbackStreamUrl = $state('');
@@ -81,7 +81,9 @@
           max_results: 100,
         });
         segments = res.segments || [];
-        if (segments.length === 0) {
+        if (res.fallback) {
+          showToast('设备不支持片段搜索，已回退到录像列表模式', 'info');
+        } else if (segments.length === 0) {
           showToast('未找到录像片段', 'info');
         }
       }
