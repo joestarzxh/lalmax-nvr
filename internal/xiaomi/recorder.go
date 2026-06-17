@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/metrics"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/muxer"
@@ -72,6 +73,7 @@ type XiaomiRecorderConfig struct {
 	AudioEnabled bool          // Capture and broadcast audio via StreamHub when true
 	IdleTimeout  time.Duration
 	EventBus    *event.EventBus
+	MediaEngine  media.Engine  // For feeding frames into lal
 }
 
 // XiaomiRecorder records H.264/H.265 video from a Xiaomi camera via MISS protocol.
@@ -84,6 +86,9 @@ type XiaomiRecorder struct {
 	status model.RecorderStatus
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	// lal custom pub session
+	pubSession media.CustomizePubSession
 
 	muxer       *muxer.MP4Muxer
 	trackID     int
