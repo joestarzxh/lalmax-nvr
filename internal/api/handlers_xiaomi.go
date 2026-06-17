@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
+	"github.com/lalmax-pro/lalmax-nvr/internal/xiaomi"
 )
 
 // --- Xiaomi cloud endpoints ---
@@ -315,4 +318,111 @@ func verificationToResponse(v *CloudVerificationRequired) map[string]any {
 		resp["session_id"] = v.CaptchaSessionID
 	}
 	return resp
+}
+
+// HandleXiaomiTalkWS handles WebSocket connections for Xiaomi camera two-way audio.
+// Browser sends PCMA audio via WebSocket, server forwards to camera speaker via MISS protocol.
+func (h *Handler) HandleXiaomiTalkWS(w http.ResponseWriter, r *http.Request) {
+	if h.cloudProxy == nil {
+		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
+		return
+	}
+
+	cameraID := r.URL.Query().Get("camera_id")
+	if cameraID == "" {
+		writeError(w, http.StatusBadRequest, "camera_id is required")
+		return
+	}
+
+	// Find camera config
+	var cam *config.CameraConfig
+	for i := range h.config.Cameras {
+		if h.config.Cameras[i].ID == cameraID {
+			cam = &h.config.Cameras[i]
+			break
+		}
+	}
+	if cam == nil {
+		writeError(w, http.StatusNotFound, "camera not found")
+		return
+	}
+	if cam.Protocol != "xiaomi" {
+		writeError(w, http.StatusBadRequest, "camera is not a xiaomi camera")
+		return
+	}
+
+	// Resolve MISS URL
+	did := cam.DID
+	if did == "" {
+		did = extractDIDFromURL(cam.URL)
+	}
+	if did == "" {
+		writeError(w, http.StatusBadRequest, "camera has no DID")
+		return
+	}
+
+	cloudCfg := xiaomi.XiaomiCloudConfig{
+		UserID: h.config.Xiaomi.UserID,
+		Token:  h.config.Xiaomi.Token,
+		Region: h.config.Xiaomi.Region,
+	}
+	missURL, err := xiaomi.ResolveMISSURL(cloudCfg, did, "")
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to resolve MISS URL: %v", err))
+		return
+	}
+
+	// Connect to camera
+	client, err := xiaomi.NewMISSClient(missURL, 30*time.Second)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to connect to camera: %v", err))
+		return
+	}
+	defer client.Conn.Close()
+
+	// Start speaker
+	if err := client.StartSpeaker(); err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("failed to start speaker: %v", err))
+		return
+	}
+	defer client.StopSpeaker()
+
+	// Upgrade to WebSocket
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	logger.Info("Xiaomi talk WebSocket connected", "camera_id", cameraID)
+
+	// Send status
+	conn.WriteJSON(map[string]any{
+		"status":        "connected",
+		"camera_id":     cameraID,
+		"speaker_codec": client.SpeakerCodec(),
+	})
+
+	// Read audio from WebSocket and send to camera
+	for {
+		messageType, message, err := conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+				logger.Error("Xiaomi talk WebSocket read error", "error", err)
+			}
+			break
+		}
+
+		if messageType == websocket.BinaryMessage {
+			if err := client.WriteAudio(client.SpeakerCodec(), message); err != nil {
+				logger.Error("Failed to write audio to camera", "camera_id", cameraID, "error", err)
+				break
+			}
+		}
+	}
+
+	logger.Info("Xiaomi talk WebSocket disconnected", "camera_id", cameraID)
 }
