@@ -14,6 +14,7 @@
   import PresetManager from '$lib/components/PresetManager.svelte';
   import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
   import TalkButton from '../components/TalkButton.svelte';
+  import XiaomiTalkButton from '../components/XiaomiTalkButton.svelte';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
 
@@ -88,6 +89,10 @@
 
   function isGB28181Camera(cam: Camera): boolean {
     return normalizeProtocol(cam.protocol) === 'gb28181';
+  }
+
+  function isXiaomiCamera(cam: Camera): boolean {
+    return normalizeProtocol(cam.protocol) === 'xiaomi';
   }
 
   async function loadCapabilities() {
@@ -194,6 +199,7 @@
   // Check if PTZ should be shown
   let showPtz = $derived(camera && (isGB28181Camera(camera) || (isOnvifCamera(camera) && (!deviceCaps || deviceCaps.ptz))));
   let showTalk = $derived(camera && isGB28181Camera(camera));
+  let showXiaomiTalk = $derived(camera && isXiaomiCamera(camera));
 
   $effect(() => {
     if (streamingProtocol === 'wasm') {
@@ -383,7 +389,7 @@
           </div>
 
           <!-- Right: Controls Panel -->
-          {#if showPtz || showTalk}
+          {#if showPtz || showTalk || showXiaomiTalk}
             <div class="live-controls w-80 flex-shrink-0 flex flex-col gap-3 overflow-y-auto">
               <!-- Talk Button (GB28181 only) -->
               {#if showTalk}
@@ -396,6 +402,17 @@
                     deviceId={camera.id.split(':')[0] || camera.id}
                     channelId={camera.id.split(':')[1] || '0'}
                   />
+                </div>
+              {/if}
+
+              <!-- Talk Button (Xiaomi) -->
+              {#if showXiaomiTalk}
+                <div class="card border th-border p-4">
+                  <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
+                    <Mic size={16} />
+                    {t('live.talk.title') || '语音对讲'}
+                  </h3>
+                  <XiaomiTalkButton cameraId={camera.id} />
                 </div>
               {/if}
 
