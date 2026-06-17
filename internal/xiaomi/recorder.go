@@ -508,12 +508,12 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 		if r.sps == nil || r.pps == nil {
 			return
 		}
-		r.forwardHLS(nalu)
+		r.forwardVideo(nalu)
 	case 1: // non-IDR
 		if r.sps == nil || r.pps == nil {
 			return
 		}
-		r.forwardHLS(nalu)
+		r.forwardVideo(nalu)
 	}
 }
 
@@ -539,113 +539,87 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 	if r.vps == nil || r.sps == nil || r.pps == nil {
 		return
 	}
-	r.forwardHLS(nalu)
+	r.forwardVideo(nalu)
 }
 
-// forwardHLS sends a NALU to lal via CustomizePubSession.
+// forwardVideo feeds a video NALU to lal via CustomizePubSession.
 // For IDR frames, the codec parameter sets (SPS/PPS or VPS/SPS/PPS) are prepended.
-func (r *XiaomiRecorder) forwardHLS(nalu []byte) {
+// Payload is converted to AVCC format (4-byte length prefix per NALU) as required by lal.
+func (r *XiaomiRecorder) forwardVideo(nalu []byte) {
 	r.mu.Lock()
 	pub := r.pubSession
 	start := r.streamStart
 	r.mu.Unlock()
-
-	pts := time.Since(start).Nanoseconds() * 90000 / int64(time.Second)
-
-	// Build the AU (Access Unit) for Hub delivery.
-	var au [][]byte
-	switch r.codec {
-	case model.FormatH264:
-		naluType := nalu[0] & 0x1F
-		if naluType == 5 && r.sps != nil && r.pps != nil {
-			au = [][]byte{r.sps, r.pps, nalu}
-		} else {
-			au = [][]byte{nalu}
-		}
-	case model.FormatH265:
-		naluType := (nalu[0] >> 1) & 0x3F
-		if (naluType == 19 || naluType == 20) && r.vps != nil && r.sps != nil && r.pps != nil {
-			au = [][]byte{r.vps, r.sps, r.pps, nalu}
-		} else {
-			au = [][]byte{nalu}
-		}
-	default:
-		return
-	}
-
-	// Deliver to Hub for HLS frame callbacks.
-	if r.Hub != nil {
-		isIDR := false
-		switch r.codec {
-		case model.FormatH264:
-			if len(au) > 1 {
-				isIDR = true
-			}
-		case model.FormatH265:
-			if len(au) > 1 {
-				isIDR = true
-			}
-		}
-		r.Hub.Broadcast(pts, au, isIDR)
-	}
-
-	// Feed to lal if pubSession is available.
 	if pub == nil {
 		return
 	}
 
-	var pkt base.AvPacket
+	pts := time.Since(start).Nanoseconds() * 90000 / int64(time.Second)
+
+	var nalus [][]byte
 	switch r.codec {
 	case model.FormatH264:
 		naluType := nalu[0] & 0x1F
 		if naluType == 5 && r.sps != nil && r.pps != nil {
-			combined := make([]byte, 0, len(r.sps)+len(r.pps)+len(nalu))
-			combined = append(combined, r.sps...)
-			combined = append(combined, r.pps...)
-			combined = append(combined, nalu...)
-			pkt = base.AvPacket{
-				PayloadType: base.AvPacketPtAvc,
-				Timestamp:   pts,
-				Pts:         pts,
-				Payload:     combined,
-			}
+			nalus = [][]byte{r.sps, r.pps, nalu}
 		} else {
-			pkt = base.AvPacket{
-				PayloadType: base.AvPacketPtAvc,
-				Timestamp:   pts,
-				Pts:         pts,
-				Payload:     nalu,
-			}
+			nalus = [][]byte{nalu}
 		}
 	case model.FormatH265:
 		naluType := (nalu[0] >> 1) & 0x3F
 		if (naluType == 19 || naluType == 20) && r.vps != nil && r.sps != nil && r.pps != nil {
-			combined := make([]byte, 0, len(r.vps)+len(r.sps)+len(r.pps)+len(nalu))
-			combined = append(combined, r.vps...)
-			combined = append(combined, r.sps...)
-			combined = append(combined, r.pps...)
-			combined = append(combined, nalu...)
-			pkt = base.AvPacket{
-				PayloadType: base.AvPacketPtHevc,
-				Timestamp:   pts,
-				Pts:         pts,
-				Payload:     combined,
-			}
+			nalus = [][]byte{r.vps, r.sps, r.pps, nalu}
 		} else {
-			pkt = base.AvPacket{
-				PayloadType: base.AvPacketPtHevc,
-				Timestamp:   pts,
-				Pts:         pts,
-				Payload:     nalu,
-			}
+			nalus = [][]byte{nalu}
 		}
 	default:
 		return
+	}
+
+	// Convert to AVCC format: each NALU prefixed with 4-byte big-endian length.
+	payload := nalusToAVCC(nalus)
+	if len(payload) == 0 {
+		return
+	}
+
+	pkt := base.AvPacket{
+		PayloadType: r.avPacketPt(),
+		Timestamp:   pts,
+		Pts:         pts,
+		Payload:     payload,
 	}
 
 	if err := pub.FeedAvPacket(pkt); err != nil {
 		xiaomiLogger.Error("failed to feed video packet to lal", "camera_id", r.cfg.CameraID, "error", err)
 	}
+}
+
+// avPacketPt returns the lal payload type for the current codec.
+func (r *XiaomiRecorder) avPacketPt() base.AvPacketPt {
+	switch r.codec {
+	case model.FormatH264:
+		return base.AvPacketPtAvc
+	case model.FormatH265:
+		return base.AvPacketPtHevc
+	default:
+		return 0
+	}
+}
+
+// nalusToAVCC converts a slice of NALUs to AVCC format (4-byte length prefix per NALU).
+func nalusToAVCC(nalus [][]byte) []byte {
+	totalSize := 0
+	for _, n := range nalus {
+		totalSize += 4 + len(n)
+	}
+	result := make([]byte, 0, totalSize)
+	lenBuf := make([]byte, 4)
+	for _, n := range nalus {
+		binary.BigEndian.PutUint32(lenBuf, uint32(len(n)))
+		result = append(result, lenBuf...)
+		result = append(result, n...)
+	}
+	return result
 }
 
 // missCodecToAudio maps a MISS audio codec ID to a model.AudioCodec.
@@ -681,18 +655,11 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 	pub := r.pubSession
 	start := r.streamStart
 	r.mu.Unlock()
-
-	pts := time.Since(start).Nanoseconds() * 90000 / int64(time.Second)
-
-	// Deliver to Hub for audio callbacks.
-	if r.Hub != nil {
-		r.Hub.BroadcastAudio(pts, audioCodec, payload)
-	}
-
-	// Feed to lal if pubSession is available.
 	if pub == nil {
 		return
 	}
+
+	pts := time.Since(start).Nanoseconds() * 90000 / int64(time.Second)
 
 	var pkt base.AvPacket
 	switch audioCodec {
