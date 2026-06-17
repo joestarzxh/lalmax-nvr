@@ -387,15 +387,21 @@ func (r *XiaomiRecorder) run(ctx context.Context) {
 }
 
 // connectAndRecord connects to the Xiaomi camera, starts media, and records packets.
+// Tries HD first; falls back to SD if the camera sends no data on first packet.
 func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (error, bool) {
+	return r.connectAndRecordWithQuality(ctx, missURL, "hd")
+}
+
+// connectAndRecordWithQuality connects to the camera with the given quality ("hd" or "sd").
+// If the first packet times out on HD, retries with SD automatically.
+func (r *XiaomiRecorder) connectAndRecordWithQuality(ctx context.Context, missURL string, quality string) (error, bool) {
 	client, err := NewMISSClient(missURL, r.cfg.IdleTimeout)
 	if err != nil {
 		return fmt.Errorf("miss connect: %w", err), false
 	}
 	defer client.Conn.Close()
 
-	// Start HD video stream.
-	if err := client.StartMedia("", "hd"); err != nil {
+	if err := client.StartMedia("", quality); err != nil {
 		return fmt.Errorf("miss start media: %w", err), false
 	}
 	defer func() {
@@ -412,6 +418,7 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 	r.audioCodecID = 0
 
 	var lastTimestamp uint64
+	firstPacket := true
 
 	for {
 		select {
@@ -423,9 +430,19 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 
 		pkt, err := client.ReadPacket()
 		if err != nil {
+			// If timeout on first packet with HD, try SD fallback.
+			if firstPacket && quality == "hd" && isTimeoutError(err) {
+				xiaomiLogger.Warn("no HD data from camera, trying SD fallback",
+					"camera_id", r.cfg.CameraID, "model", r.cfg.Model)
+				client.Conn.Close()
+				_ = client.StopMedia()
+				return r.connectAndRecordWithQuality(ctx, missURL, "sd")
+			}
 			r.closeCurrentSegment()
 			return fmt.Errorf("miss read: %w", err), false
 		}
+
+		firstPacket = false
 
 		// Handle audio packets when AudioEnabled.
 		if pkt.CodecID >= 1024 {
@@ -449,7 +466,7 @@ func (r *XiaomiRecorder) connectAndRecord(ctx context.Context, missURL string) (
 				r.codec = model.FormatH265
 			}
 			r.codecOK = true
-			xiaomiLogger.Info("codec detected", "camera_id", r.cfg.CameraID, "codec", r.codec)
+			xiaomiLogger.Info("codec detected", "camera_id", r.cfg.CameraID, "codec", r.codec, "quality", quality)
 		}
 
 		// Parse Annex B NALUs from payload and process each one.

@@ -898,3 +898,12 @@ func TestIsTimeoutError(t *testing.T) {
 		})
 	}
 }
+
+func TestConnectAndRecordWithQualityFallback(t *testing.T) {
+	t.Helper()
+	timeoutErr := fmt.Errorf("miss read: cs2: no media data for 15s")
+	require.True(t, isTimeoutError(timeoutErr), "should detect timeout error for SD fallback")
+
+	nonTimeoutErr := fmt.Errorf("miss read: EOF")
+	require.False(t, isTimeoutError(nonTimeoutErr), "should not treat EOF as timeout")
+}
