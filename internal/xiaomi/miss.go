@@ -17,10 +17,25 @@ import (
 
 // MISS protocol command constants.
 const (
-	missCmdAuthReq   = 0x100
-	missCmdAuthRes   = 0x101
-	missCmdVideoStart = 0x102
-	missCmdVideoStop  = 0x103
+	missCmdAuthReq           = 0x100
+	missCmdAuthRes           = 0x101
+	missCmdVideoStart        = 0x102
+	missCmdVideoStop         = 0x103
+	missCmdAudioStart        = 0x104
+	missCmdAudioStop         = 0x105
+	missCmdSpeakerStartReq   = 0x106
+	missCmdSpeakerStartRes   = 0x107
+	missCmdSpeakerStop       = 0x108
+	missCmdStreamCtrlReq     = 0x109
+	missCmdStreamCtrlRes     = 0x10A
+	missCmdGetAudioFormatReq = 0x10B
+	missCmdGetAudioFormatRes = 0x10C
+	missCmdPlaybackReq       = 0x10D
+	missCmdPlaybackRes       = 0x10E
+	missCmdDevInfoReq        = 0x110
+	missCmdDevInfoRes        = 0x111
+	missCmdMotorReq          = 0x112
+	missCmdMotorRes          = 0x113
 
 	missCmdEncoded = 0x1001
 )
@@ -193,6 +208,56 @@ func (c *MISSClient) StartMedia(channel, quality string) error {
 func (c *MISSClient) StopMedia() error {
 	data := binary.BigEndian.AppendUint32(nil, missCmdVideoStop)
 	return c.WriteCommand(data)
+}
+
+// StartAudio sends the audio start command (receive audio from camera).
+func (c *MISSClient) StartAudio() error {
+	data := binary.BigEndian.AppendUint32(nil, missCmdAudioStart)
+	return c.WriteCommand(data)
+}
+
+// StopAudio sends the audio stop command.
+func (c *MISSClient) StopAudio() error {
+	data := binary.BigEndian.AppendUint32(nil, missCmdAudioStop)
+	return c.WriteCommand(data)
+}
+
+// StartSpeaker sends the speaker start command (send audio to camera).
+func (c *MISSClient) StartSpeaker() error {
+	data := binary.BigEndian.AppendUint32(nil, missCmdSpeakerStartReq)
+	return c.WriteCommand(data)
+}
+
+// StopSpeaker sends the speaker stop command.
+func (c *MISSClient) StopSpeaker() error {
+	data := binary.BigEndian.AppendUint32(nil, missCmdSpeakerStop)
+	return c.WriteCommand(data)
+}
+
+// SpeakerCodec returns the speaker codec ID for the camera model.
+func (c *MISSClient) SpeakerCodec() uint32 {
+	switch c.model {
+	case ModelDafang, ModelXiaofang, "isa.camera.hlc6":
+		return missCodecPCM
+	case ModelC300:
+		return missCodecOPUS
+	}
+	return missCodecPCMA
+}
+
+// WriteAudio encrypts and sends an audio packet to the camera via CS2 channel 3.
+func (c *MISSClient) WriteAudio(codecID uint32, payload []byte) error {
+	payload, err := Encode(payload, c.key)
+	if err != nil {
+		return err
+	}
+
+	n := uint32(len(payload))
+	hdr := make([]byte, missHdrSize)
+	binary.LittleEndian.PutUint32(hdr, n)
+	binary.LittleEndian.PutUint32(hdr[4:], codecID)
+	binary.LittleEndian.PutUint64(hdr[16:], uint64(time.Now().UnixMilli()))
+	return c.Conn.WritePacket(hdr, payload)
 }
 
 // ReadPacket reads and decrypts a media packet from the connection.

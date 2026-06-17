@@ -33,6 +33,10 @@ type mockMISSConn struct {
 	}
 	readCmdCalled bool
 	closed        bool
+	writtenPkts []struct {
+		hdr     []byte
+		payload []byte
+	}
 }
 
 func (m *mockMISSConn) Protocol() string { return "cs2+udp" }
@@ -72,7 +76,17 @@ func (m *mockMISSConn) ReadPacket() (hdr, payload []byte, err error) {
 }
 
 func (m *mockMISSConn) WritePacket(hdr, payload []byte) error {
-	return fmt.Errorf("not implemented")
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	h := make([]byte, len(hdr))
+	copy(h, hdr)
+	p := make([]byte, len(payload))
+	copy(p, payload)
+	m.writtenPkts = append(m.writtenPkts, struct {
+		hdr     []byte
+		payload []byte
+	}{hdr: h, payload: p})
+	return nil
 }
 
 func (m *mockMISSConn) lastWrittenCmd() (uint32, []byte, bool) {
@@ -519,4 +533,92 @@ func TestMISSClientStartMediaC200HD(t *testing.T) {
 	require.NoError(t, err)
 	body := string(decoded[4:])
 	require.Contains(t, body, `"videoquality":3`)
+}
+
+func TestMISSClientStartSpeaker(t *testing.T) {
+	t.Helper()
+	client, mock := newTestMISSClient()
+
+	err := client.StartSpeaker()
+	require.NoError(t, err)
+
+	cmd, data, ok := mock.lastWrittenCmd()
+	require.True(t, ok)
+	require.Equal(t, uint32(missCmdEncoded), cmd)
+
+	decoded, err := Decode(data, client.key)
+	require.NoError(t, err)
+	innerCmd := binary.BigEndian.Uint32(decoded)
+	require.Equal(t, uint32(missCmdSpeakerStartReq), innerCmd)
+}
+
+func TestMISSClientStopSpeaker(t *testing.T) {
+	t.Helper()
+	client, mock := newTestMISSClient()
+
+	err := client.StopSpeaker()
+	require.NoError(t, err)
+
+	cmd, data, ok := mock.lastWrittenCmd()
+	require.True(t, ok)
+	require.Equal(t, uint32(missCmdEncoded), cmd)
+
+	decoded, err := Decode(data, client.key)
+	require.NoError(t, err)
+	innerCmd := binary.BigEndian.Uint32(decoded)
+	require.Equal(t, uint32(missCmdSpeakerStop), innerCmd)
+}
+
+func TestMISSClientSpeakerCodec(t *testing.T) {
+	t.Helper()
+	tests := []struct {
+		name  string
+		model string
+		want  uint32
+	}{
+		{"dafang", ModelDafang, missCodecPCM},
+		{"xiaofang", ModelXiaofang, missCodecPCM},
+		{"c300", ModelC300, missCodecOPUS},
+		{"c200", ModelC200, missCodecPCMA},
+		{"hlc8", ModelHLC8, missCodecPCMA},
+		{"unknown", "some.model", missCodecPCMA},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, _ := newTestMISSClient()
+			client.model = tt.model
+			got := client.SpeakerCodec()
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestMISSClientWriteAudio(t *testing.T) {
+	t.Helper()
+	client, mock := newTestMISSClient()
+
+	payload := []byte{0x01, 0x02, 0x03, 0x04}
+	err := client.WriteAudio(missCodecPCMA, payload)
+	require.NoError(t, err)
+
+	require.Len(t, mock.writtenPkts, 1)
+	pkt := mock.writtenPkts[0]
+
+	// Header should contain codec ID at offset 4
+	require.Equal(t, uint32(missCodecPCMA), binary.LittleEndian.Uint32(pkt.hdr[4:]))
+
+	// Payload should be encrypted (different from raw)
+	require.NotEqual(t, payload, pkt.payload)
+}
+
+func TestMISSClientWriteAudioEncrypts(t *testing.T) {
+	t.Helper()
+	client, mock := newTestMISSClient()
+
+	payload := []byte{0xAA, 0xBB}
+	err := client.WriteAudio(missCodecPCMA, payload)
+	require.NoError(t, err)
+
+	require.Len(t, mock.writtenPkts, 1)
+	require.NotEqual(t, payload, mock.writtenPkts[0].payload)
 }
