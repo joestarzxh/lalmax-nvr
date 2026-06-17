@@ -24,6 +24,7 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/muxer"
 	"github.com/lalmax-pro/lalmax-nvr/internal/recorder"
 	"github.com/lalmax-pro/lalmax-nvr/internal/event"
+	"github.com/q191201771/lal/pkg/base"
 )
 
 var xiaomiLogger = slog.Default().With("component", "xiaomi-recorder")
@@ -706,36 +707,70 @@ func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTime
 	}
 }
 
-// forwardHLS sends a NALU to all stream consumers via StreamHub (non-blocking).
-// For IDR frames, the codec parameter sets (SPS/PPS or VPS/SPS/PPS) are prepended
-// so the HLS DTS extractor receives a complete access unit.
+// forwardHLS sends a NALU to lal via CustomizePubSession.
+// For IDR frames, the codec parameter sets (SPS/PPS or VPS/SPS/PPS) are prepended.
 func (r *XiaomiRecorder) forwardHLS(nalu []byte) {
-	if r.Hub == nil || r.Hub.ConsumerCount() == 0 {
+	r.mu.Lock()
+	pub := r.pubSession
+	start := r.streamStart
+	r.mu.Unlock()
+	if pub == nil {
 		return
 	}
-	// Convert wall-clock duration to 90kHz ticks (RTP timestamp units).
-	// HLS manager uses ClockRate=90000, so PTS must be in 90kHz ticks,
-	// not nanoseconds. This matches built-in H264/H265 recorders which
-	// pass RTP timestamps directly.
-	pts := time.Since(r.streamStart).Nanoseconds() * 90000 / int64(time.Second)
 
+	pts := time.Since(start).Nanoseconds() * 90000 / int64(time.Second)
+
+	var pkt base.AvPacket
 	switch r.codec {
 	case model.FormatH264:
 		naluType := nalu[0] & 0x1F
 		if naluType == 5 && r.sps != nil && r.pps != nil {
-			r.Hub.Broadcast(pts, [][]byte{r.sps, r.pps, nalu}, true)
+			combined := make([]byte, 0, len(r.sps)+len(r.pps)+len(nalu))
+			combined = append(combined, r.sps...)
+			combined = append(combined, r.pps...)
+			combined = append(combined, nalu...)
+			pkt = base.AvPacket{
+				PayloadType: base.AvPacketPtAvc,
+				Timestamp:   pts,
+				Pts:         pts,
+				Payload:     combined,
+			}
 		} else {
-			r.Hub.Broadcast(pts, [][]byte{nalu}, false)
+			pkt = base.AvPacket{
+				PayloadType: base.AvPacketPtAvc,
+				Timestamp:   pts,
+				Pts:         pts,
+				Payload:     nalu,
+			}
 		}
 	case model.FormatH265:
 		naluType := (nalu[0] >> 1) & 0x3F
 		if (naluType == 19 || naluType == 20) && r.vps != nil && r.sps != nil && r.pps != nil {
-			r.Hub.Broadcast(pts, [][]byte{r.vps, r.sps, r.pps, nalu}, true)
+			combined := make([]byte, 0, len(r.vps)+len(r.sps)+len(r.pps)+len(nalu))
+			combined = append(combined, r.vps...)
+			combined = append(combined, r.sps...)
+			combined = append(combined, r.pps...)
+			combined = append(combined, nalu...)
+			pkt = base.AvPacket{
+				PayloadType: base.AvPacketPtHevc,
+				Timestamp:   pts,
+				Pts:         pts,
+				Payload:     combined,
+			}
 		} else {
-			r.Hub.Broadcast(pts, [][]byte{nalu}, false)
+			pkt = base.AvPacket{
+				PayloadType: base.AvPacketPtHevc,
+				Timestamp:   pts,
+				Pts:         pts,
+				Payload:     nalu,
+			}
 		}
 	default:
-		r.Hub.Broadcast(pts, [][]byte{nalu}, false)
+		return
+	}
+
+	if err := pub.FeedAvPacket(pkt); err != nil {
+		xiaomiLogger.Error("failed to feed video packet to lal", "camera_id", r.cfg.CameraID, "error", err)
 	}
 }
 
