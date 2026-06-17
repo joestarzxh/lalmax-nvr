@@ -541,15 +541,12 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 		r.trackID = trackID
 
 		// Add audio track if audio codec detected.
-		// Currently only AAC is supported by the muxer; G.711 (PCMA/PCMU/PCM)
-		// will be skipped with a debug log. When G.711 muxer support is added,
-		// audioTrackID will be set and forwardAudio will write to the segment.
 		if r.cfg.AudioEnabled && r.audioCodecID > 0 {
-			_, ok := missCodecToAudio(r.audioCodecID)
+			audioCodec, ok := missCodecToAudio(r.audioCodecID)
 			if ok {
-				aID, err := r.muxer.AddAudioTrack("aac", nil)
+				aID, err := r.muxer.AddAudioTrack(string(audioCodec), nil)
 				if err != nil {
-					xiaomiLogger.Debug("audio track not added to muxer (codec not supported)", "camera_id", r.cfg.CameraID, "error", err)
+					xiaomiLogger.Debug("audio track not added to muxer (codec not supported)", "camera_id", r.cfg.CameraID, "codec", audioCodec, "error", err)
 				} else {
 					r.audioTrackID = aID
 				}
@@ -721,6 +718,8 @@ func missCodecToAudio(codecID uint32) (model.AudioCodec, bool) {
 	switch codecID {
 	case missCodecPCMA, missCodecPCMU, missCodecPCM:
 		return model.AudioG711, true
+	case missCodecOPUS:
+		return model.AudioOpus, true
 	default:
 		return "", false
 	}
