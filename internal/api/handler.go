@@ -398,7 +398,7 @@ func (h *Handler) Routes() http.Handler {
 			r.Get("/devices", h.handleXiaomiDevices)
 			r.Post("/sync", h.handleXiaomiSync)
 			r.Get("/check-vendor", h.handleCheckVendor)
-			r.Get("/talk/ws", h.HandleXiaomiTalkWS)
+			r.Get("/talk/ws", h.handleXiaomiTalkWS)
 		})
 		// Health monitoring endpoints
 		r.Get("/api/health/status", h.handleGetHealthStatus)

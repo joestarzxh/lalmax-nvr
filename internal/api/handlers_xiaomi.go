@@ -322,7 +322,7 @@ func verificationToResponse(v *CloudVerificationRequired) map[string]any {
 
 // HandleXiaomiTalkWS handles WebSocket connections for Xiaomi camera two-way audio.
 // Browser sends PCMA audio via WebSocket, server forwards to camera speaker via MISS protocol.
-func (h *Handler) HandleXiaomiTalkWS(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleXiaomiTalkWS(w http.ResponseWriter, r *http.Request) {
 	if h.cloudProxy == nil {
 		writeError(w, http.StatusServiceUnavailable, "xiaomi cloud not available")
 		return
@@ -393,6 +393,7 @@ func (h *Handler) HandleXiaomiTalkWS(w http.ResponseWriter, r *http.Request) {
 	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		logger.Error("WebSocket upgrade failed", "error", err)
 		return
 	}
 	defer conn.Close()
@@ -400,11 +401,14 @@ func (h *Handler) HandleXiaomiTalkWS(w http.ResponseWriter, r *http.Request) {
 	logger.Info("Xiaomi talk WebSocket connected", "camera_id", cameraID)
 
 	// Send status
-	conn.WriteJSON(map[string]any{
+	if err := conn.WriteJSON(map[string]any{
 		"status":        "connected",
 		"camera_id":     cameraID,
 		"speaker_codec": client.SpeakerCodec(),
-	})
+	}); err != nil {
+		logger.Error("Failed to send status message", "error", err)
+		return
+	}
 
 	// Read audio from WebSocket and send to camera
 	for {
