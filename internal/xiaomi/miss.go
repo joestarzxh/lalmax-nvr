@@ -197,9 +197,9 @@ func (c *MISSClient) StartMedia(channel, quality string) error {
 	data := binary.BigEndian.AppendUint32(nil, missCmdVideoStart)
 	switch channel {
 	case "", "0":
-		data = fmt.Appendf(data, `{"videoquality":%s}`, quality)
+		data = fmt.Appendf(data, `{"videoquality":%s,"enableaudio":1}`, quality)
 	default:
-		data = fmt.Appendf(data, `{"videoquality":-1,"videoquality2":%s}`, quality)
+		data = fmt.Appendf(data, `{"videoquality":-1,"videoquality2":%s,"enableaudio":1}`, quality)
 	}
 	return c.WriteCommand(data)
 }
