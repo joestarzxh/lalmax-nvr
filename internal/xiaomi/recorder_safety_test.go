@@ -32,8 +32,6 @@ func TestProcessH264NALUSPSOnly(t *testing.T) {
 	r.processH264NALU([]byte{0x67, 0x42, 0xc0, 0x1e}, 0, &lastTS)
 	require.NotNil(t, r.sps)
 	require.Equal(t, byte(0x67), r.sps[0])
-	// No muxer created (PPS missing)
-	require.Nil(t, r.muxer)
 }
 
 func TestProcessH264NALUPPSOnly(t *testing.T) {
@@ -46,8 +44,6 @@ func TestProcessH264NALUPPSOnly(t *testing.T) {
 	// PPS NALU (type 8)
 	r.processH264NALU([]byte{0x68, 0xce, 0x38, 0x80}, 0, &lastTS)
 	require.NotNil(t, r.pps)
-	// No muxer created (SPS missing)
-	require.Nil(t, r.muxer)
 }
 
 func TestProcessH264NALUIDRWithoutSPSPPS(t *testing.T) {
@@ -59,7 +55,8 @@ func TestProcessH264NALUIDRWithoutSPSPPS(t *testing.T) {
 	var lastTS uint64
 	// IDR NALU (type 5) without SPS/PPS — should be dropped
 	r.processH264NALU([]byte{0x65, 0x01, 0x02, 0x03}, 0, &lastTS)
-	require.Nil(t, r.muxer)
+	require.Nil(t, r.sps)
+	require.Nil(t, r.pps)
 }
 
 func TestProcessH264NALUNonIDRWithoutMuxer(t *testing.T) {
@@ -71,9 +68,8 @@ func TestProcessH264NALUNonIDRWithoutMuxer(t *testing.T) {
 	r.pps = []byte{0x68, 0xce}
 
 	var lastTS uint64
-	// Non-IDR (type 1) before muxer is created — should be dropped
+	// Non-IDR (type 1) — should be forwarded via forwardHLS
 	r.processH264NALU([]byte{0x41, 0x01, 0x02}, 0, &lastTS)
-	require.Nil(t, r.muxer)
 }
 
 func TestProcessH264NALUSPSChange(t *testing.T) {
@@ -117,7 +113,6 @@ func TestProcessH264NALUUnknownNALType(t *testing.T) {
 	var lastTS uint64
 	// NAL type 6 (SEI) — should be ignored
 	r.processH264NALU([]byte{0x06, 0x01, 0x02}, 0, &lastTS)
-	require.Nil(t, r.muxer)
 }
 
 // --- processH265NALU: VPS/SPS/PPS detection ---
@@ -131,7 +126,6 @@ func TestProcessH265NALUVPSOnly(t *testing.T) {
 	var lastTS uint64
 	r.processH265NALU([]byte{0x40, 0x01, 0x0c}, 0, &lastTS)
 	require.NotNil(t, r.vps)
-	require.Nil(t, r.muxer)
 }
 
 func TestProcessH265NALUSPSOnly(t *testing.T) {
@@ -143,7 +137,6 @@ func TestProcessH265NALUSPSOnly(t *testing.T) {
 	var lastTS uint64
 	r.processH265NALU([]byte{0x42, 0x01, 0x01}, 0, &lastTS)
 	require.NotNil(t, r.sps)
-	require.Nil(t, r.muxer)
 }
 
 func TestProcessH265NALUPPSOnly(t *testing.T) {
@@ -155,7 +148,6 @@ func TestProcessH265NALUPPSOnly(t *testing.T) {
 	var lastTS uint64
 	r.processH265NALU([]byte{0x44, 0x01, 0xc1}, 0, &lastTS)
 	require.NotNil(t, r.pps)
-	require.Nil(t, r.muxer)
 }
 
 func TestProcessH265NALUIDRWithoutVPS(t *testing.T) {
@@ -170,7 +162,7 @@ func TestProcessH265NALUIDRWithoutVPS(t *testing.T) {
 	var lastTS uint64
 	// IDR_W_RADL (type 19): first byte = (19 << 1) = 0x26
 	r.processH265NALU([]byte{0x26, 0x01, 0x02}, 0, &lastTS)
-	require.Nil(t, r.muxer)
+	require.Nil(t, r.vps)
 }
 
 func TestProcessH265NALUNonVCLType(t *testing.T) {
@@ -186,7 +178,6 @@ func TestProcessH265NALUNonVCLType(t *testing.T) {
 	// Type 35 (SEI prefix, non-VCL) — should be ignored
 	// First byte: (35 << 1) | 1 = 71 = 0x47
 	r.processH265NALU([]byte{0x47, 0x01}, 0, &lastTS)
-	require.Nil(t, r.muxer)
 }
 
 func TestProcessH265NALUVPSChange(t *testing.T) {
@@ -200,44 +191,6 @@ func TestProcessH265NALUVPSChange(t *testing.T) {
 	// New VPS replaces old
 	r.processH265NALU([]byte{0x40, 0x01, 0x0d}, 0, &lastTS)
 	require.Equal(t, []byte{0x40, 0x01, 0x0d}, r.vps)
-}
-
-func TestProcessH265NALUIDR_W_RADL(t *testing.T) {
-	t.Helper()
-	r := makeTestRecorder(t)
-	r.codec = model.FormatH265
-	r.codecOK = true
-	r.vps = []byte{0x40, 0x01, 0x0c}
-	r.sps = []byte{0x42, 0x01, 0x01}
-	r.pps = []byte{0x44, 0x01, 0xc1}
-
-	// With real store that creates temp files
-	store := newRecordingSegmentStore(t)
-	r.store = store
-
-	var lastTS uint64
-	// IDR_W_RADL (type 19): first byte = (19 << 1) = 0x26
-	r.processH265NALU([]byte{0x26, 0x01, 0x02, 0x03}, 0, &lastTS)
-	require.NotNil(t, r.muxer)
-	require.Equal(t, model.FormatH265, r.codec)
-}
-
-func TestProcessH265NALUIDR_N_LP(t *testing.T) {
-	t.Helper()
-	r := makeTestRecorder(t)
-	r.codec = model.FormatH265
-	r.codecOK = true
-	r.vps = []byte{0x40, 0x01, 0x0c}
-	r.sps = []byte{0x42, 0x01, 0x01}
-	r.pps = []byte{0x44, 0x01, 0xc1}
-
-	store := newRecordingSegmentStore(t)
-	r.store = store
-
-	var lastTS uint64
-	// IDR_N_LP (type 20): first byte = (20 << 1) = 0x28
-	r.processH265NALU([]byte{0x28, 0x01, 0x02}, 0, &lastTS)
-	require.NotNil(t, r.muxer)
 }
 
 // --- forwardHLS: H264 IDR prepends SPS+PPS ---
@@ -341,73 +294,6 @@ func TestForwardHLSNoCallback(t *testing.T) {
 	r.forwardHLS([]byte{0x65, 0x01})
 }
 
-// --- closeCurrentSegment edge cases ---
-
-func TestCloseCurrentSegmentNilMuxer(t *testing.T) {
-	t.Helper()
-	r := makeTestRecorder(t)
-	// No muxer — should be a no-op
-	r.closeCurrentSegment()
-	require.Nil(t, r.muxer)
-}
-
-func TestCloseCurrentSegmentWithSegment(t *testing.T) {
-	t.Helper()
-	store := newRecordingSegmentStore(t)
-	r := NewXiaomiRecorder(XiaomiRecorderConfig{
-		CameraID: "test-cam",
-		DID:      "test-device",
-		SegmentDur: 10 * time.Minute,
-		DB:       &noopDB{},
-	}, store)
-
-	r.codec = model.FormatH264
-	r.codecOK = true
-	r.sps = []byte{0x67, 0x42, 0xc0, 0x1e}
-	r.pps = []byte{0x68, 0xce, 0x38, 0x80}
-
-	// Create segment via processH264NALU with IDR
-	var lastTS uint64
-	r.processH264NALU([]byte{0x65, 0x01, 0x02, 0x03}, 0, &lastTS)
-
-	require.NotNil(t, r.muxer)
-	tempPath := r.curTempPath
-	finalPath := r.curFinalPath
-	require.NotEmpty(t, tempPath)
-	require.NotEmpty(t, finalPath)
-
-	// Close it
-	r.closeCurrentSegment()
-	require.Nil(t, r.muxer)
-	require.Empty(t, r.curTempPath)
-	require.Empty(t, r.curFinalPath)
-	require.Equal(t, 0, r.frameCount)
-}
-
-func TestCloseCurrentSegmentTwice(t *testing.T) {
-	t.Helper()
-	store := newRecordingSegmentStore(t)
-	r := NewXiaomiRecorder(XiaomiRecorderConfig{
-		CameraID: "test-cam",
-		DID:      "test-device",
-		DB:       &noopDB{},
-	}, store)
-
-	r.codec = model.FormatH264
-	r.codecOK = true
-	r.sps = []byte{0x67, 0x42, 0xc0, 0x1e}
-	r.pps = []byte{0x68, 0xce, 0x38, 0x80}
-
-	var lastTS uint64
-	r.processH264NALU([]byte{0x65, 0x01, 0x02, 0x03}, 0, &lastTS)
-	require.NotNil(t, r.muxer)
-
-	r.closeCurrentSegment()
-	// Second close should be no-op (muxer is nil)
-	r.closeCurrentSegment()
-	require.Nil(t, r.muxer)
-}
-
 // --- MISS URL validation ---
 
 func TestMISSURLMissingVendor(t *testing.T) {
@@ -508,9 +394,6 @@ func TestMetricsNilSafeIncDec(t *testing.T) {
 	// All should be no-ops with nil metrics
 	r.incActive()
 	r.decActive()
-	r.recordSegmentCreated()
-	r.recordBytes(0)
-	r.recordBytes(1024)
 	r.recordError("test")
 }
 
@@ -676,35 +559,6 @@ func TestSetOnHLSFrameConcurrent(t *testing.T) {
 
 	require.Eventually(t, func() bool { return calls.Load() == 10 }, 2*time.Second, 10*time.Millisecond)
 	r.Hub.Unsubscribe("hls")
-}
-
-// --- closeCurrentSegment removes temp file on muxer error ---
-
-func TestCloseCurrentSegmentRemovesTempOnError(t *testing.T) {
-	t.Helper()
-	store := newRecordingSegmentStore(t)
-	r := NewXiaomiRecorder(XiaomiRecorderConfig{
-		CameraID: "test-cam",
-		DID:      "dev1",
-		DB:       &noopDB{},
-	}, store)
-
-	r.codec = model.FormatH264
-	r.codecOK = true
-	r.sps = []byte{0x67, 0x42, 0xc0, 0x1e}
-	r.pps = []byte{0x68, 0xce, 0x38, 0x80}
-
-	var lastTS uint64
-	r.processH264NALU([]byte{0x65, 0x01, 0x02, 0x03}, 0, &lastTS)
-	require.NotNil(t, r.muxer)
-
-	tempPath := r.curTempPath
-	require.NotEmpty(t, tempPath)
-
-	// Temp file should have been renamed or cleaned up by closeCurrentSegment.
-	// After close, the muxer is nil and temp file is finalized.
-	r.closeCurrentSegment()
-	require.Nil(t, r.muxer)
 }
 
 // --- extractDID from plugin.go additional tests ---

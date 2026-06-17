@@ -258,8 +258,6 @@ func TestXiaomiRecorderMetrics(t *testing.T) {
 	}, &noopSegmentStore{})
 	r.incActive()
 	r.decActive()
-	r.recordSegmentCreated()
-	r.recordBytes(1024)
 	r.recordError("test")
 }
 

@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
-	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -21,7 +20,6 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/metrics"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
-	"github.com/lalmax-pro/lalmax-nvr/internal/muxer"
 	"github.com/lalmax-pro/lalmax-nvr/internal/recorder"
 	"github.com/lalmax-pro/lalmax-nvr/internal/event"
 	"github.com/q191201771/lal/pkg/base"
@@ -90,15 +88,6 @@ type XiaomiRecorder struct {
 
 	// lal custom pub session
 	pubSession media.CustomizePubSession
-
-	muxer       *muxer.MP4Muxer
-	trackID     int
-	audioTrackID int
-	curFinalPath  string
-	curTempPath   string
-	segStart      time.Time
-	frameCount    int
-	lastFrameTime time.Time
 
 	// Codec state (probed from first packets)
 	codec   model.Format // "h264" or "h265"
@@ -246,20 +235,6 @@ func (r *XiaomiRecorder) incActive() {
 func (r *XiaomiRecorder) decActive() {
 	if r.metrics != nil {
 		r.metrics.ActiveRecordings.Dec()
-	}
-}
-
-// recordSegmentCreated increments the segments created counter if metrics is available.
-func (r *XiaomiRecorder) recordSegmentCreated() {
-	if r.metrics != nil {
-		r.metrics.SegmentsCreated.WithLabelValues(r.cfg.CameraID, string(r.codec)).Inc()
-	}
-}
-
-// recordBytes adds to the recording bytes counter if metrics is available.
-func (r *XiaomiRecorder) recordBytes(b int64) {
-	if r.metrics != nil {
-		r.metrics.RecordingBytesTotal.WithLabelValues(r.cfg.CameraID, string(r.codec)).Add(float64(b))
 	}
 }
 
@@ -524,187 +499,47 @@ func (r *XiaomiRecorder) processH264NALU(nalu []byte, timestamp uint64, lastTime
 	naluType := nalu[0] & 0x1F
 	switch naluType {
 	case 7: // SPS
-		if r.sps != nil && !bytes.Equal(r.sps, nalu) {
-			xiaomiLogger.Info("SPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-			r.closeCurrentSegment()
-		}
 		r.sps = append([]byte(nil), nalu...)
 		return
 	case 8: // PPS
-		if r.pps != nil && !bytes.Equal(r.pps, nalu) {
-			xiaomiLogger.Info("PPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-			r.closeCurrentSegment()
-		}
 		r.pps = append([]byte(nil), nalu...)
 		return
-	}
-
-	// Only write video frames (IDR=5, non-IDR=1).
-	if naluType != 5 && naluType != 1 {
-		return
-	}
-	if r.sps == nil || r.pps == nil {
-		return
-	}
-
-	// Wait for IDR frame before starting a new segment.
-	if r.muxer == nil && naluType != 5 {
-		return
-	}
-
-	if r.muxer == nil {
-		tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatH264))
-		if err != nil {
-			xiaomiLogger.Error("failed to create segment", "camera_id", r.cfg.CameraID, "error", err)
+	case 5: // IDR
+		if r.sps == nil || r.pps == nil {
 			return
 		}
-		r.muxer = muxer.NewMP4Muxer(tempPath)
-		trackID, err := r.muxer.AddH264Track(r.sps, r.pps)
-		if err != nil {
-			xiaomiLogger.Error("failed to add H264 track", "camera_id", r.cfg.CameraID, "error", err)
-			r.muxer = nil
-			os.Remove(tempPath)
+		r.forwardHLS(nalu)
+	case 1: // non-IDR
+		if r.sps == nil || r.pps == nil {
 			return
 		}
-		r.trackID = trackID
-
-		// Add audio track if audio codec detected.
-		if r.cfg.AudioEnabled && r.audioCodecID > 0 {
-			audioCodec, ok := missCodecToAudio(r.audioCodecID)
-			if ok {
-				aID, err := r.muxer.AddAudioTrack(string(audioCodec), nil)
-				if err != nil {
-					xiaomiLogger.Debug("audio track not added to muxer (codec not supported)", "camera_id", r.cfg.CameraID, "codec", audioCodec, "error", err)
-				} else {
-					r.audioTrackID = aID
-				}
-			}
-		}
-		r.curTempPath = tempPath
-		r.curFinalPath = finalPath
-		r.segStart = time.Now()
-		r.lastFrameTime = r.segStart
-		r.frameCount = 0
-	}
-
-	now := time.Now()
-	pts := now.Sub(r.segStart)
-	duration := now.Sub(r.lastFrameTime)
-	if duration < time.Millisecond {
-		duration = time.Millisecond
-	}
-	r.lastFrameTime = now
-
-	if err := r.muxer.WriteSample(r.trackID, nalu, pts, duration); err != nil {
-		xiaomiLogger.Error("failed to write sample", "camera_id", r.cfg.CameraID, "error", err)
-		return
-	}
-	r.frameCount++
-
-	// Forward to HLS (non-blocking)
-	r.forwardHLS(nalu)
-
-	if time.Since(r.segStart) >= r.cfg.SegmentDur {
-		r.closeCurrentSegment()
+		r.forwardHLS(nalu)
 	}
 }
 
 // processH265NALU handles an H.265/HEVC NAL unit.
 func (r *XiaomiRecorder) processH265NALU(nalu []byte, timestamp uint64, lastTimestamp *uint64) {
-	// HEVC NALU type: 2-byte header, type is in bits 1-6 of first byte.
 	naluType := (nalu[0] >> 1) & 0x3F
 	switch naluType {
 	case 32: // VPS
-		if r.vps != nil && !bytes.Equal(r.vps, nalu) {
-			xiaomiLogger.Info("VPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-			r.closeCurrentSegment()
-		}
 		r.vps = append([]byte(nil), nalu...)
 		return
 	case 33: // SPS
-		if r.sps != nil && !bytes.Equal(r.sps, nalu) {
-			xiaomiLogger.Info("SPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-			r.closeCurrentSegment()
-		}
 		r.sps = append([]byte(nil), nalu...)
 		return
 	case 34: // PPS
-		if r.pps != nil && !bytes.Equal(r.pps, nalu) {
-			xiaomiLogger.Info("PPS change detected, rotating segment", "camera_id", r.cfg.CameraID)
-			r.closeCurrentSegment()
-		}
 		r.pps = append([]byte(nil), nalu...)
 		return
 	}
 
-	// Only write VCL NALUs (types 0-31). Non-VCL types are 32+.
+	// Only forward VCL NALUs (types 0-31)
 	if naluType >= 32 {
 		return
 	}
 	if r.vps == nil || r.sps == nil || r.pps == nil {
 		return
 	}
-
-	// Wait for IDR frame (types 19=IDR_W_RADL, 20=IDR_N_LP).
-	if r.muxer == nil && naluType != 19 && naluType != 20 {
-		return
-	}
-
-	if r.muxer == nil {
-		tempPath, finalPath, err := r.store.CreateSegment(r.cfg.CameraID, string(model.FormatH265))
-		if err != nil {
-			xiaomiLogger.Error("failed to create segment", "camera_id", r.cfg.CameraID, "error", err)
-			return
-		}
-		r.muxer = muxer.NewMP4Muxer(tempPath)
-		trackID, err := r.muxer.AddH265Track(r.vps, r.sps, r.pps)
-		if err != nil {
-			xiaomiLogger.Error("failed to add H265 track", "camera_id", r.cfg.CameraID, "error", err)
-			r.muxer = nil
-			os.Remove(tempPath)
-			return
-		}
-		r.trackID = trackID
-
-		// Add audio track if audio codec detected (same as H264 path).
-		if r.cfg.AudioEnabled && r.audioCodecID > 0 {
-			_, ok := missCodecToAudio(r.audioCodecID)
-			if ok {
-				aID, err := r.muxer.AddAudioTrack("aac", nil)
-				if err != nil {
-					xiaomiLogger.Debug("audio track not added to muxer (codec not supported)", "camera_id", r.cfg.CameraID, "error", err)
-				} else {
-					r.audioTrackID = aID
-				}
-			}
-		}
-		r.curTempPath = tempPath
-		r.curFinalPath = finalPath
-		r.segStart = time.Now()
-		r.lastFrameTime = r.segStart
-		r.frameCount = 0
-	}
-
-	now := time.Now()
-	pts := now.Sub(r.segStart)
-	duration := now.Sub(r.lastFrameTime)
-	if duration < time.Millisecond {
-		duration = time.Millisecond
-	}
-	r.lastFrameTime = now
-
-	if err := r.muxer.WriteSample(r.trackID, nalu, pts, duration); err != nil {
-		xiaomiLogger.Error("failed to write sample", "camera_id", r.cfg.CameraID, "error", err)
-		return
-	}
-	r.frameCount++
-
-	// Forward to HLS (non-blocking)
 	r.forwardHLS(nalu)
-
-	if time.Since(r.segStart) >= r.cfg.SegmentDur {
-		r.closeCurrentSegment()
-	}
 }
 
 // forwardHLS sends a NALU to lal via CustomizePubSession.
@@ -714,11 +549,50 @@ func (r *XiaomiRecorder) forwardHLS(nalu []byte) {
 	pub := r.pubSession
 	start := r.streamStart
 	r.mu.Unlock()
-	if pub == nil {
+
+	pts := time.Since(start).Nanoseconds() * 90000 / int64(time.Second)
+
+	// Build the AU (Access Unit) for Hub delivery.
+	var au [][]byte
+	switch r.codec {
+	case model.FormatH264:
+		naluType := nalu[0] & 0x1F
+		if naluType == 5 && r.sps != nil && r.pps != nil {
+			au = [][]byte{r.sps, r.pps, nalu}
+		} else {
+			au = [][]byte{nalu}
+		}
+	case model.FormatH265:
+		naluType := (nalu[0] >> 1) & 0x3F
+		if (naluType == 19 || naluType == 20) && r.vps != nil && r.sps != nil && r.pps != nil {
+			au = [][]byte{r.vps, r.sps, r.pps, nalu}
+		} else {
+			au = [][]byte{nalu}
+		}
+	default:
 		return
 	}
 
-	pts := time.Since(start).Nanoseconds() * 90000 / int64(time.Second)
+	// Deliver to Hub for HLS frame callbacks.
+	if r.Hub != nil {
+		isIDR := false
+		switch r.codec {
+		case model.FormatH264:
+			if len(au) > 1 {
+				isIDR = true
+			}
+		case model.FormatH265:
+			if len(au) > 1 {
+				isIDR = true
+			}
+		}
+		r.Hub.Broadcast(pts, au, isIDR)
+	}
+
+	// Feed to lal if pubSession is available.
+	if pub == nil {
+		return
+	}
 
 	var pkt base.AvPacket
 	switch r.codec {
@@ -807,11 +681,18 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 	pub := r.pubSession
 	start := r.streamStart
 	r.mu.Unlock()
+
+	pts := time.Since(start).Nanoseconds() * 90000 / int64(time.Second)
+
+	// Deliver to Hub for audio callbacks.
+	if r.Hub != nil {
+		r.Hub.BroadcastAudio(pts, audioCodec, payload)
+	}
+
+	// Feed to lal if pubSession is available.
 	if pub == nil {
 		return
 	}
-
-	pts := time.Since(start).Nanoseconds() * 90000 / int64(time.Second)
 
 	var pkt base.AvPacket
 	switch audioCodec {
@@ -840,81 +721,7 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 
 // closeCurrentSegment finalizes the current MP4 segment.
 func (r *XiaomiRecorder) closeCurrentSegment() {
-	if r.muxer == nil {
-		return
-	}
-	if err := r.muxer.Close(); err != nil {
-		xiaomiLogger.Error("failed to close muxer", "camera_id", r.cfg.CameraID, "error", err)
-		if r.curTempPath != "" {
-			os.Remove(r.curTempPath)
-		}
-		r.muxer = nil
-		r.curTempPath = ""
-		r.curFinalPath = ""
-		r.frameCount = 0
-		return
-	}
-
-	// Atomic rename: temp → final
-	if r.curTempPath != "" && r.curFinalPath != "" {
-		if err := r.store.CloseSegment(r.curTempPath, r.curFinalPath); err != nil {
-			xiaomiLogger.Error("failed to close segment", "camera_id", r.cfg.CameraID, "error", err)
-		}
-	}
-
-	// Insert recording entry into database.
-	var fileSize int64
-	var recordingID string
-	if r.cfg.DB != nil && r.curFinalPath != "" {
-		now := time.Now()
-		duration := now.Sub(r.segStart).Seconds()
-		rec := &model.Recording{
-			ID:         fmt.Sprintf("%d", now.UnixNano()),
-			CameraID:   r.cfg.CameraID,
-			FilePath:   r.curFinalPath,
-			Format:     r.codec,
-			StartedAt:  r.segStart,
-			EndedAt:    now,
-			Duration:   duration,
-			FrameCount: r.frameCount,
-		}
-		recordingID = rec.ID
-		if info, err := os.Stat(r.curFinalPath); err == nil {
-			fileSize = info.Size()
-			rec.FileSize = fileSize
-		}
-		if err := r.cfg.DB.InsertRecordingWithRetry(context.Background(), rec, 3, 500*time.Millisecond); err != nil {
-			xiaomiLogger.Error("failed to insert recording", "camera_id", r.cfg.CameraID, "error", err)
-		}
-	}
-
-	// Publish SegmentCompleted event.
-	if r.cfg.EventBus != nil && recordingID != "" {
-		r.cfg.EventBus.Publish(context.Background(), event.TopicSegmentCompleted, event.SegmentCompleted{
-			CameraID:    r.cfg.CameraID,
-			FilePath:    r.curFinalPath,
-			Format:      string(r.codec),
-			StartedAt:   r.segStart.Format(time.RFC3339Nano),
-			EndedAt:     time.Now().Format(time.RFC3339Nano),
-			FileSize:    fileSize,
-			RecordingID: recordingID,
-		})
-	}
-
-	// Update metrics.
-	if r.frameCount > 0 && r.curFinalPath != "" {
-		r.recordSegmentCreated()
-		if fileSize > 0 {
-			r.recordBytes(fileSize)
-		}
-	}
-
-	r.muxer = nil
-	r.trackID = 0
-	r.audioTrackID = 0
-	r.curTempPath = ""
-	r.curFinalPath = ""
-	r.frameCount = 0
+	// No-op: recording is now handled by lal via RTSP pull.
 }
 
 // splitAnnexBNALUs splits Annex B formatted data into individual NALUs.

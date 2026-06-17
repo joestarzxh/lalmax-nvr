@@ -445,10 +445,11 @@ func TestXiaomiRecorderHLSFrameUnknownCodec(t *testing.T) {
 
 	nalu := []byte{0xAA, 0xBB}
 	r.forwardHLS(nalu)
-	require.Eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return receivedAU != nil }, 2*time.Second, 10*time.Millisecond)
+
+	// Unknown codec should not be delivered to Hub.
+	time.Sleep(100 * time.Millisecond)
 	mu.Lock()
-	require.Len(t, receivedAU, 1)
-	require.Equal(t, nalu, receivedAU[0])
+	require.Nil(t, receivedAU, "unknown codec should not be delivered")
 	mu.Unlock()
 	r.Hub.Unsubscribe("hls")
 }
