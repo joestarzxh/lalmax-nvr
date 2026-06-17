@@ -76,6 +76,12 @@ func (s *stubMediaEngine) SubscribeRTMPEvents(context.Context) (<-chan media.RTM
 func (s *stubMediaEngine) SubscribeSRTEvents(context.Context) (<-chan media.SRTEvent, error) {
 	return nil, errors.New("not implemented")
 }
+func (s *stubMediaEngine) AddCustomizePubSession(_ context.Context, _ string) (media.CustomizePubSession, error) {
+	return nil, errors.New("not implemented")
+}
+func (s *stubMediaEngine) DelCustomizePubSession(_ context.Context, _ media.CustomizePubSession) error {
+	return errors.New("not implemented")
+}
 
 func testConfig() *config.Config {
 	return &config.Config{
