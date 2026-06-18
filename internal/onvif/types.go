@@ -29,11 +29,12 @@ type DiscoveryResult struct {
 
 // DeviceProfile represents a media profile from an ONVIF device.
 type DeviceProfile struct {
-	Token    string `json:"token"`
-	Name     string `json:"name"`
-	Encoding string `json:"encoding"`
-	Width    int    `json:"width"`
-	Height   int    `json:"height"`
+	Token       string `json:"token"`
+	Name        string `json:"name"`
+	Encoding    string `json:"encoding"`
+	Width       int    `json:"width"`
+	Height      int    `json:"height"`
+	VideoSource string `json:"video_source,omitempty"` // VideoSourceConfiguration token for Imaging service
 }
 
 // DeviceInfo holds basic device information.
@@ -174,12 +175,23 @@ type ONVIFUser struct {
 	Level    string `json:"level"` // "Administrator", "Operator", "User", "Anonymous"
 }
 
+// PTZCapabilitiesDetailed describes detailed PTZ capabilities.
+type PTZCapabilitiesDetailed struct {
+	Supported  bool `json:"supported"`
+	PanTilt    bool `json:"pan_tilt"`    // Supports horizontal/vertical movement
+	Zoom       bool `json:"zoom"`        // Supports zoom
+	Presets    bool `json:"presets"`      // Supports presets
+	Home       bool `json:"home"`        // Supports home position
+}
+
 // DeviceCapabilitiesDetailed extends DeviceCapabilities with per-service capability details.
 type DeviceCapabilitiesDetailed struct {
 	PTZ       bool `json:"ptz"`
+	PTZDetail PTZCapabilitiesDetailed `json:"ptz_detail"`
 	Imaging   bool `json:"imaging"`
 	Events    bool `json:"events"`
 	Snapshot  bool `json:"snapshot"`
 	Streaming bool `json:"streaming"`
 	Device    bool `json:"device"` // Device management (reboot, network, users)
+	DeviceInfo *DeviceInfo `json:"device_info,omitempty"` // Device information
 }

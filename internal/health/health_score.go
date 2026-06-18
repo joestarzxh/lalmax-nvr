@@ -105,11 +105,11 @@ func ComputeHealthScore(status string, offlineDuration time.Duration, anomalyCou
 // baseScore returns the starting score for a given status.
 func baseScore(status string) int {
 	switch status {
-	case "recording":
+	case "recording", "healthy":
 		return 100
-	case "reconnecting":
+	case "reconnecting", "warning":
 		return 50
-	case "error":
+	case "error", "unhealthy":
 		return 0
 	case "stopped":
 		return 100 // stopped is intentional, not unhealthy

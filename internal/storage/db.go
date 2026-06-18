@@ -420,6 +420,14 @@ func (d *DB) Init(ctx context.Context) error {
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='21' WHERE key='schema_version'")
 
+	// Migration v21 → v22: add profile_name column
+	var profileNameColExists int
+	_ = d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('cameras') WHERE name='profile_name'`).Scan(&profileNameColExists)
+	if profileNameColExists == 0 {
+		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN profile_name TEXT DEFAULT ''")
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='22' WHERE key='schema_version'")
+
 	return nil
 
 }

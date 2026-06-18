@@ -3,12 +3,14 @@
   import { normalizeProtocol, enableCamera, disableCamera, getSnapshotUrl } from '$lib/api';
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
-  import { Pencil, Play, Pause, Square, RotateCw, Eye, MoreVertical, Archive, Trash2, Image, Bell } from 'lucide-svelte';
+  import type { PTZCapabilitiesDetailed } from '$lib/api/cameras';
+  import { Pencil, Play, Pause, Square, RotateCw, Eye, MoreVertical, Archive, Trash2, Image, Bell, Move, Mic, MicOff, Camera as CameraIcon, ZoomIn, Home } from 'lucide-svelte';
 
   interface Props {
     camera: Camera;
     protocolsMap: Map<string, ProtocolInfo>;
     health?: CameraHealth;
+    ptzCapabilities?: PTZCapabilitiesDetailed;
     onedit: (camera: Camera) => void;
     ondelete: (camera: Camera) => void;
     onpermadelete: (camera: Camera) => void;
@@ -27,6 +29,7 @@
     camera,
     protocolsMap,
     health,
+    ptzCapabilities,
     onedit,
     ondelete,
     onpermadelete,
@@ -60,6 +63,10 @@
 
   let isHls = $derived(
     protocolsMap.get(normalizeProtocol(camera.protocol))?.capabilities?.hls ?? false
+  );
+
+  let capabilities = $derived(
+    protocolsMap.get(normalizeProtocol(camera.protocol))?.capabilities
   );
 
   let protocolLabel = $derived(
@@ -218,16 +225,69 @@
         {#if encodingLabel}
           <span class="text-xs th-text-tertiary px-2 py-0.5 rounded th-bg-tertiary">{encodingLabel}</span>
         {/if}
+        {#if capabilities?.ptz}
+          {#if ptzCapabilities}
+            {#if ptzCapabilities.pan_tilt}
+              <span class="inline-flex items-center gap-1 text-xs text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-900/30 px-2 py-0.5 rounded">
+                <Move size={10} />
+                云台
+              </span>
+            {/if}
+            {#if ptzCapabilities.zoom}
+              <span class="inline-flex items-center gap-1 text-xs text-cyan-600 bg-cyan-50 dark:text-cyan-400 dark:bg-cyan-900/30 px-2 py-0.5 rounded">
+                <ZoomIn size={10} />
+                变焦
+              </span>
+            {/if}
+            {#if ptzCapabilities.presets}
+              <span class="inline-flex items-center gap-1 text-xs text-indigo-600 bg-indigo-50 dark:text-indigo-400 dark:bg-indigo-900/30 px-2 py-0.5 rounded">
+                预设点
+              </span>
+            {/if}
+            {#if ptzCapabilities.home}
+              <span class="inline-flex items-center gap-1 text-xs text-orange-600 bg-orange-50 dark:text-orange-400 dark:bg-orange-900/30 px-2 py-0.5 rounded">
+                <Home size={10} />
+                归位
+              </span>
+            {/if}
+          {:else}
+            <span class="inline-flex items-center gap-1 text-xs text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-900/30 px-2 py-0.5 rounded">
+              <Move size={10} />
+              PTZ
+            </span>
+          {/if}
+        {/if}
+        {#if camera.audio_enabled}
+          <span class="inline-flex items-center gap-1 text-xs text-green-600 bg-green-50 dark:text-green-400 dark:bg-green-900/30 px-2 py-0.5 rounded">
+            <Mic size={10} />
+            音频
+          </span>
+        {/if}
+        {#if capabilities?.snapshot}
+          <span class="inline-flex items-center gap-1 text-xs text-purple-600 bg-purple-50 dark:text-purple-400 dark:bg-purple-900/30 px-2 py-0.5 rounded">
+            <CameraIcon size={10} />
+            快照
+          </span>
+        {/if}
       </div>
       <p class="text-xs th-text-tertiary truncate font-mono" title={camera.url}>{camera.url}</p>
       
       <!-- Device Info -->
-      {#if camera.brand || camera.model || camera.serial_number || camera.location || camera.description}
+      {#if camera.brand || camera.model || camera.serial_number || camera.location || camera.description || camera.profile_token}
         <div class="mt-2 pt-2 border-t th-border space-y-1">
           {#if camera.brand || camera.model}
             <div class="flex items-center gap-1.5 text-xs th-text-tertiary">
               <span class="font-medium">设备:</span>
               <span>{[camera.brand, camera.model].filter(Boolean).join(' ')}</span>
+            </div>
+          {/if}
+          {#if camera.profile_token}
+            <div class="flex items-center gap-1.5 text-xs th-text-tertiary">
+              <span class="font-medium">Profile:</span>
+              <span>{camera.profile_name || camera.profile_token}</span>
+              {#if camera.profile_name}
+                <span class="font-mono text-[10px] th-text-muted">({camera.profile_token})</span>
+              {/if}
             </div>
           {/if}
           {#if camera.serial_number}

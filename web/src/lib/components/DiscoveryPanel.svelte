@@ -32,12 +32,13 @@
   let onvifUsername = $state('');
   let onvifPassword = $state('');
 
-  // Manual probe state
+  // Manual probe state - show by default since multicast discovery often not supported
   let manualHost = $state('');
   let manualPort = $state(80);
   let probing = $state(false);
   let probedDevice = $state<DiscoveredDevice | null>(null);
   let probeError = $state('');
+  let showManualProbe = $state(true);
 
   // Xiaomi state
   let xiaomiExpanded = $state(false);
@@ -404,8 +405,8 @@
         </div>
       {/if}
 
-      <!-- Manual Probe Section -->
-      {#if !scanning && (scanDone || probedDevice)}
+      <!-- Manual Probe Section - Always show since multicast often not supported -->
+      {#if showManualProbe}
         <div class="mt-4 pt-4 border-t th-border">
           <div class="flex items-center gap-2 mb-3">
             <Search size={16} class="th-text-secondary" />

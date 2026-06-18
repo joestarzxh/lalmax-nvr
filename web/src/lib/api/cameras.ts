@@ -34,6 +34,7 @@ export interface Camera {
   retention_days?: number;
   onvif_endpoint?: string;
   profile_token?: string;
+  profile_name?: string;
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
   audio_enabled?: boolean;
@@ -57,6 +58,7 @@ export interface CreateCameraRequest {
   serial_number?: string;
   onvif_endpoint?: string;
   profile_token?: string;
+  profile_name?: string;
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
   audio_enabled?: boolean;
@@ -79,6 +81,7 @@ export interface UpdateCameraRequest {
   retention_days?: number;
   onvif_endpoint?: string;
   profile_token?: string;
+  profile_name?: string;
   stream_encoding?: string;
   transcoding?: CameraTranscodingConfig;
   audio_enabled?: boolean;
@@ -503,6 +506,23 @@ export async function probeONVIFDevice(
   return result.device;
 }
 
+// --- ONVIF Profiles ---
+
+export interface ONVIFProfilesResponse {
+  profiles: DeviceProfile[];
+  capabilities?: DeviceCapabilitiesInfo;
+}
+
+/**
+ * Get profiles from an ONVIF camera
+ */
+export async function getONVIFProfiles(
+  cameraId: string,
+  signal?: AbortSignal
+): Promise<ONVIFProfilesResponse> {
+  return apiRequest<ONVIFProfilesResponse>(`/cameras/${cameraId}/onvif/profiles`, { signal });
+}
+
 // --- Protocols ---
 
 export async function listProtocols(signal?: AbortSignal): Promise<ProtocolInfo[]> {
@@ -673,8 +693,17 @@ export async function getSnapshotUri(
 
 // --- Device Capabilities ---
 
+export interface PTZCapabilitiesDetailed {
+  supported: boolean;
+  pan_tilt: boolean;
+  zoom: boolean;
+  presets: boolean;
+  home: boolean;
+}
+
 export interface DeviceCapabilitiesInfo {
   ptz: boolean;
+  ptz_detail: PTZCapabilitiesDetailed;
   imaging: boolean;
   events: boolean;
   snapshot: boolean;

@@ -157,3 +157,30 @@ func TestHealthScore_UnknownStatus(t *testing.T) {
 		t.Errorf("expected score 50 for unknown status, got %d", result.Score)
 	}
 }
+
+func TestHealthScore_Healthy(t *testing.T) {
+	t.Helper()
+	// base=100, no modifiers → score=100
+	result := ComputeHealthScore("healthy", 0, 0, 100.0)
+	if result.Score != 100 {
+		t.Errorf("expected score 100 for healthy status, got %d", result.Score)
+	}
+}
+
+func TestHealthScore_Warning(t *testing.T) {
+	t.Helper()
+	// base=50, no modifiers → score=50
+	result := ComputeHealthScore("warning", 0, 0, 100.0)
+	if result.Score != 50 {
+		t.Errorf("expected score 50 for warning status, got %d", result.Score)
+	}
+}
+
+func TestHealthScore_Unhealthy(t *testing.T) {
+	t.Helper()
+	// base=0, no modifiers → score=0
+	result := ComputeHealthScore("unhealthy", 0, 0, 100.0)
+	if result.Score != 0 {
+		t.Errorf("expected score 0 for unhealthy status, got %d", result.Score)
+	}
+}

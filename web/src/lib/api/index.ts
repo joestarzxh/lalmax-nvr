@@ -79,6 +79,8 @@ export {
   getSnapshotUri,
   // Device Capabilities
   getDeviceCapabilities,
+  // ONVIF Profiles
+  getONVIFProfiles,
   // Device Management
   rebootDevice,
   getNetworkInterfaces,
@@ -125,6 +127,9 @@ export type {
   SnapshotUriResponse,
   // Device Capabilities
   DeviceCapabilitiesInfo,
+  PTZCapabilitiesDetailed,
+  // ONVIF Profiles
+  ONVIFProfilesResponse,
   // Device Management
   NetworkIPv4,
   NetworkIPv6,

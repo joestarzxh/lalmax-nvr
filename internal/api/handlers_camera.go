@@ -205,6 +205,7 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 		SerialNumber   string `json:"serial_number"`
 		ONVIFEndpoint  string `json:"onvif_endpoint"`
 		ProfileToken   string `json:"profile_token"`
+		ProfileName    string `json:"profile_name"`
 		StreamEncoding string `json:"stream_encoding"`
 		Encoding       string `json:"encoding"`
 		AudioEnabled   *bool  `json:"audio_enabled"`
@@ -336,6 +337,12 @@ func (h *Handler) handleCreateCamera(w http.ResponseWriter, r *http.Request) {
 	if body.Description != "" || body.Location != "" || body.Brand != "" || body.Model != "" || body.SerialNumber != "" {
 		if err := h.db.UpdateCameraMetadata(r.Context(), id, body.Description, body.Location, body.Brand, body.Model, body.SerialNumber, 0); err != nil {
 			logger.Warn("failed to set camera metadata", "camera_id", id, "error", err)
+		}
+	}
+	// Persist profile_name for ONVIF cameras
+	if body.ProfileName != "" {
+		if err := h.db.UpdateCameraProfileName(r.Context(), id, body.ProfileName); err != nil {
+			logger.Warn("failed to set profile name", "camera_id", id, "error", err)
 		}
 	}
 	// Return CameraRow with status

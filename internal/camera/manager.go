@@ -1006,6 +1006,12 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 		}
 	}
 
+	// For ONVIF cameras, try to get profile name if not provided
+	var profileName string
+	if cam.Protocol == "onvif" && cam.ONVIFEndpoint != "" {
+		profileName = cm.getONVIFProfileName(ctx, cam)
+	}
+
 	// Append to config
 	cm.cfg.Cameras = append(cm.cfg.Cameras, cam)
 
@@ -1013,8 +1019,16 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	if cm.db != nil {
 		if err := cm.db.UpsertCamera(ctx, cam.ID, cam.Name, string(cam.Protocol), cam.Encoding, cam.URL, cam.Username, cam.Password, cam.Enabled, cam.ONVIFEndpoint, cam.ProfileToken, cam.StreamEncoding, cameraRTSPTransport(cam)); err != nil {
 			logger.Error("failed to upsert camera record", "camera_id", cam.ID, "error", err)
-		} else if err := cm.db.SaveCameraExtras(ctx, cam); err != nil {
-			logger.Error("failed to save camera extras", "camera_id", cam.ID, "error", err)
+		} else {
+			// Save profile name if available
+			if profileName != "" {
+				if err := cm.db.UpdateCameraProfileName(ctx, cam.ID, profileName); err != nil {
+					logger.Warn("failed to save profile name", "camera_id", cam.ID, "error", err)
+				}
+			}
+			if err := cm.db.SaveCameraExtras(ctx, cam); err != nil {
+				logger.Error("failed to save camera extras", "camera_id", cam.ID, "error", err)
+			}
 		}
 	}
 
@@ -1030,6 +1044,40 @@ func (cm *CameraManager) AddCamera(ctx context.Context, cam config.CameraConfig)
 	}
 
 	return cam.ID, nil
+}
+
+// getONVIFProfileName connects to the ONVIF device and retrieves the profile name.
+func (cm *CameraManager) getONVIFProfileName(ctx context.Context, cam config.CameraConfig) string {
+	endpoint := cam.ONVIFEndpoint
+	if endpoint == "" {
+		endpoint = cam.URL
+	}
+	if endpoint == "" {
+		return ""
+	}
+
+	client := onvif.NewClient(endpoint, cam.Username, cam.Password)
+
+	if err := client.Connect(ctx); err != nil {
+		logger.Debug("failed to connect to ONVIF device for profile name", "error", err)
+		return ""
+	}
+
+	profiles, err := client.GetProfiles(ctx)
+	if err != nil || len(profiles) == 0 {
+		logger.Debug("failed to get ONVIF profiles for profile name", "error", err)
+		return ""
+	}
+
+	// Find the matching profile
+	for _, p := range profiles {
+		if p.Token == cam.ProfileToken {
+			return p.Name
+		}
+	}
+
+	// If no match, return first profile name
+	return profiles[0].Name
 }
 
 // RemoveCamera removes a camera from the manager, stops its recorder, and removes it from config.
@@ -1828,7 +1876,12 @@ func (cm *CameraManager) GetImagingController(ctx context.Context, cameraID stri
 	if len(profiles) == 0 {
 		return nil, &model.ONVIFNoProfilesError{CameraID: cameraID}
 	}
-	ctrl := client.NewImagingController(profiles[0].Token)
+	// Use VideoSource token (not Profile token) for Imaging service
+	videoSourceToken := profiles[0].VideoSource
+	if videoSourceToken == "" {
+		videoSourceToken = profiles[0].Token // Fallback to profile token
+	}
+	ctrl := client.NewImagingController(videoSourceToken)
 	if ctrl == nil {
 		return nil, fmt.Errorf("failed to create imaging controller for camera %q", cameraID)
 	}

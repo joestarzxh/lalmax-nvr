@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, playGB28181Stream } from '$lib/api';
+  import { getCamera, listProtocols, DEFAULT_PROTOCOLS, buildProtocolsMap, normalizeProtocol, getProtocolCapabilities, getDeviceCapabilities, playGB28181Stream, getONVIFProfiles } from '$lib/api';
   import type { Camera, ProtocolInfo, DeviceCapabilitiesInfo } from '$lib/api';
-  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Mic, MicOff } from 'lucide-svelte';
+  import { ArrowLeft, Maximize, Minimize, AlertCircle, RefreshCw, ChevronDown, ChevronRight, Image, Move, Activity, Mic, MicOff, Info, Settings, Video } from 'lucide-svelte';
   import PtzControl from '../components/PtzControl.svelte';
   import VideoPlayer from '../components/VideoPlayer.svelte';
   import WebRTCPlayer from '../components/WebRTCPlayer.svelte';
@@ -13,6 +13,7 @@
   import ImagingPanel from '$lib/components/ImagingPanel.svelte';
   import PresetManager from '$lib/components/PresetManager.svelte';
   import ONVIFEvents from '$lib/components/ONVIFEvents.svelte';
+  import DeviceCapabilities from '$lib/components/DeviceCapabilities.svelte';
   import TalkButton from '../components/TalkButton.svelte';
   import XiaomiTalkButton from '../components/XiaomiTalkButton.svelte';
   import { t } from '$lib/i18n';
@@ -39,8 +40,13 @@
   let FMP4PlayerComponent = $state<any>(null);
   let fmp4PlayerLoading = $state(false);
 
-  // Right panel state
-  let activeRightPanel = $state<'ptz' | 'imaging' | 'presets' | 'events'>('ptz');
+  // Right panel tab state
+  type RightPanelTab = 'control' | 'device' | 'events';
+  let activeRightTab = $state<RightPanelTab>('control');
+
+  // ONVIF capabilities
+  let deviceCaps = $state<DeviceCapabilitiesInfo | null>(null);
+  let capsLoading = $state(false);
 
   async function loadWasmPlayer() {
     if (WasmPlayerComponent || wasmPlayerLoading) return;
@@ -70,10 +76,6 @@
       fmp4PlayerLoading = false;
     }
   }
-
-  // ONVIF capabilities
-  let deviceCaps = $state<DeviceCapabilitiesInfo | null>(null);
-  let capsLoading = $state(false);
 
   function isHlsSupported(cam: Camera): boolean {
     return getProtocolCapabilities(cam.protocol, protocolsMap).hls;
@@ -272,6 +274,12 @@
         </h2>
         <span class="badge badge-neutral">{protocolsMap.get(camera.protocol)?.label || camera.protocol}</span>
 
+        {#if isOnvifCamera(camera) && camera.profile_token}
+          <span class="badge badge-outline text-xs">
+            {camera.profile_name || camera.profile_token}
+          </span>
+        {/if}
+
         {#if isOnvifCamera(camera)}
           <SnapshotButton cameraId={camera.id} />
         {/if}
@@ -389,94 +397,140 @@
           </div>
 
           <!-- Right: Controls Panel -->
-          {#if showPtz || showTalk || showXiaomiTalk}
-            <div class="live-controls w-80 flex-shrink-0 flex flex-col gap-3 overflow-y-auto">
-              <!-- Talk Button (GB28181 only) -->
-              {#if showTalk}
-                <div class="card border th-border p-4">
-                  <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
-                    <Mic size={16} />
-                    {t('live.talk.title') || '语音对讲'}
-                  </h3>
-                  <TalkButton
-                    deviceId={camera.id.split(':')[0] || camera.id}
-                    channelId={camera.id.split(':')[1] || '0'}
-                  />
-                </div>
-              {/if}
-
-              <!-- Talk Button (Xiaomi) -->
-              {#if showXiaomiTalk}
-                <div class="card border th-border p-4">
-                  <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
-                    <Mic size={16} />
-                    {t('live.talk.title') || '语音对讲'}
-                  </h3>
-                  <XiaomiTalkButton cameraId={camera.id} />
-                </div>
-              {/if}
-
-              <!-- PTZ Control -->
-              {#if showPtz}
-                <div class="card border th-border p-4">
-                  <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
-                    <Move size={16} />
-                    {t('live.ptz.title') || '云台控制'}
-                  </h3>
-                  <PtzControl {cameraId} enabled={true} compact={true} />
-                </div>
-              {/if}
-
-              <!-- ONVIF Panels -->
-              {#if isOnvifCamera(camera) && !capsLoading}
-                <!-- Imaging Panel -->
-                {#if deviceCaps?.imaging}
-                  <details class="onvif-collapsible" open>
-                    <summary class="onvif-collapsible-summary">
-                      <div class="onvif-collapsible-title-row">
-                        <ChevronDown size={14} />
-                        <Image size={14} />
-                        <span>{t('onvif.imaging.title')}</span>
-                      </div>
-                    </summary>
-                    <div class="onvif-collapsible-body">
-                      <ImagingPanel cameraId={camera.id} />
+          {#if showPtz || showTalk || showXiaomiTalk || isOnvifCamera(camera)}
+            <div class="live-controls w-80 flex-shrink-0 flex flex-col overflow-y-auto">
+              <!-- Tab Navigation -->
+              <div class="flex border-b th-border mb-2">
+                <button
+                  class="flex-1 px-3 py-2 text-xs font-medium transition-colors {activeRightTab === 'control' ? 'th-text-primary border-b-2 border-primary' : 'th-text-secondary hover:th-text-primary'}"
+                  onclick={() => activeRightTab = 'control'}
+                >
+                  <div class="flex items-center justify-center gap-1.5">
+                    <Video size={14} />
+                    <span>控制</span>
+                  </div>
+                </button>
+                {#if isOnvifCamera(camera)}
+                  <button
+                    class="flex-1 px-3 py-2 text-xs font-medium transition-colors {activeRightTab === 'device' ? 'th-text-primary border-b-2 border-primary' : 'th-text-secondary hover:th-text-primary'}"
+                    onclick={() => activeRightTab = 'device'}
+                  >
+                    <div class="flex items-center justify-center gap-1.5">
+                      <Settings size={14} />
+                      <span>设备</span>
                     </div>
-                  </details>
+                  </button>
+                  <button
+                    class="flex-1 px-3 py-2 text-xs font-medium transition-colors {activeRightTab === 'events' ? 'th-text-primary border-b-2 border-primary' : 'th-text-secondary hover:th-text-primary'}"
+                    onclick={() => activeRightTab = 'events'}
+                  >
+                    <div class="flex items-center justify-center gap-1.5">
+                      <Activity size={14} />
+                      <span>事件</span>
+                    </div>
+                  </button>
+                {/if}
+              </div>
+
+              <!-- Tab Content -->
+              <div class="flex-1 overflow-y-auto px-1">
+                <!-- Control Tab -->
+                {#if activeRightTab === 'control'}
+                  <div class="space-y-3">
+                    <!-- Talk Button (GB28181 only) -->
+                    {#if showTalk}
+                      <div class="card border th-border p-4">
+                        <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
+                          <Mic size={16} />
+                          {t('live.talk.title') || '语音对讲'}
+                        </h3>
+                        <TalkButton
+                          deviceId={camera.id.split(':')[0] || camera.id}
+                          channelId={camera.id.split(':')[1] || '0'}
+                        />
+                      </div>
+                    {/if}
+
+                    <!-- Talk Button (Xiaomi) -->
+                    {#if showXiaomiTalk}
+                      <div class="card border th-border p-4">
+                        <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
+                          <Mic size={16} />
+                          {t('live.talk.title') || '语音对讲'}
+                        </h3>
+                        <XiaomiTalkButton cameraId={camera.id} />
+                      </div>
+                    {/if}
+
+                    <!-- PTZ Control -->
+                    {#if showPtz}
+                      <div class="card border th-border p-4">
+                        <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
+                          <Move size={16} />
+                          {t('live.ptz.title') || '云台控制'}
+                        </h3>
+                        <PtzControl {cameraId} enabled={true} compact={true} />
+                      </div>
+                    {/if}
+
+                    <!-- Preset Manager (in control tab for quick access) -->
+                    {#if isOnvifCamera(camera) && deviceCaps?.ptz}
+                      <div class="card border th-border p-4">
+                        <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
+                          <Move size={16} />
+                          {t('onvif.presets.title')}
+                        </h3>
+                        <PresetManager cameraId={camera.id} />
+                      </div>
+                    {/if}
+                  </div>
                 {/if}
 
-                <!-- Preset Manager -->
-                {#if deviceCaps?.ptz}
-                  <details class="onvif-collapsible">
-                    <summary class="onvif-collapsible-summary">
-                      <div class="onvif-collapsible-title-row">
-                        <ChevronRight size={14} />
-                        <Move size={14} />
-                        <span>{t('onvif.presets.title')}</span>
-                      </div>
-                    </summary>
-                    <div class="onvif-collapsible-body">
-                      <PresetManager cameraId={camera.id} />
+                <!-- Device Tab -->
+                {#if activeRightTab === 'device' && isOnvifCamera(camera)}
+                  <div class="space-y-3">
+                    <!-- Device Capabilities -->
+                    <div class="card border th-border p-4">
+                      <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
+                        <Info size={16} />
+                        设备信息
+                      </h3>
+                      <DeviceCapabilities cameraId={camera.id} />
                     </div>
-                  </details>
+
+                    <!-- Imaging Panel -->
+                    {#if deviceCaps?.imaging}
+                      <div class="card border th-border p-4">
+                        <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
+                          <Image size={16} />
+                          {t('onvif.imaging.title')}
+                        </h3>
+                        <ImagingPanel cameraId={camera.id} />
+                      </div>
+                    {/if}
+                  </div>
                 {/if}
 
-                <!-- ONVIF Events -->
-                {#if deviceCaps?.events}
-                  <details class="onvif-collapsible">
-                    <summary class="onvif-collapsible-summary">
-                      <div class="onvif-collapsible-title-row">
-                        <ChevronRight size={14} />
-                        <Activity size={14} />
-                        <span>{t('onvif.events.title')}</span>
+                <!-- Events Tab -->
+                {#if activeRightTab === 'events' && isOnvifCamera(camera)}
+                  <div class="space-y-3">
+                    {#if deviceCaps?.events}
+                      <div class="card border th-border p-4">
+                        <h3 class="text-sm font-semibold th-text-primary mb-3 flex items-center gap-2">
+                          <Activity size={16} />
+                          {t('onvif.events.title')}
+                        </h3>
+                        <ONVIFEvents cameraId={camera.id} maxEvents={50} />
                       </div>
-                    </summary>
-                    <div class="onvif-collapsible-body">
-                      <ONVIFEvents cameraId={camera.id} maxEvents={50} />
-                    </div>
-                  </details>
+                    {:else}
+                      <div class="card border th-border p-6 text-center">
+                        <Activity size={24} class="mx-auto mb-2 th-text-tertiary" />
+                        <p class="text-sm th-text-secondary">此设备不支持事件订阅</p>
+                      </div>
+                    {/if}
+                  </div>
                 {/if}
-              {/if}
+              </div>
             </div>
           {/if}
         </div>
@@ -499,50 +553,6 @@
 </div>
 
 <style>
-  .onvif-collapsible {
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    overflow: hidden;
-    background-color: var(--bg-elevated);
-  }
-
-  .onvif-collapsible[open] {
-    border-color: var(--border-hover);
-  }
-
-  .onvif-collapsible-summary {
-    display: flex;
-    align-items: center;
-    padding: 0.625rem 0.75rem;
-    cursor: pointer;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: var(--text-primary);
-    background-color: var(--bg-secondary);
-    user-select: none;
-    transition: background-color var(--duration-fast) var(--ease-out);
-    list-style: none;
-  }
-
-  .onvif-collapsible-summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .onvif-collapsible-summary:hover {
-    background-color: var(--bg-hover);
-  }
-
-  .onvif-collapsible-title-row {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    color: var(--text-secondary);
-  }
-
-  .onvif-collapsible-body {
-    padding: 0.625rem;
-  }
-
   /* Responsive layout */
   .live-layout {
     display: flex;
@@ -571,10 +581,6 @@
     .live-layout {
       flex-direction: column;
       height: auto !important;
-    }
-    
-    .live-player {
-      min-height: 50vh;
     }
     
     .live-controls {

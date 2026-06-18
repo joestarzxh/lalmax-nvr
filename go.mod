@@ -3,7 +3,6 @@ module github.com/lalmax-pro/lalmax-nvr
 go 1.26.2
 
 require (
-	github.com/0x524a/onvif-go v1.1.4
 	github.com/abema/go-mp4 v1.5.0
 	github.com/bluenviron/gohlslib/v2 v2.3.1
 	github.com/bluenviron/gortsplib/v5 v5.5.2
@@ -14,7 +13,6 @@ require (
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/panjjo/gosdp v0.0.0-20201029020038-56e3a0ec56ef
 	github.com/pion/rtp v1.10.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/q191201771/lal v0.37.4
@@ -84,7 +82,6 @@ require (
 	github.com/pion/transport/v4 v4.0.1 // indirect
 	github.com/pion/turn/v5 v5.0.3 // indirect
 	github.com/pion/webrtc/v4 v4.2.12 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect

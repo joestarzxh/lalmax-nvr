@@ -71,16 +71,13 @@ func (h *Handler) handleONVIFCapabilities(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	caps, err := client.GetCapabilities(r.Context())
+	caps, err := client.GetCapabilitiesDetailed(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get capabilities: %v", err))
 		return
 	}
 
-	writeJSON(w, http.StatusOK, onvif.DeviceCapabilitiesDetailed{
-		PTZ:       caps.PTZ,
-		Streaming: caps.Streaming,
-	})
+	writeJSON(w, http.StatusOK, caps)
 }
 
 // --- ONVIF discovery endpoints ---

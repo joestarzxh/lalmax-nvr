@@ -9,6 +9,7 @@
     normalizeProtocol,
     testConnection,
     getDeviceCapabilities,
+    getONVIFProfiles,
   } from '$lib/api';
   import type {
     Camera,
@@ -20,8 +21,9 @@
     XiaomiDevice,
     TestConnectionResult,
     DeviceCapabilitiesInfo,
+    DeviceProfile,
   } from '$lib/api';
-  import { Eye, EyeOff, PlugZap } from 'lucide-svelte';
+  import { Eye, EyeOff, PlugZap, RefreshCw } from 'lucide-svelte';
   import { showToast } from '$lib/toast';
   import MergeConfigEditor from '$lib/components/MergeConfigEditor.svelte';
   import TimelapseConfigEditor from '$lib/components/TimelapseConfigEditor.svelte';
@@ -91,6 +93,12 @@
   let deviceCaps = $state<DeviceCapabilitiesInfo | null>(null);
   let capsLoading = $state(false);
 
+  // ONVIF profiles
+  let onvifProfiles = $state<DeviceProfile[]>([]);
+  let profilesLoading = $state(false);
+  let formProfileToken = $state('');
+  let selectedProfile = $state<DeviceProfile | null>(null);
+
   // Auto-select encoding when protocol changes
   $effect(() => {
     const proto = protocolsMap.get(formProtocol);
@@ -115,11 +123,16 @@
       populateForm(editingCamera);
       loadMergeConfig(editingCamera.id);
       loadCapabilities(editingCamera);
+      if (normalizeProtocol(editingCamera.protocol) === 'onvif') {
+        loadProfiles();
+      }
     } else {
       resetFormFields();
       mergeConfig = null;
       mergeConfigLoading = false;
       deviceCaps = null;
+      onvifProfiles = [];
+      selectedProfile = null;
     }
   });
 
@@ -145,6 +158,9 @@
     formTranscodingCodec = 'h264';
     formTranscodingPreset = 'ultrafast';
     formTranscodingBitrate = '2M';
+    formProfileToken = '';
+    selectedProfile = null;
+    onvifProfiles = [];
     validationErrors = {};
   }
 
@@ -175,6 +191,8 @@
     formTranscodingCodec = !h265Available ? 'h264' : (camera.transcoding?.target_codec || 'h264');
     formTranscodingPreset = camera.transcoding?.preset || 'ultrafast';
     formTranscodingBitrate = camera.transcoding?.bitrate || '2M';
+    formProfileToken = camera.profile_token || '';
+    selectedProfile = null;
     validationErrors = {};
   }
 
@@ -202,6 +220,34 @@
     } finally {
       capsLoading = false;
     }
+  }
+
+  async function loadProfiles() {
+    if (formProtocol !== 'onvif' || !formUrl.trim()) {
+      onvifProfiles = [];
+      return;
+    }
+    profilesLoading = true;
+    try {
+      const result = await getONVIFProfiles(editingCamera?.id || '');
+      onvifProfiles = result.profiles || [];
+      // Auto-select first profile if none selected
+      if (!formProfileToken && onvifProfiles.length > 0) {
+        formProfileToken = onvifProfiles[0].token;
+        selectedProfile = onvifProfiles[0];
+      } else if (formProfileToken) {
+        selectedProfile = onvifProfiles.find(p => p.token === formProfileToken) || null;
+      }
+    } catch (e) {
+      console.warn('Failed to load ONVIF profiles:', e);
+      onvifProfiles = [];
+    } finally {
+      profilesLoading = false;
+    }
+  }
+
+  function handleProfileChange() {
+    selectedProfile = onvifProfiles.find(p => p.token === formProfileToken) || null;
   }
 
   function validateField(field: string, value: string) {
@@ -276,6 +322,8 @@
           stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
           encoding: formEncoding,
           rtsp_transport: (formProtocol === 'rtsp' || formProtocol === 'onvif') ? formRTSPTransport : undefined,
+          profile_token: formProtocol === 'onvif' ? (formProfileToken || undefined) : undefined,
+          profile_name: formProtocol === 'onvif' ? (selectedProfile?.name || undefined) : undefined,
           transcoding: {
             enabled: formTranscodingEnabled,
             target_codec: formTranscodingCodec,
@@ -316,6 +364,8 @@
           stream_encoding: formProtocol === 'onvif' ? (formStreamEncoding || undefined) : undefined,
           encoding: formEncoding,
           rtsp_transport: (formProtocol === 'rtsp' || formProtocol === 'onvif') ? formRTSPTransport : undefined,
+          profile_token: formProtocol === 'onvif' ? (formProfileToken || undefined) : undefined,
+          profile_name: formProtocol === 'onvif' ? (selectedProfile?.name || undefined) : undefined,
           transcoding: {
             enabled: formTranscodingEnabled,
             target_codec: formTranscodingCodec,
@@ -435,6 +485,58 @@
         <p class="th-color-danger text-xs mt-1">{validationErrors['url']}</p>
       {/if}
     </div>
+
+    <!-- ONVIF Profile Selection -->
+    {#if formProtocol === 'onvif' && editingCamera}
+      <div class="md:col-span-2">
+        <label for="cam-profile" class="input-label">
+          ONVIF Profile
+          {#if profilesLoading}
+            <span class="text-xs th-text-muted ml-1">(加载中...)</span>
+          {/if}
+        </label>
+        <div class="flex gap-2">
+          <select 
+            id="cam-profile" 
+            class="input flex-1" 
+            bind:value={formProfileToken} 
+            onchange={handleProfileChange}
+            disabled={profilesLoading || onvifProfiles.length === 0}
+          >
+            {#if onvifProfiles.length === 0}
+              <option value="">{profilesLoading ? '加载中...' : '无可用profile'}</option>
+            {:else}
+              {#each onvifProfiles as profile (profile.token)}
+                <option value={profile.token}>
+                  {profile.name} - {profile.encoding?.toUpperCase() || 'N/A'} ({profile.width}x{profile.height})
+                </option>
+              {/each}
+            {/if}
+          </select>
+          <button
+            type="button"
+            onclick={loadProfiles}
+            disabled={profilesLoading}
+            class="btn btn-ghost px-3 py-2 flex items-center gap-1.5 whitespace-nowrap"
+            title="刷新profiles"
+          >
+            <RefreshCw size={14} class={profilesLoading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+        {#if selectedProfile}
+          <div class="mt-2 p-2 rounded th-bg-tertiary text-xs">
+            <span class="font-medium">{selectedProfile.name}</span>
+            <span class="th-text-muted ml-2">
+              {selectedProfile.encoding?.toUpperCase() || 'N/A'} · 
+              {selectedProfile.width}x{selectedProfile.height}
+            </span>
+          </div>
+        {/if}
+        <p class="text-xs th-text-muted mt-1">
+          选择要使用的媒体配置文件。修改后将使用新的RTSP流地址。
+        </p>
+      </div>
+    {/if}
 
     {#if formProtocol === 'xiaomi'}
       {#if editingCamera?.protocol === 'xiaomi' && xiaomiDeviceList.length > 0}
