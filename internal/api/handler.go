@@ -312,6 +312,7 @@ func (h *Handler) Routes() http.Handler {
 				r.With(middleware.RequireOperatePermission()).Put("/onvif/users/{username}", h.handleONVIFSetUser)
 				// ONVIF Recording
 				r.Get("/onvif/recordings", h.handleGetONVIFRecordings)
+				r.Get("/onvif/recordings/{token}", h.handleGetONVIFRecordingInformation)
 				r.Get("/onvif/recordings/search", h.handleSearchONVIFRecordings)
 				r.Get("/onvif/replay/{token}", h.handleGetONVIFReplayURI)
 				r.Get("/snapshot", h.handleSnapshot)

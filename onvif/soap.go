@@ -274,7 +274,7 @@ func (s *SOAPClient) generateWSSE() ([]byte, string) {
 	nonce := make([]byte, 16)
 	rand.Read(nonce)
 
-	now := time.Now().Add(s.timeShift)
+	now := time.Now().UTC().Add(s.timeShift)
 	timestamp := now.Format("2006-01-02T15:04:05.000Z")
 
 	return nonce, timestamp

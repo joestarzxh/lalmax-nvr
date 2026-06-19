@@ -20,11 +20,12 @@ func TestProtocolsEndpoint(t *testing.T) {
 			Label        string         `json:"label"`
 			Encodings    []string       `json:"encodings"`
 			BuiltIn      bool           `json:"built_in"`
+			Addable      bool           `json:"addable"`
 			Capabilities map[string]bool `json:"capabilities"`
 		} `json:"protocols"`
 	}
 	parseJSON(t, rr, &resp)
-	require.Len(t, resp.Protocols, 4)
+	require.Len(t, resp.Protocols, 8)
 	require.Equal(t, "rtsp", resp.Protocols[0].ID)
 	require.True(t, resp.Protocols[0].BuiltIn)
 	require.Contains(t, resp.Protocols[0].Encodings, "h264")
@@ -33,9 +34,17 @@ func TestProtocolsEndpoint(t *testing.T) {
 	require.Contains(t, resp.Protocols[1].Encodings, "jpeg")
 	require.Equal(t, "onvif", resp.Protocols[2].ID)
 	require.True(t, resp.Protocols[2].Capabilities["ptz"])
-	require.Equal(t, "xiaomi", resp.Protocols[3].ID)
-	require.True(t, resp.Protocols[3].BuiltIn)
-	require.True(t, resp.Protocols[3].Capabilities["hls"])
+	require.Equal(t, "gb28181", resp.Protocols[3].ID)
+	require.False(t, resp.Protocols[3].Addable)
+	require.Equal(t, "xiaomi", resp.Protocols[4].ID)
+	require.True(t, resp.Protocols[4].BuiltIn)
+	require.True(t, resp.Protocols[4].Capabilities["hls"])
+	require.Equal(t, "rtmp-pull", resp.Protocols[5].ID)
+	require.True(t, resp.Protocols[5].Addable)
+	require.Equal(t, "http-flv-pull", resp.Protocols[6].ID)
+	require.True(t, resp.Protocols[6].Addable)
+	require.Equal(t, "rtmp", resp.Protocols[7].ID)
+	require.False(t, resp.Protocols[7].Addable)
 }
 
 func TestProtocolsNoAuth(t *testing.T) {

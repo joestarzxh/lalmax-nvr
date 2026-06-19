@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { 
     getONVIFRecordings, 
-    searchONVIFRecordings, 
+    getONVIFRecordingInformation,
     getONVIFReplayURI,
     type ONVIFRecording,
     type ONVIFRecordingSegment 
@@ -13,7 +13,7 @@
   import { formatFileSize, formatDate, formatDuration } from '$lib/format';
   import { 
     Film, Search, Play, RefreshCw, Download, 
-    Calendar, Clock, HardDrive, X 
+    Calendar, Clock, HardDrive, X, ChevronLeft
   } from 'lucide-svelte';
   import FlvPlayer from '../../components/FlvPlayer.svelte';
 
@@ -23,8 +23,11 @@
   let endTime = $state('');
   let loading = $state(false);
   let recordings = $state<ONVIFRecording[]>([]);
-  let segments = $state<ONVIFRecordingSegment[]>([]);
-  let searchMode = $state<'recordings' | 'segments'>('recordings');
+  
+  // Drill-down state
+  let selectedRecording = $state<ONVIFRecording | null>(null);
+  let recordingSegments = $state<ONVIFRecordingSegment[]>([]);
+  let loadingSegments = $state(false);
   
   // Playback state
   let playbackStreamUrl = $state('');
@@ -61,59 +64,44 @@
 
     loading = true;
     recordings = [];
-    segments = [];
+    selectedRecording = null;
+    recordingSegments = [];
     playbackStreamUrl = '';
 
     try {
-      if (searchMode === 'recordings') {
-        const res = await getONVIFRecordings(selectedCameraId, {
-          start_time: startTime,
-          end_time: endTime || undefined,
-        });
-        recordings = res.recordings || [];
-        if (recordings.length === 0) {
-          showToast('未找到录像记录', 'info');
-        }
-      } else {
-        const res = await searchONVIFRecordings(selectedCameraId, {
-          start_time: startTime,
-          end_time: endTime || undefined,
-          max_results: 100,
-        });
-        segments = res.segments || [];
-        if (res.fallback) {
-          showToast('设备不支持片段搜索，已回退到录像列表模式', 'info');
-        } else if (segments.length === 0) {
-          showToast('未找到录像片段', 'info');
-        }
+      const res = await getONVIFRecordings(selectedCameraId, {
+        start_time: startTime,
+        end_time: endTime || undefined,
+      });
+      recordings = res.recordings || [];
+      if (recordings.length === 0) {
+        showToast('未找到录像记录', 'info');
       }
     } catch (e) {
-      showToast(e instanceof Error ? e.message : '查询失败', 'error');
+      const msg = e instanceof Error ? e.message : '查询失败';
+      if (msg.includes('does not support ONVIF recording')) {
+        showToast('该设备不支持 ONVIF 录像查询功能', 'error');
+      } else {
+        showToast(msg, 'error');
+      }
     } finally {
       loading = false;
     }
   }
 
-  async function handlePlayRecording(recording: ONVIFRecording) {
-    playbackLoading = true;
-    try {
-      const res = await getONVIFReplayURI(selectedCameraId, recording.token);
-      if (res.uri) {
-        // Convert RTSP to WebSocket FLV if needed
-        if (res.protocol === 'rtsp') {
-          // Use the NVR's RTSP proxy
-          const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-          playbackStreamUrl = `${wsProto}//${location.host}/api/cameras/${selectedCameraId}/stream`;
-        } else {
-          playbackStreamUrl = res.uri;
-        }
-        playbackStreamId = `onvif_replay_${recording.token}`;
-      }
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : '获取回放地址失败', 'error');
-    } finally {
-      playbackLoading = false;
-    }
+  async function handleViewRecording(recording: ONVIFRecording) {
+    // Get recording details from the already loaded recordings
+    selectedRecording = recording;
+    recordingSegments = [];
+    
+    // Note: Dahua cameras don't support GetRecordingInformation API
+    // so we can't get actual segments. Show tracks info instead.
+    showToast('该设备不支持获取录像片段详情', 'info');
+  }
+
+  function handleBackToRecordings() {
+    selectedRecording = null;
+    recordingSegments = [];
   }
 
   async function handlePlaySegment(segment: ONVIFRecordingSegment) {
@@ -157,7 +145,7 @@
       <h3 class="text-lg font-semibold th-text-primary">设备录像查询</h3>
     </div>
     
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
       <!-- Camera Selection -->
       <div>
         <label for="onvif-rec-camera" class="input-label">设备</label>
@@ -191,15 +179,6 @@
           bind:value={endTime} 
           step="1" 
         />
-      </div>
-
-      <!-- Search Mode -->
-      <div>
-        <label for="onvif-rec-mode" class="input-label">查询模式</label>
-        <select id="onvif-rec-mode" class="input mt-1 w-full" bind:value={searchMode}>
-          <option value="segments">片段搜索</option>
-          <option value="recordings">录像列表</option>
-        </select>
       </div>
     </div>
 
@@ -243,7 +222,7 @@
   {/if}
 
   <!-- Recordings List -->
-  {#if searchMode === 'recordings' && recordings.length > 0}
+  {#if recordings.length > 0 && !selectedRecording}
     <div class="card border th-border overflow-hidden">
       <div class="px-4 py-3 border-b th-border flex items-center justify-between">
         <span class="text-sm th-text-secondary">共 {recordings.length} 个录像</span>
@@ -254,19 +233,17 @@
             <tr class="border-b th-border bg-gray-50 dark:bg-gray-800">
               <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">名称</th>
               <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">来源</th>
-              <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">开始时间</th>
-              <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">结束时间</th>
+              <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">轨道数</th>
               <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">状态</th>
               <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">操作</th>
             </tr>
           </thead>
           <tbody>
             {#each recordings as rec}
-              <tr class="border-b th-border hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                <td class="px-4 py-3 text-sm font-medium th-text-primary">{rec.name}</td>
+              <tr class="border-b th-border hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer" onclick={() => handleViewRecording(rec)}>
+                <td class="px-4 py-3 text-sm font-medium th-text-primary">{rec.name || rec.token}</td>
                 <td class="px-4 py-3 text-sm th-text-secondary">{rec.source.name || '-'}</td>
-                <td class="px-4 py-3 text-sm th-text-secondary">{formatTime(rec.start_time)}</td>
-                <td class="px-4 py-3 text-sm th-text-secondary">{formatTime(rec.end_time)}</td>
+                <td class="px-4 py-3 text-sm th-text-secondary">{rec.tracks?.length || 0}</td>
                 <td class="px-4 py-3 text-sm">
                   <span class="px-2 py-1 text-xs rounded-full {rec.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}">
                     {rec.status}
@@ -275,15 +252,10 @@
                 <td class="px-4 py-3 text-sm">
                   <button 
                     class="btn btn-sm btn-primary flex items-center gap-1"
-                    onclick={() => handlePlayRecording(rec)}
-                    disabled={playbackLoading}
+                    onclick={(e) => { e.stopPropagation(); handleViewRecording(rec); }}
                   >
-                    {#if playbackLoading}
-                      <RefreshCw class="w-3 h-3 animate-spin" />
-                    {:else}
-                      <Play class="w-3 h-3" />
-                    {/if}
-                    播放
+                    <Film class="w-3 h-3" />
+                    查看片段
                   </button>
                 </td>
               </tr>
@@ -294,68 +266,84 @@
     </div>
   {/if}
 
-  <!-- Segments List -->
-  {#if searchMode === 'segments' && segments.length > 0}
+  <!-- Recording Detail -->
+  {#if selectedRecording}
     <div class="card border th-border overflow-hidden">
       <div class="px-4 py-3 border-b th-border flex items-center justify-between">
-        <span class="text-sm th-text-secondary">共 {segments.length} 个片段</span>
+        <div class="flex items-center gap-2">
+          <button class="btn btn-ghost btn-sm" onclick={handleBackToRecordings}>
+            <ChevronLeft size={16} />
+            返回
+          </button>
+          <span class="text-sm font-medium th-text-primary">{selectedRecording.description || selectedRecording.token}</span>
+        </div>
       </div>
-      <div class="overflow-x-auto">
-        <table class="w-full">
-          <thead>
-            <tr class="border-b th-border bg-gray-50 dark:bg-gray-800">
-              <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">录像</th>
-              <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">开始时间</th>
-              <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">结束时间</th>
-              <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">时长</th>
-              <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">大小</th>
-              <th class="px-4 py-3 text-left text-sm font-medium th-text-secondary">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each segments as seg}
-              <tr class="border-b th-border hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                <td class="px-4 py-3 text-sm font-mono th-text-primary max-w-xs truncate">{seg.recording_token}</td>
-                <td class="px-4 py-3 text-sm th-text-secondary">{formatTime(seg.start_time)}</td>
-                <td class="px-4 py-3 text-sm th-text-secondary">{formatTime(seg.end_time)}</td>
-                <td class="px-4 py-3 text-sm th-text-secondary">
-                  {#if seg.duration}
-                    {Math.floor(seg.duration / 60)}分{seg.duration % 60}秒
-                  {:else}
-                    -
-                  {/if}
-                </td>
-                <td class="px-4 py-3 text-sm th-text-secondary">
-                  {#if seg.size}
-                    {formatFileSize(seg.size)}
-                  {:else}
-                    -
-                  {/if}
-                </td>
-                <td class="px-4 py-3 text-sm">
-                  <button 
-                    class="btn btn-sm btn-primary flex items-center gap-1"
-                    onclick={() => handlePlaySegment(seg)}
-                    disabled={playbackLoading}
-                  >
-                    {#if playbackLoading}
-                      <RefreshCw class="w-3 h-3 animate-spin" />
-                    {:else}
-                      <Play class="w-3 h-3" />
-                    {/if}
-                    播放
-                  </button>
-                </td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
+      
+      <div class="p-4">
+        <div class="grid grid-cols-2 gap-4 mb-4">
+          <div>
+            <span class="text-xs th-text-tertiary">Token</span>
+            <p class="text-sm font-mono th-text-secondary">{selectedRecording.token}</p>
+          </div>
+          <div>
+            <span class="text-xs th-text-tertiary">状态</span>
+            <p class="text-sm">
+              <span class="px-2 py-1 text-xs rounded-full {selectedRecording.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}">
+                {selectedRecording.status}
+              </span>
+            </p>
+          </div>
+          <div>
+            <span class="text-xs th-text-tertiary">来源</span>
+            <p class="text-sm th-text-secondary">{selectedRecording.source?.name || '-'}</p>
+          </div>
+          <div>
+            <span class="text-xs th-text-tertiary">描述</span>
+            <p class="text-sm th-text-secondary">{selectedRecording.description || '-'}</p>
+          </div>
+        </div>
+
+        {#if selectedRecording.tracks && selectedRecording.tracks.length > 0}
+          <div>
+            <h4 class="text-sm font-medium th-text-primary mb-2">轨道信息</h4>
+            <div class="overflow-x-auto">
+              <table class="w-full">
+                <thead>
+                  <tr class="border-b th-border bg-gray-50 dark:bg-gray-800">
+                    <th class="px-4 py-2 text-left text-sm font-medium th-text-secondary">Token</th>
+                    <th class="px-4 py-2 text-left text-sm font-medium th-text-secondary">类型</th>
+                    <th class="px-4 py-2 text-left text-sm font-medium th-text-secondary">描述</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each selectedRecording.tracks as track}
+                    <tr class="border-b th-border">
+                      <td class="px-4 py-2 text-sm font-mono th-text-secondary">{track.token}</td>
+                      <td class="px-4 py-2 text-sm th-text-secondary">
+                        <span class="px-2 py-1 text-xs rounded-full {track.track_type === 'Video' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'}">
+                          {track.track_type}
+                        </span>
+                      </td>
+                      <td class="px-4 py-2 text-sm th-text-secondary">{track.description || '-'}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        {/if}
+
+        <div class="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg">
+          <p class="text-sm text-yellow-800 dark:text-yellow-200">
+            注意：该设备不支持获取录像片段详情。如需查看具体录像片段，请通过设备的 Web 界面或客户端软件。
+          </p>
+        </div>
       </div>
     </div>
   {/if}
 
   <!-- Empty State -->
-  {#if !loading && recordings.length === 0 && segments.length === 0 && selectedCameraId}
+  {#if !loading && recordings.length === 0 && !selectedRecording && selectedCameraId}
     <div class="flex flex-col items-center justify-center py-8 th-bg-secondary rounded-lg">
       <Film class="w-10 h-10 th-text-tertiary mb-3" />
       <p class="text-sm th-text-secondary">选择设备和时间范围后点击"查询录像"</p>

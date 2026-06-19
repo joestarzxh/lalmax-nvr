@@ -284,10 +284,7 @@
           {#if camera.profile_token}
             <div class="flex items-center gap-1.5 text-xs th-text-tertiary">
               <span class="font-medium">Profile:</span>
-              <span>{camera.profile_name || camera.profile_token}</span>
-              {#if camera.profile_name}
-                <span class="font-mono text-[10px] th-text-muted">({camera.profile_token})</span>
-              {/if}
+              <span class="truncate max-w-[150px]" title={camera.profile_name || camera.profile_token}>{camera.profile_name || camera.profile_token}</span>
             </div>
           {/if}
           {#if camera.serial_number}

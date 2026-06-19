@@ -147,7 +147,7 @@ func (s *MediaService) GetVideoEncoderConfigurations(ctx context.Context) ([]Vid
 				Width  int `xml:"Width"`
 				Height int `xml:"Height"`
 			} `xml:"Resolution"`
-			Quality      int `xml:"Quality"`
+			Quality      float64 `xml:"Quality"`
 			RateControl  struct {
 				FrameRateLimit int `xml:"FrameRateLimit"`
 				BitrateLimit   int `xml:"BitrateLimit"`
@@ -170,7 +170,7 @@ func (s *MediaService) GetVideoEncoderConfigurations(ctx context.Context) ([]Vid
 			UseCount:       c.UseCount,
 			Encoding:       c.Encoding,
 			Resolution:     Resolution{Width: c.Resolution.Width, Height: c.Resolution.Height},
-			Quality:        c.Quality,
+			Quality:        int(c.Quality),
 			FramerateLimit: c.RateControl.FrameRateLimit,
 			BitrateLimit:   c.RateControl.BitrateLimit,
 			GovLength:      c.H264.GovLength,

@@ -672,8 +672,78 @@ func (cm *CameraManager) prepareCameraForStart(ctx context.Context, cam config.C
 		} else if cam.StreamEncoding == "" {
 			cam.StreamEncoding = strings.ToUpper(selected.Encoding)
 		}
+	} else {
+		// Profile doesn't have encoding info (common with Dahua cameras)
+		// Try to get encoding from VideoEncoderConfigurations
+		encoding := cm.probeEncodingFromVideoEncoderConfigs(ctx, cam, selected.Token)
+		if encoding != "" {
+			logger.Info("detected ONVIF encoding from VideoEncoderConfigurations",
+				"camera_id", cam.ID,
+				"encoding", encoding,
+				"profile_token", selected.Token)
+			cam.Encoding = encoding
+			cam.StreamEncoding = strings.ToUpper(encoding)
+		}
 	}
 	return cam, nil
+}
+
+// probeEncodingFromVideoEncoderConfigs tries to get encoding info from VideoEncoderConfigurations
+// when the profile doesn't include encoding info (common with Dahua cameras).
+// It matches the profile token with the video encoder configuration token.
+func (cm *CameraManager) probeEncodingFromVideoEncoderConfigs(ctx context.Context, cam config.CameraConfig, profileToken string) string {
+	endpoint := cam.ONVIFEndpoint
+	if endpoint == "" {
+		endpoint = cam.URL
+	}
+	client := onvif.NewClient(endpoint, cam.Username, cam.Password)
+	if err := client.Connect(ctx); err != nil {
+		return ""
+	}
+
+	mediaService := client.GetMediaService()
+	if mediaService == nil {
+		return ""
+	}
+	configs, err := mediaService.GetVideoEncoderConfigurations(ctx)
+	if err != nil {
+		return ""
+	}
+
+	// Extract encoder config token from profile token
+	// Dahua pattern: MediaProfile00000 -> encoder config token 00000
+	encoderToken := strings.TrimPrefix(profileToken, "MediaProfile")
+	if encoderToken == profileToken {
+		// No prefix found, try matching by index
+		// Profile tokens: MediaProfile00000, MediaProfile00001, etc.
+		// Config tokens: 00000, 00001, etc.
+		for i, p := range profileToken {
+			if p >= '0' && p <= '9' {
+				encoderToken = profileToken[i:]
+				break
+			}
+		}
+	}
+
+	// Try to find matching config by token
+	for _, c := range configs {
+		if c.Token == encoderToken {
+			encoding := strings.ToLower(c.Encoding)
+			if encoding == string(model.FormatH264) || encoding == string(model.FormatH265) {
+				return encoding
+			}
+		}
+	}
+
+	// Fallback: if only one config, use it
+	if len(configs) == 1 {
+		encoding := strings.ToLower(configs[0].Encoding)
+		if encoding == string(model.FormatH264) || encoding == string(model.FormatH265) {
+			return encoding
+		}
+	}
+
+	return ""
 }
 
 func (cm *CameraManager) loadONVIFProfiles(ctx context.Context, cam config.CameraConfig) ([]onvif.DeviceProfile, error) {
@@ -1635,9 +1705,22 @@ func (cm *CameraManager) startMediaPullLocked(ctx context.Context, cam config.Ca
 		AutoStopNoView: autoStopNoView,
 	})
 	if err != nil {
+		// If stream already exists, it's not an error - the recorder can connect to the existing stream
+		if isDupInStreamError(err) {
+			logger.Info("stream already exists, skipping pull start", "camera_id", cam.ID)
+			return nil
+		}
 		return err
 	}
 	return nil
+}
+
+// isDupInStreamError checks if the error is a duplicate in-stream error from lalmax.
+func isDupInStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "in stream already exist at group")
 }
 
 func (cm *CameraManager) stopMediaPullLocked(ctx context.Context, cameraID string) error {

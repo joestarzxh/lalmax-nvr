@@ -327,3 +327,11 @@ func (c *Client) GetReplayService() *onviflib.ReplayService {
 	}
 	return c.client.ReplayService()
 }
+
+// GetMediaService returns the media service from the underlying client.
+func (c *Client) GetMediaService() *onviflib.MediaService {
+	if c.client == nil {
+		return nil
+	}
+	return c.client.MediaService()
+}

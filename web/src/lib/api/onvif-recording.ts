@@ -12,6 +12,13 @@ export interface ONVIFRecordingSource {
   description: string;
 }
 
+export interface ONVIFRecordingTrack {
+  token: string;
+  track_type: string;
+  description: string;
+  segments?: ONVIFRecordingSegment[];
+}
+
 export interface ONVIFRecording {
   token: string;
   name: string;
@@ -20,6 +27,7 @@ export interface ONVIFRecording {
   start_time: string;
   end_time: string;
   status: string;
+  tracks?: ONVIFRecordingTrack[];
 }
 
 export interface ONVIFRecordingSegment {
@@ -74,6 +82,20 @@ export async function getONVIFRecordings(
   return apiRequest<ONVIFRecordingsResponse>(
     `/cameras/${cameraId}/onvif/recordings${qs ? `?${qs}` : ''}`,
     { signal: params?.signal }
+  );
+}
+
+/**
+ * Get detailed information for a specific recording
+ */
+export async function getONVIFRecordingInformation(
+  cameraId: string,
+  recordingToken: string,
+  signal?: AbortSignal
+): Promise<ONVIFRecording> {
+  return apiRequest<ONVIFRecording>(
+    `/cameras/${cameraId}/onvif/recordings/${encodeURIComponent(recordingToken)}`,
+    { signal }
   );
 }
 

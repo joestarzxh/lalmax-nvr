@@ -83,6 +83,12 @@ func (h *Handler) handleGetONVIFRecordings(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Check if recording service is available
+	if client.GetRecordingService() == nil {
+		writeError(w, http.StatusBadRequest, "device does not support ONVIF recording service")
+		return
+	}
+
 	// Get recordings
 	recordings, err := client.GetRecordings(r.Context())
 	if err != nil {
@@ -102,6 +108,67 @@ func (h *Handler) handleGetONVIFRecordings(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, ONVIFRecordingResponse{
 		Recordings: filtered,
 	})
+}
+
+// handleGetONVIFRecordingInformation gets detailed information for a specific recording.
+func (h *Handler) handleGetONVIFRecordingInformation(w http.ResponseWriter, r *http.Request) {
+	cameraID := chi.URLParam(r, "id")
+	if cameraID == "" {
+		writeError(w, http.StatusBadRequest, "camera ID is required")
+		return
+	}
+
+	recordingToken := chi.URLParam(r, "token")
+	if recordingToken == "" {
+		writeError(w, http.StatusBadRequest, "recording token is required")
+		return
+	}
+
+	// Get camera config
+	cam := h.camMgr.GetCameraConfig(cameraID)
+	if cam == nil {
+		writeError(w, http.StatusNotFound, "camera not found")
+		return
+	}
+
+	// Check if camera is ONVIF protocol
+	if cam.Protocol != "onvif" {
+		writeError(w, http.StatusBadRequest, "camera is not an ONVIF device")
+		return
+	}
+
+	// Create ONVIF client
+	onvifEndpoint := cam.ONVIFEndpoint
+	if onvifEndpoint == "" {
+		onvifEndpoint = cam.URL
+	}
+	client := onvif.NewClient(onvifEndpoint, cam.Username, cam.Password)
+	if err := client.Connect(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to connect to ONVIF device: %v", err))
+		return
+	}
+
+	// Check if recording service is available
+	if client.GetRecordingService() == nil {
+		writeError(w, http.StatusBadRequest, "device does not support ONVIF recording service")
+		return
+	}
+
+	// Get all recordings and find the one matching the token
+	recordings, err := client.GetRecordings(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get recordings: %v", err))
+		return
+	}
+
+	for _, rec := range recordings {
+		if rec.Token == recordingToken {
+			writeJSON(w, http.StatusOK, rec)
+			return
+		}
+	}
+
+	writeError(w, http.StatusNotFound, fmt.Sprintf("recording %q not found", recordingToken))
 }
 
 // handleSearchONVIFRecordings searches for recording segments on an ONVIF device.
@@ -165,6 +232,12 @@ func (h *Handler) handleSearchONVIFRecordings(w http.ResponseWriter, r *http.Req
 	client := onvif.NewClient(onvifEndpoint, cam.Username, cam.Password)
 	if err := client.Connect(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to connect to ONVIF device: %v", err))
+		return
+	}
+
+	// Check if recording service is available
+	if client.GetRecordingService() == nil {
+		writeError(w, http.StatusBadRequest, "device does not support ONVIF recording service")
 		return
 	}
 
@@ -242,6 +315,12 @@ func (h *Handler) handleGetONVIFReplayURI(w http.ResponseWriter, r *http.Request
 	client := onvif.NewClient(onvifEndpoint, cam.Username, cam.Password)
 	if err := client.Connect(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to connect to ONVIF device: %v", err))
+		return
+	}
+
+	// Check if replay service is available
+	if client.GetReplayService() == nil {
+		writeError(w, http.StatusBadRequest, "device does not support ONVIF replay service")
 		return
 	}
 

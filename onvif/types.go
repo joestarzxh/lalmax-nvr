@@ -129,9 +129,10 @@ type RecordingSource struct {
 
 // Track represents a recording track.
 type Track struct {
-	Token       string `json:"token"`
-	TrackType   string `json:"track_type"`
-	Description string `json:"description"`
+	Token       string             `json:"token"`
+	TrackType   string             `json:"track_type"`
+	Description string             `json:"description"`
+	Segments    []RecordingSegment `json:"segments,omitempty"`
 }
 
 // RecordingSegment represents a segment of a recording.

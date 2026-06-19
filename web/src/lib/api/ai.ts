@@ -93,7 +93,7 @@ export function detectAiBackend(): string {
 
 // ─── Backend API ─────────────────────────────────────────────────────────────
 
-import { apiRequest } from './client';
+import { apiRequest, getAuthToken } from './client';
 
 /** AI engine status response from GET /api/ai/status. */
 export interface AiStatusResponse {
@@ -142,7 +142,9 @@ export function subscribeAiEvents(
   onEvent: (event: AiDetectionEvent) => void,
   onError?: (error: Event) => void,
 ): () => void {
-  const eventSource = new EventSource('/api/ai/events');
+  const token = getAuthToken();
+  const authParam = token ? `?token=${encodeURIComponent(token)}` : '';
+  const eventSource = new EventSource(`/api/ai/events${authParam}`);
 
   eventSource.onmessage = (event) => {
     try {

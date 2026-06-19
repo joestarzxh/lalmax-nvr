@@ -224,6 +224,41 @@ func (r *XiaomiRecorder) SetOnHLSFrame(cb func(pts int64, au [][]byte)) {
 	_ = r.Hub.Subscribe("hls", cb)
 }
 
+// forwardHLS feeds a video NALU to HLS consumers via StreamHub.
+// For IDR frames, the codec parameter sets (SPS/PPS or VPS/SPS/PPS) are prepended.
+func (r *XiaomiRecorder) forwardHLS(nalu []byte) {
+	if r.Hub == nil {
+		return
+	}
+
+	pts := time.Since(r.streamStart).Nanoseconds() * 90000 / int64(time.Second)
+
+	var nalus [][]byte
+	var isIDR bool
+	switch r.codec {
+	case model.FormatH264:
+		naluType := nalu[0] & 0x1F
+		if naluType == 5 && r.sps != nil && r.pps != nil {
+			nalus = [][]byte{r.sps, r.pps, nalu}
+			isIDR = true
+		} else {
+			nalus = [][]byte{nalu}
+		}
+	case model.FormatH265:
+		naluType := (nalu[0] >> 1) & 0x3F
+		if (naluType == 19 || naluType == 20) && r.vps != nil && r.sps != nil && r.pps != nil {
+			nalus = [][]byte{r.vps, r.sps, r.pps, nalu}
+			isIDR = true
+		} else {
+			nalus = [][]byte{nalu}
+		}
+	default:
+		return
+	}
+
+	r.Hub.Broadcast(pts, nalus, isIDR)
+}
+
 // incActive increments the active recordings gauge if metrics is available.
 func (r *XiaomiRecorder) incActive() {
 	if r.metrics != nil {
@@ -635,7 +670,7 @@ func missCodecToAudio(codecID uint32) (model.AudioCodec, bool) {
 	}
 }
 
-// forwardAudio feeds audio data to lal via CustomizePubSession.
+// forwardAudio feeds audio data to lal via CustomizePubSession and to HLS consumers via StreamHub.
 func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 	if !r.cfg.AudioEnabled {
 		return
@@ -651,15 +686,19 @@ func (r *XiaomiRecorder) forwardAudio(codecID uint32, payload []byte) {
 		xiaomiLogger.Info("audio codec detected", "camera_id", r.cfg.CameraID, "codec_id", codecID, "codec", audioCodec)
 	}
 
+	pts := time.Since(r.streamStart).Nanoseconds() * 90000 / int64(time.Second)
+
+	// Broadcast to HLS consumers via StreamHub
+	if r.Hub != nil {
+		r.Hub.BroadcastAudio(pts, audioCodec, payload)
+	}
+
 	r.mu.Lock()
 	pub := r.pubSession
-	start := r.streamStart
 	r.mu.Unlock()
 	if pub == nil {
 		return
 	}
-
-	pts := time.Since(start).Nanoseconds() * 90000 / int64(time.Second)
 
 	var pkt base.AvPacket
 	switch audioCodec {

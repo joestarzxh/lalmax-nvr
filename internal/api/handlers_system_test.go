@@ -75,7 +75,7 @@ func TestProtocols(t *testing.T) {
 	parseJSON(t, rr, &resp)
 	protocols, ok := resp["protocols"].([]interface{})
 	require.True(t, ok, "expected protocols array")
-	require.Len(t, protocols, 4) // rtsp, http, onvif, xiaomi
+	require.Len(t, protocols, 8) // rtsp, http, onvif, gb28181, xiaomi, rtmp-pull, http-flv-pull, rtmp
 }
 
 // --- handleBackup tests ---

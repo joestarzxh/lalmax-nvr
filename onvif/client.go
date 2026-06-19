@@ -234,34 +234,30 @@ func (c *Client) parseServiceEndpoints(svcs []Service) *ServiceEndpoints {
 	}
 
 	for _, svc := range svcs {
-		u, err := url.Parse(svc.Namespace)
-		if err != nil {
-			continue
-		}
-
 		svcURL, err := url.Parse(svc.XAddr)
 		if err != nil {
 			continue
 		}
 
 		// Map service by namespace
-		path := u.Path
+		// Media1: http://www.onvif.org/ver10/media/wsdl
+		// Media2: http://www.onvif.org/ver20/media/wsdl
 		switch {
-		case contains(path, "/media/wsdl") && !contains(path, "/media2/wsdl"):
+		case svc.Namespace == "http://www.onvif.org/ver10/media/wsdl":
 			endpoints.Media = svcURL
-		case contains(path, "/media2/wsdl"):
+		case svc.Namespace == "http://www.onvif.org/ver20/media/wsdl":
 			endpoints.Media2 = svcURL
-		case contains(path, "/recording/wsdl"):
+		case contains(svc.Namespace, "/recording/wsdl"):
 			endpoints.Recording = svcURL
-		case contains(path, "/search/wsdl"):
+		case contains(svc.Namespace, "/search/wsdl"):
 			endpoints.Search = svcURL
-		case contains(path, "/replay/wsdl"):
+		case contains(svc.Namespace, "/replay/wsdl"):
 			endpoints.Replay = svcURL
-		case contains(path, "/ptz/wsdl"):
+		case contains(svc.Namespace, "/ptz/wsdl"):
 			endpoints.PTZ = svcURL
-		case contains(path, "/imaging/wsdl"):
+		case contains(svc.Namespace, "/imaging/wsdl"):
 			endpoints.Imaging = svcURL
-		case contains(path, "/events/wsdl"):
+		case contains(svc.Namespace, "/events/wsdl"):
 			endpoints.Events = svcURL
 		}
 	}

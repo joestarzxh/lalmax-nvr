@@ -95,6 +95,105 @@ func (s *RecordingService) GetRecordings(ctx context.Context) ([]Recording, erro
 	return recordings, nil
 }
 
+// GetRecordingDetails retrieves detailed recording information including segments.
+func (s *RecordingService) GetRecordingDetails(ctx context.Context, recordingToken string) (*Recording, error) {
+	body := fmt.Sprintf(`<GetRecordingInformation xmlns="http://www.onvif.org/ver10/recording/wsdl">
+  <RecordingToken>%s</RecordingToken>
+</GetRecordingInformation>`, recordingToken)
+
+	resp, err := s.client.soap.Send(&SOAPRequest{
+		ServiceURL: s.client.endpoints.Recording.String(),
+		Body:       body,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("onvif: GetRecordingInformation failed: %w", err)
+	}
+
+	var result struct {
+		XMLName xml.Name `xml:"GetRecordingInformationResponse"`
+		RecordingInformation struct {
+			RecordingToken string `xml:"RecordingToken"`
+			Source         struct {
+				SourceID    string `xml:"SourceId"`
+				Name        string `xml:"Name"`
+				Location    string `xml:"Location"`
+				Description string `xml:"Description"`
+			} `xml:"Source"`
+			Content []struct {
+				Name string `xml:"Name"`
+			} `xml:"Content"`
+			Tracks struct {
+				Track []struct {
+					TrackToken string `xml:"TrackToken"`
+					Configuration struct {
+						TrackType   string `xml:"TrackType"`
+						Description string `xml:"Description"`
+					} `xml:"Configuration"`
+					Segment []struct {
+						SegmentToken string `xml:"SegmentToken"`
+						Start        string `xml:"Start"`
+						End          string `xml:"End"`
+						Duration     string `xml:"Duration"`
+						Size         int64  `xml:"Size"`
+					} `xml:"Segment"`
+				} `xml:"Track"`
+			} `xml:"Tracks"`
+		} `xml:"RecordingInformation"`
+	}
+
+	if err := ParseResponseBody(resp.Body, &result); err != nil {
+		return nil, err
+	}
+
+	info := result.RecordingInformation
+	rec := &Recording{
+		Token:       info.RecordingToken,
+		Description: info.Source.Description,
+		Source: RecordingSource{
+			SourceID:    info.Source.SourceID,
+			Name:        info.Source.Name,
+			Location:    info.Source.Location,
+			Description: info.Source.Description,
+		},
+		Status: "active",
+	}
+
+	// Extract name from content
+	if len(info.Content) > 0 {
+		rec.Name = info.Content[0].Name
+	}
+
+	// Extract tracks and segments
+	for _, t := range info.Tracks.Track {
+		track := Track{
+			Token:       t.TrackToken,
+			TrackType:   t.Configuration.TrackType,
+			Description: t.Configuration.Description,
+		}
+
+		for _, seg := range t.Segment {
+			segment := RecordingSegment{
+				Token:          seg.SegmentToken,
+				RecordingToken: info.RecordingToken,
+				Size:           seg.Size,
+			}
+
+			if startTime, err := time.Parse(time.RFC3339, seg.Start); err == nil {
+				segment.StartTime = startTime
+			}
+			if endTime, err := time.Parse(time.RFC3339, seg.End); err == nil {
+				segment.EndTime = endTime
+			}
+
+			track.Segments = append(track.Segments, segment)
+		}
+
+		rec.Tracks = append(rec.Tracks, track)
+	}
+
+	return rec, nil
+}
+
 // SearchRecordings searches for recording segments with pagination support.
 func (s *RecordingService) SearchRecordings(ctx context.Context, filter SearchFilter) (*SearchResult, error) {
 	maxResults := filter.MaxResults

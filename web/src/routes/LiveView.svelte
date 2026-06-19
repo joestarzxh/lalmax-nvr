@@ -275,7 +275,7 @@
         <span class="badge badge-neutral">{protocolsMap.get(camera.protocol)?.label || camera.protocol}</span>
 
         {#if isOnvifCamera(camera) && camera.profile_token}
-          <span class="badge badge-outline text-xs">
+          <span class="badge badge-outline text-xs max-w-[150px] truncate" title={camera.profile_name || camera.profile_token}>
             {camera.profile_name || camera.profile_token}
           </span>
         {/if}
