@@ -1,8 +1,10 @@
 package gb28181
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 )
 
 type MessageDeviceListResponse struct {
@@ -40,24 +42,75 @@ func (g *GB28181API) handleCatalogResponse(deviceID string, body []byte) {
 
 	// Build channel list for database
 	var dbChannels []Channel
+	newChannelMap := make(map[string]bool)
+	
 	for _, ch := range msg.Item {
 		ch.ChannelID = ch.DeviceID
 		ch.DeviceID = deviceID
 		channel := &Channel{
 			ChannelID: ch.ChannelID,
+			Name:      ch.Name,
 			device:    dev,
 		}
 		channel.init(domain)
-		dev.Channels.Store(ch.ChannelID, channel)
+		newChannelMap[ch.ChannelID] = true
 		dbChannels = append(dbChannels, *channel)
 	}
+
+	// 内存全量替换
+	dev.Channels = sync.Map{}
+	for i := range dbChannels {
+		dev.Channels.Store(dbChannels[i].ChannelID, &dbChannels[i])
+	}
+
+	// 获取现有通道用于失踪计数
+	existingChannels := g.getExistingChannelIDs(deviceID)
 
 	// Persist channels to database
 	if err := g.store.SaveChannels(deviceID, dbChannels); err != nil {
 		slog.Error("failed to save channels to DB", "device_id", deviceID, "error", err)
 	}
 
+	// 更新失踪计数
+	for _, chID := range existingChannels {
+		if !newChannelMap[chID] {
+			if err := g.store.GetDB().IncrementMissingCount(context.Background(), deviceID, chID); err != nil {
+				slog.Error("failed to increment missing count",
+					"device_id", deviceID,
+					"channel_id", chID,
+					"error", err)
+			}
+		}
+	}
+
+	// 广播通道更新事件
+	if g.hub != nil {
+		g.hub.Broadcast(Event{
+			Type: EventChannelUpdate,
+			Data: map[string]interface{}{
+				"device_id":     deviceID,
+				"channel_count": len(dbChannels),
+			},
+		})
+	}
+
 	slog.Info("catalog updated", "device_id", deviceID, "channels", len(msg.Item))
+}
+
+// getExistingChannelIDs returns existing channel IDs for a device.
+func (g *GB28181API) getExistingChannelIDs(deviceID string) []string {
+	ctx := context.Background()
+	channels, err := g.store.GetDB().ListGB28181Channels(ctx, deviceID)
+	if err != nil {
+		slog.Error("failed to list existing channels", "device_id", deviceID, "error", err)
+		return nil
+	}
+	
+	var channelIDs []string
+	for _, ch := range channels {
+		channelIDs = append(channelIDs, ch.ChannelID)
+	}
+	return channelIDs
 }
 
 func (g *GB28181API) QueryCatalog(deviceID string) error {

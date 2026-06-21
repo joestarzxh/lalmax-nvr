@@ -51,6 +51,7 @@ func (d *Device) GetChannel(channelID string) (*Channel, bool) {
 
 type Channel struct {
 	ChannelID string
+	Name      string
 	uriStr    string
 	device    *Device
 }
@@ -71,11 +72,13 @@ func (c *Channel) init(domain string) {
 type DeviceStore struct {
 	devices sync.Map
 	db      *storage.DB
+	hub     *WSHub
 }
 
-func NewDeviceStore(db *storage.DB) *DeviceStore {
+func NewDeviceStore(db *storage.DB, hub *WSHub) *DeviceStore {
 	return &DeviceStore{
-		db: db,
+		db:  db,
+		hub: hub,
 	}
 }
 
@@ -113,6 +116,7 @@ func (s *DeviceStore) LoadFromDB() error {
 			for _, ch := range channels {
 				channel := &Channel{
 					ChannelID: ch.ChannelID,
+					Name:      ch.Name,
 					device:    dev,
 				}
 				dev.Channels.Store(ch.ChannelID, channel)
@@ -194,7 +198,26 @@ func (s *DeviceStore) SaveDevice(deviceID string, dev *Device) error {
 // UpdateDeviceStatus updates device online status in database.
 func (s *DeviceStore) UpdateDeviceStatus(deviceID string, isOnline bool, address string) error {
 	ctx := context.Background()
-	return s.db.UpdateGB28181DeviceStatus(ctx, deviceID, isOnline, address)
+	if err := s.db.UpdateGB28181DeviceStatus(ctx, deviceID, isOnline, address); err != nil {
+		return err
+	}
+
+	// 广播事件
+	if s.hub != nil {
+		eventType := EventDeviceOffline
+		if isOnline {
+			eventType = EventDeviceOnline
+		}
+		s.hub.Broadcast(Event{
+			Type: eventType,
+			Data: map[string]interface{}{
+				"device_id": deviceID,
+				"is_online": isOnline,
+			},
+		})
+	}
+
+	return nil
 }
 
 // UpdateDeviceRegistration updates device registration info in database.
@@ -209,7 +232,7 @@ func (s *DeviceStore) UpdateDeviceOnlineStatus(deviceID string, isOnline bool) e
 	return s.db.UpdateGB28181DeviceOnlineStatus(ctx, deviceID, isOnline)
 }
 
-// SaveChannels persists channels to database.
+// SaveChannels persists channels to database using incremental update.
 func (s *DeviceStore) SaveChannels(deviceID string, channels []Channel) error {
 	ctx := context.Background()
 	dbChannels := make([]storage.GB28181ChannelRow, len(channels))
@@ -217,9 +240,10 @@ func (s *DeviceStore) SaveChannels(deviceID string, channels []Channel) error {
 		dbChannels[i] = storage.GB28181ChannelRow{
 			DeviceID:  deviceID,
 			ChannelID: ch.ChannelID,
+			Name:      ch.Name,
 		}
 	}
-	return s.db.ReplaceGB28181Channels(ctx, deviceID, dbChannels)
+	return s.db.BatchUpsertChannels(ctx, deviceID, dbChannels)
 }
 
 // SaveDeviceInfo persists device info (manufacturer, model, firmware) to database.

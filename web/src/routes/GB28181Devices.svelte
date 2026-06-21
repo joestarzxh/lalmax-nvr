@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { listGB28181Devices, playGB28181Stream, stopGB28181Stream } from '$lib/api';
   import type { GB28181Device } from '$lib/api';
   import { t } from '$lib/i18n';
@@ -11,6 +11,8 @@
   let error = $state('');
   let playingStreams = $state<Set<string>>(new Set());
   let expandedDevice = $state<string | null>(null);
+  let ws = $state<WebSocket | null>(null);
+  let wsConnected = $state(false);
 
   function syncPlayingStreams(deviceList: GB28181Device[]) {
     const newPlaying = new Set<string>();
@@ -22,6 +24,63 @@
       }
     }
     playingStreams = newPlaying;
+  }
+
+  function connectWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsURL = `${protocol}//${window.location.host}/api/gb28181/ws`;
+    
+    ws = new WebSocket(wsURL);
+    
+    ws.onopen = () => {
+      wsConnected = true;
+      console.log('WebSocket connected');
+    };
+    
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        handleWebSocketEvent(data);
+      } catch (e) {
+        console.error('Failed to parse WebSocket message:', e);
+      }
+    };
+    
+    ws.onclose = () => {
+      wsConnected = false;
+      console.log('WebSocket disconnected');
+      // 重连
+      setTimeout(connectWebSocket, 3000);
+    };
+    
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+    };
+  }
+
+  function handleWebSocketEvent(event: { type: string; data: Record<string, unknown> }) {
+    switch (event.type) {
+      case 'device.online':
+      case 'device.offline':
+        // 更新设备状态
+        updateDeviceStatus(event.data.device_id as string, event.data.is_online as boolean);
+        break;
+      case 'channel.update':
+      case 'channel.delete':
+      case 'channel.offline':
+        // 刷新设备列表
+        loadDevices();
+        break;
+    }
+  }
+
+  function updateDeviceStatus(deviceID: string, isOnline: boolean) {
+    devices = devices.map(d => {
+      if (d.device_id === deviceID) {
+        return { ...d, is_online: isOnline };
+      }
+      return d;
+    });
   }
 
   async function loadDevices() {
@@ -94,6 +153,13 @@
 
   onMount(() => {
     loadDevices();
+    connectWebSocket();
+  });
+
+  onDestroy(() => {
+    if (ws) {
+      ws.close();
+    }
   });
 </script>
 
@@ -104,14 +170,19 @@
         <h1 class="text-2xl font-bold th-text-primary">GB28181 设备</h1>
         <p class="text-sm th-text-secondary mt-1">国标 GB28181 SIP 设备管理</p>
       </div>
-      <button
-        onclick={loadDevices}
-        class="btn btn-secondary flex items-center gap-2"
-        disabled={loading}
-      >
-        <RefreshCw class="w-4 h-4 {loading ? 'animate-spin' : ''}" />
-        刷新
-      </button>
+      <div class="flex items-center gap-3">
+        <div class="ws-status" class:connected={wsConnected}>
+          {wsConnected ? '实时更新已连接' : '实时更新已断开'}
+        </div>
+        <button
+          onclick={loadDevices}
+          class="btn btn-secondary flex items-center gap-2"
+          disabled={loading}
+        >
+          <RefreshCw class="w-4 h-4 {loading ? 'animate-spin' : ''}" />
+          刷新
+        </button>
+      </div>
     </div>
 
     {#if error}
@@ -275,3 +346,18 @@
     {/if}
   </main>
 </div>
+
+<style>
+  .ws-status {
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    background-color: #fee2e2;
+    color: #dc2626;
+  }
+  
+  .ws-status.connected {
+    background-color: #dcfce7;
+    color: #16a34a;
+  }
+</style>

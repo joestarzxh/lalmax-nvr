@@ -28,11 +28,13 @@ type Server struct {
 	talk      *TalkManager
 	alarm     *AlarmManager
 	download  *DownloadManager
+	hub       *WSHub
 }
 
 // NewServer creates and starts a GB28181 SIP server.
 func NewServer(cfg *Config, mediaEngine media.Engine, db *storage.DB) (*Server, func()) {
-	store := NewDeviceStore(db)
+	hub := NewWSHub()
+	store := NewDeviceStore(db, hub)
 	
 	// Load devices from database
 	if err := store.LoadFromDB(); err != nil {
@@ -74,6 +76,7 @@ func NewServer(cfg *Config, mediaEngine media.Engine, db *storage.DB) (*Server, 
 		client: client,
 		cfg:    cfg,
 		store:  store,
+		hub:    hub,
 	}
 
 	api := NewGB28181API(cfg, store, client, mediaEngine)
@@ -115,6 +118,8 @@ func NewServer(cfg *Config, mediaEngine media.Engine, db *storage.DB) (*Server, 
 		}
 	}()
 	go s.startTickerCheck()
+	go s.hub.Run()
+	go s.startChannelMissingScan()
 
 	// Load upstream platforms
 	go func() {
@@ -164,6 +169,59 @@ func (s *Server) startTickerCheck() {
 			}
 			return true
 		})
+	}
+}
+
+// startChannelMissingScan starts a goroutine that periodically scans for missing channels.
+func (s *Server) startChannelMissingScan() {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.scanMissingChannels()
+	}
+}
+
+// scanMissingChannels checks for channels with high missing_count and marks them offline.
+func (s *Server) scanMissingChannels() {
+	ctx := context.Background()
+	
+	// 查询 missing_count >= 3 的通道
+	channels, err := s.store.GetDB().ListMissingChannels(ctx, 3)
+	if err != nil {
+		slog.Error("failed to list missing channels", "error", err)
+		return
+	}
+
+	for _, ch := range channels {
+		// 标记为离线
+		if err := s.store.GetDB().UpdateChannelStatus(ctx,
+			ch.DeviceID, ch.ChannelID, "offline"); err != nil {
+			slog.Error("failed to update channel status",
+				"device_id", ch.DeviceID,
+				"channel_id", ch.ChannelID,
+				"error", err)
+			continue
+		}
+
+		// 从内存中删除
+		if dev, ok := s.store.Load(ch.DeviceID); ok {
+			dev.Channels.Delete(ch.ChannelID)
+		}
+
+		// 广播事件
+		s.hub.Broadcast(Event{
+			Type: EventChannelOffline,
+			Data: map[string]interface{}{
+				"device_id":  ch.DeviceID,
+				"channel_id": ch.ChannelID,
+			},
+		})
+
+		slog.Info("channel marked offline due to missing",
+			"device_id", ch.DeviceID,
+			"channel_id", ch.ChannelID,
+			"missing_count", ch.MissingCount)
 	}
 }
 

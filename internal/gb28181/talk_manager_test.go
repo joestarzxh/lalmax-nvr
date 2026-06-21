@@ -11,7 +11,8 @@ func TestNewTalkManager(t *testing.T) {
 		Port:    5060,
 	}
 
-	tm := NewTalkManager(nil, cfg, NewDeviceStore(nil))
+	hub := NewWSHub()
+	tm := NewTalkManager(nil, cfg, NewDeviceStore(nil, hub))
 
 	if tm == nil {
 		t.Fatal("Expected TalkManager to be created")

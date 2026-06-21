@@ -21,6 +21,7 @@ type GB28181API struct {
 	svr         *Server
 	client      *sipgo.Client
 	mediaEngine media.Engine
+	hub         *WSHub
 }
 
 // NewGB28181API creates a new GB28181API instance.
@@ -31,6 +32,7 @@ func NewGB28181API(cfg *Config, store *DeviceStore, client *sipgo.Client, mediaE
 		streams:     globalStreams,
 		client:      client,
 		mediaEngine: mediaEngine,
+		hub:         store.hub,
 	}
 }
 
