@@ -311,7 +311,7 @@
   </div>
 
   <!-- Camera AI Toggle -->
-  {#if aiStatus && aiStatus.backend === 'http'}
+  {#if aiStatus && aiStatus.available}
     <div class="card border th-border p-6 mb-6">
       <h2 class="text-lg font-semibold th-text-primary mb-4 flex items-center gap-2">
         <Activity size={20} /> 摄像头 AI 检测

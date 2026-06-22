@@ -1,0 +1,49 @@
+# Docker Compose for gocv-yolo Service (Python + YOLO)
+#
+# Usage:
+#   docker compose -f docker-compose.gocv-yolo.yml up -d
+#
+# This service:
+#   - Connects to lalmax-nvr API to get camera list
+#   - Subscribes to RTSP streams using OpenCV
+#   - Runs YOLO inference on frames
+#   - Sends detections to lalmax-nvr webhook
+#
+# Prerequisites:
+#   - lalmax-nvr running on host (port 9090)
+#   - RTSP stream available (port 15544)
+
+services:
+  gocv-yolo:
+    build:
+      context: ./docker/gocv-yolo
+      dockerfile: Dockerfile
+    environment:
+      # NVR connection
+      - NVR_URL=http://host.docker.internal:9090
+      # NVR auth (base64 encoded "username:password")
+      # Generate with: echo -n "admin:admin123" | base64
+      - NVR_AUTH=YWRtaW46YWRtaW4xMjM=
+      # YOLO configuration
+      - YOLO_MODEL=yolov8n.pt
+      - CONFIDENCE=0.5
+      - NMS_THRESHOLD=0.4
+      # Frame processing
+      - FRAME_SKIP=5  # Process every 5th frame
+      - SYNC_INTERVAL=30  # Sync camera list every 30 seconds
+      - RTSP_PORT=15544  # lalmax RTSP port
+      # Health check port
+      - PORT=8080
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8081:8080"  # Health check port (mapped to 8081 to avoid conflict)
+    restart: unless-stopped
+    # GPU support (uncomment if available)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]

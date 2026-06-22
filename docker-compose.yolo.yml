@@ -1,0 +1,27 @@
+# Docker Compose for YOLO Service only
+#
+# Usage:
+#   docker compose -f docker-compose.yolo.yml up -d
+#
+# This starts only the YOLO object detection service.
+# Use this when running lalmax-nvr natively on macOS.
+
+services:
+  yolo-service:
+    build:
+      context: ./docker/yolo-service
+      dockerfile: Dockerfile
+    environment:
+      - PORT=18888
+      - MODEL=yolov8n.pt
+      - CONFIDENCE=0.5
+      - DEVICE=cpu
+    ports:
+      - "18888:18888"
+    restart: unless-stopped
+    networks:
+      - yolo
+
+networks:
+  yolo:
+    name: yolo-network
