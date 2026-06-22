@@ -1,5 +1,5 @@
 # ---- Stage 1: Build frontend SPA ----
-FROM node:22-slim AS frontend
+FROM node:24-slim AS frontend
 
 WORKDIR /build/web
 
@@ -18,6 +18,8 @@ WORKDIR /build
 
 # Cache go module downloads
 COPY go.mod go.sum ./
+COPY third/lal/go.mod third/lal/go.sum ./third/lal/
+COPY third/lalmax/go.mod third/lalmax/go.sum ./third/lalmax/
 RUN go mod download
 
 # Copy Go source

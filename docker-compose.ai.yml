@@ -14,39 +14,36 @@
 
 services:
   lalmax-nvr:
-    image: lalmax-nvr:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/lalmax-pro/lalmax-nvr:latest
+    container_name: lalmax-nvr
+    restart: unless-stopped
     ports:
       - "9090:9090"
       - "5060:5060/tcp"
       - "5060:5060/udp"
     volumes:
-      - ./data:/var/lib/lalmax-nvr
+      - ./data:/data
     environment:
-      - YOLO_SERVICE_URL=http://yolo-service:8080
-    restart: unless-stopped
+      - NVR_DATA_DIR=/data
+      - YOLO_SERVICE_URL=http://yolo-service:18888
 
-  # YOLO Service - Local object detection
-  # Uncomment to enable local YOLO detection
-  # yolo-service:
-  #   build:
-  #     context: ./docker/yolo-service
-  #     dockerfile: Dockerfile
-  #   environment:
-  #     - PORT=8080
-  #     - MODEL=yolov8n.pt
-  #     - CONFIDENCE=0.5
-  #     - DEVICE=cpu
-  #   ports:
-  #     - "8080:8080"
-  #   restart: unless-stopped
-  #   # Uncomment for GPU support (requires nvidia-docker):
-  #   # deploy:
-  #   #   resources:
-  #   #     reservations:
-  #   #       devices:
-  #   #         - driver: nvidia
-  #   #           count: 1
-  #   #           capabilities: [gpu]
+  yolo-service:
+    build:
+      context: ./docker/yolo-service
+      dockerfile: Dockerfile
+    environment:
+      - PORT=18888
+      - MODEL=yolov8n.pt
+      - CONFIDENCE=0.5
+      - DEVICE=cpu
+    ports:
+      - "18888:18888"
+    restart: unless-stopped
+    # Uncomment for GPU support (requires nvidia-docker):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
