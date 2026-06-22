@@ -163,6 +163,10 @@ type GB28181Restarter interface {
 	RestartGB28181(ctx context.Context, cfg *config.GB28181Config) error
 }
 
+type GB28181ServerProvider interface {
+	CurrentGB28181Server() *gb28181.Server
+}
+
 func (h *Handler) SetConfigWatcher(w *config.Watcher) {
 	h.configWatcher = w
 }
@@ -221,6 +225,9 @@ func (h *Handler) SetMultiUserAuthMW(mw func(http.Handler) http.Handler) {
 // SetAIManager sets the AI Manager on the handler.
 func (h *Handler) SetAIManager(mgr *ai.Manager) {
 	h.aiManager = mgr
+	if h.aiManager != nil && h.db != nil {
+		h.aiManager.SetStore(h.db)
+	}
 }
 
 // Routes returns a chi.Router with all routes registered.
@@ -423,7 +430,12 @@ func (h *Handler) Routes() http.Handler {
 			r.Post("/enable", h.handleEnableAI)
 			r.Post("/disable", h.handleDisableAI)
 			r.Get("/events", h.handleAIEvents)
+			r.Get("/detections", h.handleListAIDetections)
+			r.Get("/analyses", h.handleListAIAnalyses)
 			r.Post("/webhook", h.handleAIWebhook)
+			// Multimodal analysis routes
+			r.Get("/multimodal/status", h.handleAIMultimodalStatus)
+			r.Get("/multimodal/events", h.handleAIMultimodalEvents)
 		})
 		// Snapshot endpoints
 		r.Route("/api/snapshots", func(r chi.Router) {

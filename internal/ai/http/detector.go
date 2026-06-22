@@ -32,7 +32,7 @@ type Detection struct {
 
 // detectRequest is the JSON body sent to the remote AI service.
 type detectRequest struct {
-	Frame     string `json:"frame"`      // base64-encoded JPEG
+	Frame     string `json:"frame"` // base64-encoded JPEG
 	CameraID  string `json:"camera_id"`
 	Timestamp int64  `json:"timestamp"`
 }

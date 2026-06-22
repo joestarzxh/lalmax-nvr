@@ -17,23 +17,23 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/event"
 	"github.com/lalmax-pro/lalmax-nvr/internal/metrics"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
-	"github.com/lalmax-pro/lalmax-nvr/internal/event"
 )
 
 var httpJpegLogger = slog.Default().With("component", "http-jpeg-recorder")
 
 // HTTPJPEGConfig holds configuration for the HTTP JPEG recorder.
 type HTTPJPEGConfig struct {
-	CameraID   string
-	URL        string
-	SegmentDur time.Duration
-	Username   string // for basic auth (optional)
-	Password   string // for basic auth (optional)
-	DB         RecordingDB
-	MaxBackoff time.Duration   // Deprecated: no longer used, tiered backoff is used instead
-	InitBackoff time.Duration  // Deprecated: no longer used, tiered backoff is used instead
+	CameraID    string
+	URL         string
+	SegmentDur  time.Duration
+	Username    string // for basic auth (optional)
+	Password    string // for basic auth (optional)
+	DB          RecordingDB
+	MaxBackoff  time.Duration // Deprecated: no longer used, tiered backoff is used instead
+	InitBackoff time.Duration // Deprecated: no longer used, tiered backoff is used instead
 	EventBus    *event.EventBus
 }
 
@@ -44,26 +44,26 @@ type HTTPJPEGRecorder struct {
 	metrics *metrics.Metrics
 	client  *http.Client
 
-	mu     sync.Mutex
-	status model.RecorderStatus
-	cancel context.CancelFunc
+	mu           sync.Mutex
+	status       model.RecorderStatus
+	cancel       context.CancelFunc
 	cancelStream context.CancelFunc
 	done         chan struct{}
 	watchdogDone chan struct{}
 
 	lastFrameTime atomic.Int64 // Unix timestamp of last received frame
-	curTempPath  string
-	curFinalPath string
-	segStart     time.Time
-	frameCount   int
-	Hub *model.StreamHub // Frame fan-out (nil for HTTP-JPEG — no HLS support, reserved for future consumers)
+	curTempPath   string
+	curFinalPath  string
+	segStart      time.Time
+	frameCount    int
+	Hub           *model.StreamHub // Frame fan-out (nil for HTTP-JPEG — no HLS support, reserved for future consumers)
 
 	// Reconnect tracking — populated on disconnect, consumed on first segment after recovery.
 	disconnectedAt      time.Time // when the connection was lost (zero = not reconnecting)
 	reconnectTime       time.Time // when the connection was restored
 	retryCount          int       // number of reconnect attempts at recovery point
 	gapReason           string    // why the disconnect happened
-	hasPendingReconnect bool     // true if next segment should carry reconnection metadata
+	hasPendingReconnect bool      // true if next segment should carry reconnection metadata
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -339,6 +339,9 @@ func (r *HTTPJPEGRecorder) connectAndStream(ctx context.Context) (error, bool) {
 		if len(data) < 2 || data[0] != 0xFF || data[1] != 0xD8 {
 			httpJpegLogger.Warn("skipping invalid frame (missing JPEG magic)", "camera_id", r.cfg.CameraID, "size", len(data))
 			continue
+		}
+		if r.Hub != nil {
+			r.Hub.Broadcast(time.Now().UnixMilli(), [][]byte{data}, true)
 		}
 
 		// Create segment if needed

@@ -18,6 +18,7 @@ import (
 // GB28181Handler provides HTTP API endpoints for GB28181 management.
 type GB28181Handler struct {
 	svr         *gb28181.Server
+	svrProvider func() *gb28181.Server
 	camMgr      *camera.CameraManager
 	db          *storage.DB
 	mediaEngine media.Engine
@@ -33,15 +34,34 @@ func NewGB28181Handler(svr *gb28181.Server, camMgr *camera.CameraManager, db *st
 	}
 }
 
+// NewDynamicGB28181Handler creates a handler that resolves the current server
+// for every request. This is required because GB28181 can be enabled, disabled,
+// or restarted from the settings page after the HTTP router has been built.
+func NewDynamicGB28181Handler(provider func() *gb28181.Server, camMgr *camera.CameraManager, db *storage.DB, mediaEngine media.Engine) *GB28181Handler {
+	return &GB28181Handler{
+		svrProvider: provider,
+		camMgr:      camMgr,
+		db:          db,
+		mediaEngine: mediaEngine,
+	}
+}
+
+func (h *GB28181Handler) server() *gb28181.Server {
+	if h.svrProvider != nil {
+		return h.svrProvider()
+	}
+	return h.svr
+}
+
 // ListDevices returns all registered GB28181 devices.
 func (h *GB28181Handler) ListDevices(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"devices": []interface{}{},
 		})
 		return
 	}
-	devices := h.svr.ListDevices()
+	devices := h.server().ListDevices()
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"devices": devices,
 	})
@@ -56,7 +76,7 @@ type PlayRequest struct {
 
 // Play starts a GB28181 play session.
 func (h *GB28181Handler) Play(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -76,7 +96,7 @@ func (h *GB28181Handler) Play(w http.ResponseWriter, r *http.Request) {
 		streamID = gb28181.StreamID(req.DeviceID, req.ChannelID)
 	}
 
-	ssrc, err := h.svr.Play(&gb28181.PlayInput{
+	ssrc, err := h.server().Play(&gb28181.PlayInput{
 		DeviceID:   req.DeviceID,
 		ChannelID:  req.ChannelID,
 		StreamMode: 0, // Default to UDP
@@ -158,7 +178,7 @@ type StopPlayRequest struct {
 
 // StopPlay stops a GB28181 play session.
 func (h *GB28181Handler) StopPlay(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -173,7 +193,7 @@ func (h *GB28181Handler) StopPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svr.StopPlay(&gb28181.StopPlayInput{
+	if err := h.server().StopPlay(&gb28181.StopPlayInput{
 		DeviceID:  req.DeviceID,
 		ChannelID: req.ChannelID,
 	}); err != nil {
@@ -194,7 +214,7 @@ type PTZRequest struct {
 
 // PTZControl sends a PTZ control command.
 func (h *GB28181Handler) PTZControl(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -224,7 +244,7 @@ func (h *GB28181Handler) PTZControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svr.PTZControl(req.DeviceID, req.ChannelID, ptzCmd); err != nil {
+	if err := h.server().PTZControl(req.DeviceID, req.ChannelID, ptzCmd); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -242,7 +262,7 @@ type RecordInfoRequest struct {
 
 // RecordInfo queries a device for its recording list.
 func (h *GB28181Handler) RecordInfo(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -268,7 +288,7 @@ func (h *GB28181Handler) RecordInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records, err := h.svr.QueryRecordInfo(req.DeviceID, req.ChannelID, startTime, endTime)
+	records, err := h.server().QueryRecordInfo(req.DeviceID, req.ChannelID, startTime, endTime)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -288,7 +308,7 @@ type PlaybackRequest struct {
 
 // Playback starts a historical video playback session.
 func (h *GB28181Handler) Playback(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -319,7 +339,7 @@ func (h *GB28181Handler) Playback(w http.ResponseWriter, r *http.Request) {
 		streamID = gb28181.StreamID(req.DeviceID, req.ChannelID) + "_pb"
 	}
 
-	ssrc, err := h.svr.Playback(&gb28181.PlaybackInput{
+	ssrc, err := h.server().Playback(&gb28181.PlaybackInput{
 		DeviceID:   req.DeviceID,
 		ChannelID:  req.ChannelID,
 		StreamMode: 0,
@@ -345,7 +365,7 @@ func (h *GB28181Handler) Playback(w http.ResponseWriter, r *http.Request) {
 
 // PlaySpeed changes the playback speed.
 func (h *GB28181Handler) PlaySpeed(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -369,7 +389,7 @@ func (h *GB28181Handler) PlaySpeed(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svr.PlaySpeed(&gb28181.PlaySpeedInput{
+	if err := h.server().PlaySpeed(&gb28181.PlaySpeedInput{
 		DeviceID:  req.DeviceID,
 		ChannelID: req.ChannelID,
 		Speed:     req.Speed,
@@ -384,7 +404,7 @@ func (h *GB28181Handler) PlaySpeed(w http.ResponseWriter, r *http.Request) {
 
 // PlaySeek seeks to a position in playback.
 func (h *GB28181Handler) PlaySeek(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -403,7 +423,7 @@ func (h *GB28181Handler) PlaySeek(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svr.PlaySeek(&gb28181.PlaySeekInput{
+	if err := h.server().PlaySeek(&gb28181.PlaySeekInput{
 		DeviceID:  req.DeviceID,
 		ChannelID: req.ChannelID,
 		SeekTime:  req.SeekTime,
@@ -418,7 +438,7 @@ func (h *GB28181Handler) PlaySeek(w http.ResponseWriter, r *http.Request) {
 
 // PlayPause pauses playback.
 func (h *GB28181Handler) PlayPause(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -436,7 +456,7 @@ func (h *GB28181Handler) PlayPause(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svr.PlayPause(&gb28181.PlayPauseInput{
+	if err := h.server().PlayPause(&gb28181.PlayPauseInput{
 		DeviceID:  req.DeviceID,
 		ChannelID: req.ChannelID,
 	}); err != nil {
@@ -450,7 +470,7 @@ func (h *GB28181Handler) PlayPause(w http.ResponseWriter, r *http.Request) {
 
 // PlayResume resumes playback.
 func (h *GB28181Handler) PlayResume(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -468,7 +488,7 @@ func (h *GB28181Handler) PlayResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svr.PlayResume(&gb28181.PlayPauseInput{
+	if err := h.server().PlayResume(&gb28181.PlayPauseInput{
 		DeviceID:  req.DeviceID,
 		ChannelID: req.ChannelID,
 	}); err != nil {
@@ -484,11 +504,11 @@ func (h *GB28181Handler) PlayResume(w http.ResponseWriter, r *http.Request) {
 
 // ListPlatforms returns all upstream platforms.
 func (h *GB28181Handler) ListPlatforms(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"platforms": []interface{}{}})
 		return
 	}
-	pm := h.svr.GetPlatforms()
+	pm := h.server().GetPlatforms()
 	if pm == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"platforms": []interface{}{}})
 		return
@@ -536,7 +556,7 @@ type AddPlatformRequest struct {
 
 // AddPlatform adds a new upstream platform.
 func (h *GB28181Handler) AddPlatform(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -552,13 +572,13 @@ func (h *GB28181Handler) AddPlatform(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.DeviceGBID == "" {
-		req.DeviceGBID = h.svr.GetConfig().ID
+		req.DeviceGBID = h.server().GetConfig().ID
 	}
 	if req.DeviceIP == "" {
-		req.DeviceIP = h.svr.GetConfig().MediaIP
+		req.DeviceIP = h.server().GetConfig().MediaIP
 	}
 	if req.DevicePort == 0 {
-		req.DevicePort = h.svr.GetConfig().Port
+		req.DevicePort = h.server().GetConfig().Port
 	}
 	if req.Expires == 0 {
 		req.Expires = 3600
@@ -573,7 +593,7 @@ func (h *GB28181Handler) AddPlatform(w http.ResponseWriter, r *http.Request) {
 		req.Transport = "UDP"
 	}
 
-	pm := h.svr.GetPlatforms()
+	pm := h.server().GetPlatforms()
 	if pm == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "platform manager not initialized"})
 		return
@@ -609,7 +629,7 @@ func (h *GB28181Handler) AddPlatform(w http.ResponseWriter, r *http.Request) {
 
 // DeletePlatform deletes an upstream platform.
 func (h *GB28181Handler) DeletePlatform(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -620,7 +640,7 @@ func (h *GB28181Handler) DeletePlatform(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	pm := h.svr.GetPlatforms()
+	pm := h.server().GetPlatforms()
 	if pm == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "platform manager not initialized"})
 		return
@@ -638,7 +658,7 @@ func (h *GB28181Handler) DeletePlatform(w http.ResponseWriter, r *http.Request) 
 
 // StartBroadcast starts a voice broadcast to a device channel.
 func (h *GB28181Handler) StartBroadcast(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -651,13 +671,13 @@ func (h *GB28181Handler) StartBroadcast(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	bm := h.svr.GetBroadcastManager()
+	bm := h.server().GetBroadcastManager()
 	if bm == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "broadcast manager not initialized"})
 		return
 	}
 
-	bs, err := bm.StartBroadcast(req.DeviceID, req.ChannelID, h.svr.GetDeviceStore())
+	bs, err := bm.StartBroadcast(req.DeviceID, req.ChannelID, h.server().GetDeviceStore())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -672,7 +692,7 @@ func (h *GB28181Handler) StartBroadcast(w http.ResponseWriter, r *http.Request) 
 
 // StopBroadcast stops a voice broadcast.
 func (h *GB28181Handler) StopBroadcast(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -685,7 +705,7 @@ func (h *GB28181Handler) StopBroadcast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bm := h.svr.GetBroadcastManager()
+	bm := h.server().GetBroadcastManager()
 	if bm == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "broadcast manager not initialized"})
 		return
@@ -787,7 +807,7 @@ func (h *GB28181Handler) ListAlarms(w http.ResponseWriter, r *http.Request) {
 
 // StartDownload starts a recording download from a device.
 func (h *GB28181Handler) StartDownload(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -813,13 +833,13 @@ func (h *GB28181Handler) StartDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dm := h.svr.GetDownloadManager()
+	dm := h.server().GetDownloadManager()
 	if dm == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "download manager not initialized"})
 		return
 	}
 
-	ds, err := dm.StartDownload(req.DeviceID, req.ChannelID, startTime, endTime, h.svr.GetDeviceStore())
+	ds, err := dm.StartDownload(req.DeviceID, req.ChannelID, startTime, endTime, h.server().GetDeviceStore())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -834,7 +854,7 @@ func (h *GB28181Handler) StartDownload(w http.ResponseWriter, r *http.Request) {
 
 // StopDownload stops a recording download.
 func (h *GB28181Handler) StopDownload(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -848,7 +868,7 @@ func (h *GB28181Handler) StopDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dm := h.svr.GetDownloadManager()
+	dm := h.server().GetDownloadManager()
 	if dm == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "download manager not initialized"})
 		return
@@ -864,8 +884,8 @@ func (h *GB28181Handler) StopDownload(w http.ResponseWriter, r *http.Request) {
 
 // BatchDownloadRequest is the request body for batch downloading.
 type BatchDownloadRequest struct {
-	DeviceID  string   `json:"device_id"`
-	ChannelID string   `json:"channel_id"`
+	DeviceID  string `json:"device_id"`
+	ChannelID string `json:"channel_id"`
 	Segments  []struct {
 		StartTime string `json:"start_time"`
 		EndTime   string `json:"end_time"`
@@ -874,7 +894,7 @@ type BatchDownloadRequest struct {
 
 // BatchDownload starts multiple recording downloads from a device.
 func (h *GB28181Handler) BatchDownload(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -894,7 +914,7 @@ func (h *GB28181Handler) BatchDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dm := h.svr.GetDownloadManager()
+	dm := h.server().GetDownloadManager()
 	if dm == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "download manager not initialized"})
 		return
@@ -915,7 +935,7 @@ func (h *GB28181Handler) BatchDownload(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		ds, err := dm.StartDownload(req.DeviceID, req.ChannelID, startTime, endTime, h.svr.GetDeviceStore())
+		ds, err := dm.StartDownload(req.DeviceID, req.ChannelID, startTime, endTime, h.server().GetDeviceStore())
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("segment %d: %v", i, err))
 			continue
@@ -972,7 +992,7 @@ func (h *GB28181Handler) ListDownloads(w http.ResponseWriter, r *http.Request) {
 
 // HandleTalkWS handles WebSocket connections for voice talk/intercom.
 func (h *GB28181Handler) HandleTalkWS(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -996,7 +1016,7 @@ func (h *GB28181Handler) HandleTalkWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 获取 TalkManager
-	tm := h.svr.GetTalkManager()
+	tm := h.server().GetTalkManager()
 	if tm == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "talk manager not initialized"})
 		return
@@ -1007,7 +1027,7 @@ func (h *GB28181Handler) HandleTalkWS(w http.ResponseWriter, r *http.Request) {
 	if !exists {
 		// 启动新的对讲会话
 		var err error
-		session, err = tm.StartTalk(deviceID, channelID, transportMode, h.svr.GetDeviceStore())
+		session, err = tm.StartTalk(deviceID, channelID, transportMode, h.server().GetDeviceStore())
 		if err != nil {
 			slog.Error("Failed to start talk", "error", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1093,7 +1113,7 @@ type StartTalkWhipRequest struct {
 // The frontend should first establish a WHIP connection to the media server,
 // then call this API to start the GB28181 talk session.
 func (h *GB28181Handler) HandleStartTalkWhip(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -1119,7 +1139,7 @@ func (h *GB28181Handler) HandleStartTalkWhip(w http.ResponseWriter, r *http.Requ
 	}
 
 	// 获取 TalkManager
-	tm := h.svr.GetTalkManager()
+	tm := h.server().GetTalkManager()
 	if tm == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "talk manager not initialized"})
 		return
@@ -1130,7 +1150,7 @@ func (h *GB28181Handler) HandleStartTalkWhip(w http.ResponseWriter, r *http.Requ
 	if !exists {
 		// 启动新的对讲会话
 		var err error
-		session, err = tm.StartTalk(req.DeviceID, req.ChannelID, transportMode, h.svr.GetDeviceStore())
+		session, err = tm.StartTalk(req.DeviceID, req.ChannelID, transportMode, h.server().GetDeviceStore())
 		if err != nil {
 			slog.Error("Failed to start WHIP talk", "error", err, "device_id", req.DeviceID, "channel_id", req.ChannelID)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -1138,24 +1158,24 @@ func (h *GB28181Handler) HandleStartTalkWhip(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	slog.Info("WHIP talk session started", 
-		"device_id", req.DeviceID, 
+	slog.Info("WHIP talk session started",
+		"device_id", req.DeviceID,
 		"channel_id", req.ChannelID,
 		"stream_name", req.StreamName,
 		"port", session.RTPPort)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":     "started",
-		"session_id": req.DeviceID + "_" + req.ChannelID,
-		"port":       session.RTPPort,
-		"transport":  transportMode,
+		"status":      "started",
+		"session_id":  req.DeviceID + "_" + req.ChannelID,
+		"port":        session.RTPPort,
+		"transport":   transportMode,
 		"stream_name": req.StreamName,
 	})
 }
 
 // HandleStopTalkWhip stops a GB28181 talk session for WHIP streaming.
 func (h *GB28181Handler) HandleStopTalkWhip(w http.ResponseWriter, r *http.Request) {
-	if h.svr == nil {
+	if h.server() == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
 		return
 	}
@@ -1172,7 +1192,7 @@ func (h *GB28181Handler) HandleStopTalkWhip(w http.ResponseWriter, r *http.Reque
 	}
 
 	// 获取 TalkManager
-	tm := h.svr.GetTalkManager()
+	tm := h.server().GetTalkManager()
 	if tm == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "talk manager not initialized"})
 		return

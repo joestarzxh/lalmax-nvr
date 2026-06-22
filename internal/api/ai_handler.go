@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
+	"github.com/lalmax-pro/lalmax-nvr/internal/ai/multimodal"
 	"github.com/lalmax-pro/lalmax-nvr/internal/ai/webhook"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
+	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
 
 // --- AI Manager interface for testability ---
@@ -25,6 +28,7 @@ type AIManagerInterface interface {
 	UnregisterCallback(id string) bool
 	StopAll()
 	GetReceiver() *webhook.Receiver
+	GetMultimodalManager() *multimodal.Manager
 }
 
 // --- AI status types ---
@@ -32,8 +36,8 @@ type AIManagerInterface interface {
 // aiStatusResponse is the JSON response for GET /api/ai/status.
 type aiStatusResponse struct {
 	Available bool   `json:"available"`
-	Backend   string `json:"backend"`   // "http", "webhook", "disabled"
-	Reason    string `json:"reason"`    // human-readable status explanation
+	Backend   string `json:"backend"` // "http", "webhook", "disabled"
+	Reason    string `json:"reason"`  // human-readable status explanation
 }
 
 // aiEnableRequest is the JSON body for POST /api/ai/enable.
@@ -112,6 +116,18 @@ func (h *Handler) handleEnableAI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "camera stream hub not available")
 		return
 	}
+	if provider, ok := rec.(model.HLSProvider); ok {
+		codec, _, _, _ := provider.CodecParams()
+		if codec == "" && h.camMgr != nil {
+			if cam := h.camMgr.GetCameraConfig(req.CameraID); cam != nil {
+				codec = model.Format(cam.Encoding)
+				if codec == "" {
+					codec = model.Format(cam.StreamEncoding)
+				}
+			}
+		}
+		h.aiManager.SetCameraCodec(req.CameraID, codec)
+	}
 
 	if err := h.aiManager.EnableCamera(req.CameraID, hub); err != nil {
 		writeError(w, http.StatusConflict, fmt.Sprintf("failed to enable AI: %v", err))
@@ -155,6 +171,51 @@ func (h *Handler) handleDisableAI(w http.ResponseWriter, r *http.Request) {
 		"status":    "disabled",
 		"camera_id": req.CameraID,
 	})
+}
+
+func (h *Handler) handleListAIDetections(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeError(w, http.StatusServiceUnavailable, "database not available")
+		return
+	}
+	filter := aiHistoryFilterFromRequest(r)
+	items, total, err := h.db.ListAIDetections(r.Context(), filter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list AI detections")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"detections": items,
+		"total":      total,
+	})
+}
+
+func (h *Handler) handleListAIAnalyses(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		writeError(w, http.StatusServiceUnavailable, "database not available")
+		return
+	}
+	filter := aiHistoryFilterFromRequest(r)
+	items, total, err := h.db.ListAIAnalyses(r.Context(), filter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list AI analyses")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"analyses": items,
+		"total":    total,
+	})
+}
+
+func aiHistoryFilterFromRequest(r *http.Request) storage.AIHistoryFilter {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	return storage.AIHistoryFilter{
+		CameraID: q.Get("camera_id"),
+		Limit:    limit,
+		Offset:   offset,
+	}
 }
 
 // handleAIEvents handles GET /api/ai/events.
@@ -237,4 +298,97 @@ func (h *Handler) handleAIWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	receiver.HandleHTTP()(w, r)
+}
+
+// handleAIMultimodalStatus handles GET /api/ai/multimodal/status.
+// Returns the status of the multimodal analysis subsystem.
+func (h *Handler) handleAIMultimodalStatus(w http.ResponseWriter, r *http.Request) {
+	if h.aiManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "AI detection not available")
+		return
+	}
+
+	mm := h.aiManager.GetMultimodalManager()
+	if mm == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"enabled":  false,
+			"provider": "",
+			"reason":   "多模态分析未配置",
+		})
+		return
+	}
+
+	status := mm.Status()
+	writeJSON(w, http.StatusOK, status)
+}
+
+// handleAIMultimodalEvents handles GET /api/ai/multimodal/events.
+// SSE stream that pushes multimodal analysis results to the frontend.
+func (h *Handler) handleAIMultimodalEvents(w http.ResponseWriter, r *http.Request) {
+	if h.aiManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "AI detection not available")
+		return
+	}
+
+	mm := h.aiManager.GetMultimodalManager()
+	if mm == nil {
+		writeError(w, http.StatusServiceUnavailable, "Multimodal analysis not configured")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	ctx := r.Context()
+	eventCh := make(chan multimodal.AnalysisResult, 16)
+	var eventClosed atomic.Bool
+
+	// Register analysis callback.
+	callbackID := mm.OnResult(func(result multimodal.AnalysisResult) {
+		if eventClosed.Load() {
+			return
+		}
+		select {
+		case eventCh <- result:
+		default:
+			logger.Warn("Multimodal SSE: dropping analysis event, client too slow")
+		}
+	})
+
+	// Heartbeat ticker.
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	defer func() {
+		eventClosed.Store(true)
+		close(eventCh)
+	}()
+	defer mm.UnregisterCallback(callbackID)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case result := <-eventCh:
+			data, err := json.Marshal(result)
+			if err != nil {
+				logger.Warn("Multimodal SSE: failed to marshal result", "error", err)
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		case <-heartbeat.C:
+			fmt.Fprintf(w, ": ping\n\n")
+			flusher.Flush()
+		}
+	}
 }

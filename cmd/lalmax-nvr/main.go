@@ -720,6 +720,10 @@ func (a *App) RestartGB28181(ctx context.Context, cfg *config.GB28181Config) err
 	return nil
 }
 
+func (a *App) CurrentGB28181Server() *gb28181.Server {
+	return a.gb28181Svr
+}
+
 // buildRouter constructs the chi router with all routes mounted.
 func (a *App) buildRouter() http.Handler {
 	cfg := a.cfg
@@ -748,6 +752,9 @@ func (a *App) buildRouter() http.Handler {
 
 	// Wire AI Manager
 	aiMgr := ai.NewManager(cfg.AI)
+	if a.db != nil {
+		aiMgr.SetStore(a.db)
+	}
 	handler.SetAIManager(aiMgr)
 
 	// Create and populate StreamRegistry for protocol discovery
@@ -864,7 +871,9 @@ func (a *App) buildRouter() http.Handler {
 
 	// GB28181 API routes (authenticated)
 	// Always register routes, handler will return empty data if GB28181 is not enabled
-	gbHandler := api.NewGB28181Handler(a.gb28181Svr, a.camMgr, a.db, a.mediaEngine)
+	gbHandler := api.NewDynamicGB28181Handler(func() *gb28181.Server {
+		return a.gb28181Svr
+	}, a.camMgr, a.db, a.mediaEngine)
 	r.Group(func(r chi.Router) {
 		r.Use(a.authMW)
 		// Core GB28181

@@ -23,6 +23,7 @@ type DetectionResult struct {
 	CameraID   string      `json:"camera_id"`
 	PTS        int64       `json:"pts"`
 	Timestamp  int64       `json:"timestamp"`
+	ImageURL   string      `json:"image_url,omitempty"`
 	Detections []Detection `json:"detections"`
 }
 
@@ -34,6 +35,7 @@ type DetectRequest struct {
 	CameraID   string      `json:"camera_id"`
 	PTS        int64       `json:"pts"`
 	Timestamp  int64       `json:"timestamp"`
+	ImageURL   string      `json:"image_url"`
 	Detections []Detection `json:"detections"`
 }
 
@@ -99,6 +101,7 @@ func (r *Receiver) HandleHTTP() http.HandlerFunc {
 			CameraID:   detectReq.CameraID,
 			PTS:        detectReq.PTS,
 			Timestamp:  detectReq.Timestamp,
+			ImageURL:   detectReq.ImageURL,
 			Detections: detectReq.Detections,
 		}
 

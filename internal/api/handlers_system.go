@@ -718,8 +718,10 @@ func (h *Handler) handleGetAISettings(w http.ResponseWriter, r *http.Request) {
 		"frame_skip_rate":      ai.FrameSkipRate,
 		"confidence_threshold": ai.ConfidenceThreshold,
 		"inference_timeout_ms": ai.InferenceTimeoutMs,
+		"ffmpeg_path":          ai.FFmpegPath,
 		"http":                 ai.HTTP,
 		"webhook":              ai.Webhook,
+		"multimodal":           ai.Multimodal,
 	})
 }
 
@@ -730,13 +732,15 @@ func (h *Handler) handleUpdateAISettings(w http.ResponseWriter, r *http.Request)
 	}
 
 	var body struct {
-		Enabled             *bool                `json:"enabled"`
-		Backend             *string              `json:"backend"`
-		FrameSkipRate       *int                 `json:"frame_skip_rate"`
-		ConfidenceThreshold *float64             `json:"confidence_threshold"`
-		InferenceTimeoutMs  *int                 `json:"inference_timeout_ms"`
-		HTTP                *config.AIHTTPConfig `json:"http"`
-		Webhook             *config.AIWebhookConfig `json:"webhook"`
+		Enabled             *bool                      `json:"enabled"`
+		Backend             *string                    `json:"backend"`
+		FrameSkipRate       *int                       `json:"frame_skip_rate"`
+		ConfidenceThreshold *float64                   `json:"confidence_threshold"`
+		InferenceTimeoutMs  *int                       `json:"inference_timeout_ms"`
+		FFmpegPath          *string                    `json:"ffmpeg_path"`
+		HTTP                *config.AIHTTPConfig       `json:"http"`
+		Webhook             *config.AIWebhookConfig    `json:"webhook"`
+		Multimodal          *config.AIMultimodalConfig `json:"multimodal"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -752,10 +756,10 @@ func (h *Handler) handleUpdateAISettings(w http.ResponseWriter, r *http.Request)
 	// Update backend
 	if body.Backend != nil {
 		switch *body.Backend {
-		case "http", "webhook", "disabled":
+		case "http", "webhook", "multimodal", "disabled":
 			h.config.AI.Backend = *body.Backend
 		default:
-			writeError(w, http.StatusBadRequest, "backend must be 'http', 'webhook', or 'disabled'")
+			writeError(w, http.StatusBadRequest, "backend must be 'http', 'webhook', 'multimodal', or 'disabled'")
 			return
 		}
 	}
@@ -786,6 +790,9 @@ func (h *Handler) handleUpdateAISettings(w http.ResponseWriter, r *http.Request)
 		}
 		h.config.AI.InferenceTimeoutMs = *body.InferenceTimeoutMs
 	}
+	if body.FFmpegPath != nil {
+		h.config.AI.FFmpegPath = *body.FFmpegPath
+	}
 
 	// Update HTTP config
 	if body.HTTP != nil {
@@ -814,6 +821,10 @@ func (h *Handler) handleUpdateAISettings(w http.ResponseWriter, r *http.Request)
 		h.config.AI.Webhook.Enabled = body.Webhook.Enabled
 	}
 
+	if body.Multimodal != nil {
+		h.config.AI.Multimodal = body.Multimodal
+	}
+
 	// Apply defaults
 	h.config.ApplyDefaults()
 
@@ -827,6 +838,9 @@ func (h *Handler) handleUpdateAISettings(w http.ResponseWriter, r *http.Request)
 		h.aiManager.StopAll()
 	}
 	newMgr := ai.NewManager(h.config.AI)
+	if h.db != nil {
+		newMgr.SetStore(h.db)
+	}
 	h.aiManager = newMgr
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -876,7 +890,7 @@ type protocolInfo struct {
 	Label        string          `json:"label"`
 	Encodings    []string        `json:"encodings"`
 	BuiltIn      bool            `json:"built_in"`
-	Addable      bool            `json:"addable"`                // Whether this protocol can be manually added
+	Addable      bool            `json:"addable"` // Whether this protocol can be manually added
 	Capabilities map[string]bool `json:"capabilities"`
 }
 
@@ -1071,7 +1085,7 @@ func (h *Handler) handleGetGB28181Settings(w http.ResponseWriter, r *http.Reques
 	}
 
 	enabled := h.config.GB28181.Enabled != nil && *h.config.GB28181.Enabled
-	
+
 	// Use default values if empty
 	id := h.config.GB28181.ID
 	if id == "" {
@@ -1081,7 +1095,7 @@ func (h *Handler) handleGetGB28181Settings(w http.ResponseWriter, r *http.Reques
 	if password == "" {
 		password = "12345678"
 	}
-	
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":    enabled,
 		"host":       h.config.GB28181.Host,
@@ -1174,6 +1188,11 @@ func (h *Handler) handleUpdateGB28181Settings(w http.ResponseWriter, r *http.Req
 			logger.Warn("GB28181 restart failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "GB28181 restart failed")
 			return
+		}
+		if provider, ok := h.gb28181Restarter.(GB28181ServerProvider); ok {
+			current := provider.CurrentGB28181Server()
+			h.SetGB28181Server(current)
+			h.SetGB28181ServerInstance(current)
 		}
 	}
 

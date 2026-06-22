@@ -323,6 +323,10 @@ export {
   subscribeAiEvents,
   getAiBackendConfig,
   updateAiBackendConfig,
+  listAiDetections,
+  listAiAnalyses,
+  getMultimodalStatus,
+  subscribeMultimodalEvents,
 } from './ai';
 
 export type {
@@ -331,6 +335,12 @@ export type {
   AiDetectionEvent,
   AiDetection,
   AiBackendConfig,
+  MultimodalStatus,
+  MultimodalAnalysisEvent,
+  MultimodalConfig,
+  MultimodalProviderConfig,
+  AiDetectionHistoryResponse,
+  MultimodalHistoryResponse,
 } from './ai';
 
 // GB28181 — SIP device management

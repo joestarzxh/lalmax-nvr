@@ -16,9 +16,9 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/pion/rtp"
 
+	"github.com/lalmax-pro/lalmax-nvr/internal/event"
 	"github.com/lalmax-pro/lalmax-nvr/internal/metrics"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
-	"github.com/lalmax-pro/lalmax-nvr/internal/event"
 )
 
 var mjpegLogger = slog.Default().With("component", "mjpeg-recorder")
@@ -32,7 +32,7 @@ type MJPEGConfig struct {
 	DB             RecordingDB
 	MaxBackoff     time.Duration // Deprecated: no longer used, tiered backoff is used instead
 	InitBackoff    time.Duration // Deprecated: no longer used, tiered backoff is used instead
-	EventBus             *event.EventBus
+	EventBus       *event.EventBus
 }
 
 // MJPEGRecorder records Motion-JPEG video from an RTSP source.
@@ -61,7 +61,7 @@ type MJPEGRecorder struct {
 	reconnectTime       time.Time // when the connection was restored
 	retryCount          int       // number of reconnect attempts at recovery point
 	gapReason           string    // why the disconnect happened
-	hasPendingReconnect bool     // true if next segment should carry reconnection metadata
+	hasPendingReconnect bool      // true if next segment should carry reconnection metadata
 }
 
 // GetHub returns the StreamHub for frame fan-out.
@@ -257,6 +257,9 @@ func (r *MJPEGRecorder) connectAndRecord(ctx context.Context) (error, bool) {
 		if err != nil {
 			mjpegLogger.Error("RTP decode error", "camera_id", r.cfg.CameraID, "error", err)
 			return
+		}
+		if r.Hub != nil {
+			r.Hub.Broadcast(int64(pkt.Timestamp), [][]byte{jpeg}, true)
 		}
 		select {
 		case r.frameCh <- jpeg:

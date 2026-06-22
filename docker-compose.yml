@@ -37,6 +37,8 @@ services:
 
     ports:
       - "9090:9090"   # Web UI / API
+      - "5060:5060/tcp" # GB28181 SIP
+      - "5060:5060/udp" # GB28181 SIP
       - "2121:2121"   # FTP
       - "2122-2140:2122-2140"  # FTP passive ports
     volumes:

@@ -98,7 +98,7 @@ import { apiRequest, getAuthToken } from './client';
 /** AI engine status response from GET /api/ai/status. */
 export interface AiStatusResponse {
   available: boolean;
-  backend: 'http' | 'webhook' | 'disabled';
+  backend: 'http' | 'webhook' | 'multimodal' | 'disabled';
   reason: string;
 }
 
@@ -106,6 +106,8 @@ export interface AiStatusResponse {
 export interface AiDetectionEvent {
   camera_id: string;
   pts: number;
+  timestamp?: number;
+  image_url?: string;
   detections: AiDetection[];
 }
 
@@ -169,19 +171,58 @@ export function subscribeAiEvents(
 /** AI backend configuration from GET /api/settings/ai. */
 export interface AiBackendConfig {
   enabled: boolean;
-  backend: 'http' | 'webhook' | 'disabled';
+  backend: 'http' | 'webhook' | 'multimodal' | 'disabled';
   frame_skip_rate: number;
   confidence_threshold: number;
   inference_timeout_ms: number;
+  ffmpeg_path?: string;
   http: {
     endpoint: string;
-    api_key: string;
+    apiKey: string;
     headers: Record<string, string>;
     timeout: number;
   } | null;
   webhook: {
     enabled: boolean;
   } | null;
+  multimodal: MultimodalConfig | null;
+}
+
+export interface MultimodalProviderConfig {
+  provider: string;
+  apiKey: string;
+  endpoint: string;
+  model: string;
+  visionModel: string;
+  maxTokens: number;
+  temperature: number;
+  timeout: number;
+}
+
+export interface MultimodalConfig {
+  enabled: boolean;
+  provider: string;
+  providers: Record<string, MultimodalProviderConfig>;
+  analysisPrompt: string;
+  analysisInterval: string;
+  saveResults: boolean;
+  maxResults: number;
+}
+
+export interface MultimodalStatus {
+  active_provider: string;
+  providers: Record<string, boolean>;
+}
+
+export interface MultimodalAnalysisEvent {
+  camera_id: string;
+  timestamp: number;
+  analysis: string;
+  labels: string[];
+  confidence: number;
+  image_url?: string;
+  trigger_detections?: AiDetection[];
+  metadata?: Record<string, string>;
 }
 
 /** Get AI backend configuration. */
@@ -195,4 +236,66 @@ export async function updateAiBackendConfig(config: Partial<AiBackendConfig>): P
     method: 'PUT',
     body: JSON.stringify(config),
   });
+}
+
+export interface AiDetectionHistoryResponse {
+  detections: AiDetectionEvent[];
+  total: number;
+}
+
+export interface MultimodalHistoryResponse {
+  analyses: MultimodalAnalysisEvent[];
+  total: number;
+}
+
+/** List persisted AI detection history. */
+export async function listAiDetections(params: { camera_id?: string; limit?: number; offset?: number } = {}): Promise<AiDetectionHistoryResponse> {
+  const query = new URLSearchParams();
+  if (params.camera_id) query.set('camera_id', params.camera_id);
+  if (params.limit) query.set('limit', String(params.limit));
+  if (params.offset) query.set('offset', String(params.offset));
+  const suffix = query.toString() ? `?${query}` : '';
+  return apiRequest<AiDetectionHistoryResponse>(`/ai/detections${suffix}`);
+}
+
+/** List persisted multimodal analysis history. */
+export async function listAiAnalyses(params: { camera_id?: string; limit?: number; offset?: number } = {}): Promise<MultimodalHistoryResponse> {
+  const query = new URLSearchParams();
+  if (params.camera_id) query.set('camera_id', params.camera_id);
+  if (params.limit) query.set('limit', String(params.limit));
+  if (params.offset) query.set('offset', String(params.offset));
+  const suffix = query.toString() ? `?${query}` : '';
+  return apiRequest<MultimodalHistoryResponse>(`/ai/analyses${suffix}`);
+}
+
+/** Get multimodal analyzer status. */
+export async function getMultimodalStatus(): Promise<MultimodalStatus> {
+  return apiRequest<MultimodalStatus>('/ai/multimodal/status');
+}
+
+/** Subscribe to multimodal analysis events via SSE. Returns cleanup function. */
+export function subscribeMultimodalEvents(
+  onEvent: (event: MultimodalAnalysisEvent) => void,
+  onError?: (error: Event) => void,
+): () => void {
+  const token = getAuthToken();
+  const authParam = token ? `?token=${encodeURIComponent(token)}` : '';
+  const eventSource = new EventSource(`/api/ai/multimodal/events${authParam}`);
+
+  eventSource.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data) as MultimodalAnalysisEvent;
+      onEvent(data);
+    } catch (e) {
+      console.warn('Failed to parse multimodal event:', e);
+    }
+  };
+
+  eventSource.onerror = (error) => {
+    if (onError) onError(error);
+  };
+
+  return () => {
+    eventSource.close();
+  };
 }

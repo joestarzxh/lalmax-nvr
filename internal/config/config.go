@@ -1,4 +1,4 @@
-﻿package config
+package config
 
 import (
 	"fmt"
@@ -55,7 +55,7 @@ type Config struct {
 type SnapshotConfig struct {
 	Enabled  bool   `yaml:"enabled" json:"enabled"`   // Enable periodic snapshots
 	Interval string `yaml:"interval" json:"interval"` // Snapshot interval, default "5m", min "1m"
-	Quality  int    `yaml:"quality" json:"quality"`    // JPEG quality 1-100, default 80
+	Quality  int    `yaml:"quality" json:"quality"`   // JPEG quality 1-100, default 80
 	MaxAge   string `yaml:"max_age" json:"max_age"`   // Max age before cleanup, default "24h"
 }
 
@@ -263,9 +263,9 @@ type HLSConfig struct {
 	PartMinDuration  string `yaml:"part_min_duration"`   // LL-HLS partial segment duration (default "200ms", range [100ms-1s])
 
 	// lal (TS-based HLS) settings
-	LalFragmentDurationMs int  `yaml:"lal_fragment_duration_ms,omitempty"` // TS fragment duration in ms (default 3000)
-	LalFragmentNum        int  `yaml:"lal_fragment_num,omitempty"`         // Number of live playlist entries (default 6)
-	LalCleanupMode        int  `yaml:"lal_cleanup_mode,omitempty"`         // 0=never, 1=end, 2=ASAP (default 1)
+	LalFragmentDurationMs int    `yaml:"lal_fragment_duration_ms,omitempty"` // TS fragment duration in ms (default 3000)
+	LalFragmentNum        int    `yaml:"lal_fragment_num,omitempty"`         // Number of live playlist entries (default 6)
+	LalCleanupMode        int    `yaml:"lal_cleanup_mode,omitempty"`         // 0=never, 1=end, 2=ASAP (default 1)
 	LalUseMemory          bool   `yaml:"lal_use_memory,omitempty"`           // Use in-memory storage for TS segments
 	LalTempDir            string `yaml:"lal_temp_dir,omitempty"`             // HLS TS鏂囦欢涓存椂鐩綍 (default "hls-temp")
 
@@ -317,7 +317,7 @@ type SRTConfig struct {
 // RTMPConfig configures the RTMP ingest server.
 // RTMP is served by lalmax on its default port (:11935).
 type RTMPConfig struct {
-	Enabled    *bool             `yaml:"enabled"`     // default false
+	Enabled    *bool             `yaml:"enabled"` // default false
 	Port       int               `yaml:"port,omitempty"`
 	StreamKeys map[string]string `yaml:"stream_keys"` // camera_id 鈫?stream_key
 }
@@ -393,13 +393,36 @@ type WebSocketConfig struct {
 }
 
 type AIConfig struct {
-	Enabled             bool           `yaml:"enabled" json:"enabled"`
-	Backend             string         `yaml:"backend" json:"backend"` // "http", "webhook", "disabled"
-	FrameSkipRate       int            `yaml:"frame_skip_rate" json:"frameSkipRate"`
-	ConfidenceThreshold float64        `yaml:"confidence_threshold" json:"confidenceThreshold"`
-	InferenceTimeoutMs  int            `yaml:"inference_timeout_ms" json:"inferenceTimeoutMs"`
-	HTTP                *AIHTTPConfig  `yaml:"http,omitempty" json:"http,omitempty"`
-	Webhook             *AIWebhookConfig `yaml:"webhook,omitempty" json:"webhook,omitempty"`
+	Enabled             bool                `yaml:"enabled" json:"enabled"`
+	Backend             string              `yaml:"backend" json:"backend"` // "http", "webhook", "multimodal", "disabled"
+	FrameSkipRate       int                 `yaml:"frame_skip_rate" json:"frameSkipRate"`
+	ConfidenceThreshold float64             `yaml:"confidence_threshold" json:"confidenceThreshold"`
+	InferenceTimeoutMs  int                 `yaml:"inference_timeout_ms" json:"inferenceTimeoutMs"`
+	FFmpegPath          string              `yaml:"ffmpeg_path,omitempty" json:"ffmpegPath,omitempty"`
+	HTTP                *AIHTTPConfig       `yaml:"http,omitempty" json:"http,omitempty"`
+	Webhook             *AIWebhookConfig    `yaml:"webhook,omitempty" json:"webhook,omitempty"`
+	Multimodal          *AIMultimodalConfig `yaml:"multimodal,omitempty" json:"multimodal,omitempty"`
+}
+
+type AIMultimodalConfig struct {
+	Enabled          bool                        `yaml:"enabled" json:"enabled"`
+	Provider         string                      `yaml:"provider" json:"provider"` // "deepseek", "openai", "qwen", etc.
+	Providers        map[string]AIProviderConfig `yaml:"providers" json:"providers"`
+	AnalysisPrompt   string                      `yaml:"analysis_prompt" json:"analysisPrompt"`
+	AnalysisInterval string                      `yaml:"analysis_interval" json:"analysisInterval"` // e.g., "5m", "1h"
+	SaveResults      bool                        `yaml:"save_results" json:"saveResults"`
+	MaxResults       int                         `yaml:"max_results" json:"maxResults"` // Max results to keep per camera
+}
+
+type AIProviderConfig struct {
+	Provider    string  `yaml:"provider" json:"provider"` // Provider type
+	APIKey      string  `yaml:"api_key" json:"apiKey"`
+	Endpoint    string  `yaml:"endpoint" json:"endpoint"`
+	Model       string  `yaml:"model" json:"model"`
+	VisionModel string  `yaml:"vision_model" json:"visionModel"` // Vision-specific model
+	MaxTokens   int     `yaml:"max_tokens" json:"maxTokens"`
+	Temperature float32 `yaml:"temperature" json:"temperature"`
+	Timeout     int     `yaml:"timeout" json:"timeout"` // seconds
 }
 
 type AIHTTPConfig struct {
@@ -1142,6 +1165,31 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.AI.HTTP != nil && cfg.AI.HTTP.Timeout <= 0 {
 		cfg.AI.HTTP.Timeout = 10000
 	}
+	// Multimodal AI defaults
+	if cfg.AI.Multimodal != nil && cfg.AI.Multimodal.Enabled {
+		if cfg.AI.Multimodal.Provider == "" {
+			cfg.AI.Multimodal.Provider = "deepseek"
+		}
+		if cfg.AI.Multimodal.AnalysisInterval == "" {
+			cfg.AI.Multimodal.AnalysisInterval = "5m"
+		}
+		if cfg.AI.Multimodal.MaxResults <= 0 {
+			cfg.AI.Multimodal.MaxResults = 1000
+		}
+		// Set defaults for each provider
+		for name, provider := range cfg.AI.Multimodal.Providers {
+			if provider.Timeout <= 0 {
+				provider.Timeout = 60
+			}
+			if provider.MaxTokens <= 0 {
+				provider.MaxTokens = 2000
+			}
+			if provider.Temperature <= 0 {
+				provider.Temperature = 0.7
+			}
+			cfg.AI.Multimodal.Providers[name] = provider
+		}
+	}
 	// Camera protocol/encoding normalization (backward compat with old combined protocol strings)
 	for i := range cfg.Cameras {
 		cam := &cfg.Cameras[i]
@@ -1305,5 +1353,3 @@ func EncryptConfigFile(path string) ([]string, error) {
 
 	return plaintextFields, nil
 }
-
-

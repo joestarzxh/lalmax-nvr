@@ -14,6 +14,7 @@ type DetectionResult struct {
 	CameraID   string      `json:"camera_id"`
 	PTS        int64       `json:"pts"`
 	Timestamp  int64       `json:"timestamp"`
+	ImageURL   string      `json:"image_url,omitempty"`
 	Detections []Detection `json:"detections"`
 }
 
@@ -33,3 +34,9 @@ type Status struct {
 
 // CallbackFunc is invoked when a detection event occurs.
 type CallbackFunc func(result DetectionResult)
+
+// Store persists AI events for history views.
+type Store interface {
+	InsertAIDetection(ctx context.Context, result DetectionResult) error
+	InsertAIAnalysis(ctx context.Context, result interface{}) error
+}

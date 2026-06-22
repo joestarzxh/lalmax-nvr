@@ -54,16 +54,49 @@ let srtStreams = $state<{streamId: string, cameraId: string, mode: string, addre
 
 // AI Detection state
 let aiEnabled = $state(false);
-let aiBackend = $state<'http' | 'webhook' | 'disabled'>('disabled');
+let aiBackend = $state<'http' | 'webhook' | 'multimodal' | 'disabled'>('disabled');
 let aiConfidenceThreshold = $state(0.5);
 let aiFrameSkip = $state(3);
 let aiInferenceTimeout = $state(30000);
+let aiFFmpegPath = $state('');
 let aiHttpEndpoint = $state('');
 let aiHttpApiKey = $state('');
 let aiHttpTimeout = $state(10000);
 let aiWebhookEnabled = $state(false);
 let aiDetectedBackend = $state('');
 let aiSaving = $state(false);
+
+// Multimodal AI state
+let aiMultimodalEnabled = $state(false);
+let aiMultimodalProvider = $state('deepseek');
+let aiMultimodalAnalysisInterval = $state('5m');
+let aiMultimodalSaveResults = $state(true);
+let aiMultimodalMaxResults = $state(1000);
+let aiMultimodalAnalysisPrompt = $state('');
+// Provider configs
+let aiProviderDeepseekApiKey = $state('');
+let aiProviderDeepseekEndpoint = $state('https://api.deepseek.com/v1');
+let aiProviderDeepseekModel = $state('deepseek-chat');
+let aiProviderDeepseekVisionModel = $state('deepseek-vl');
+let aiProviderDeepseekMaxTokens = $state(2000);
+let aiProviderDeepseekTemperature = $state(0.7);
+let aiProviderDeepseekTimeout = $state(60);
+// OpenAI provider
+let aiProviderOpenaiApiKey = $state('');
+let aiProviderOpenaiEndpoint = $state('https://api.openai.com/v1');
+let aiProviderOpenaiModel = $state('gpt-4o');
+let aiProviderOpenaiMaxTokens = $state(2000);
+let aiProviderOpenaiTemperature = $state(0.7);
+let aiProviderOpenaiTimeout = $state(60);
+// Custom provider
+let aiProviderCustomName = $state('');
+let aiProviderCustomApiKey = $state('');
+let aiProviderCustomEndpoint = $state('');
+let aiProviderCustomModel = $state('');
+let aiProviderCustomVisionModel = $state('');
+let aiProviderCustomMaxTokens = $state(2000);
+let aiProviderCustomTemperature = $state(0.7);
+let aiProviderCustomTimeout = $state(60);
 
 // GB28181 state
 let gb28181Enabled = $state(false);
@@ -715,13 +748,53 @@ function getAffectedCameraCount(protocol: string): number {
       aiConfidenceThreshold = config.confidence_threshold;
       aiFrameSkip = config.frame_skip_rate;
       aiInferenceTimeout = config.inference_timeout_ms;
+      aiFFmpegPath = config.ffmpeg_path || '';
       if (config.http) {
         aiHttpEndpoint = config.http.endpoint;
-        aiHttpApiKey = config.http.api_key;
+        aiHttpApiKey = config.http.apiKey;
         aiHttpTimeout = config.http.timeout;
       }
       if (config.webhook) {
         aiWebhookEnabled = config.webhook.enabled;
+      }
+      if (config.multimodal) {
+        aiMultimodalEnabled = config.multimodal.enabled;
+        aiMultimodalProvider = config.multimodal.provider || 'deepseek';
+        aiMultimodalAnalysisPrompt = config.multimodal.analysisPrompt || '';
+        aiMultimodalAnalysisInterval = config.multimodal.analysisInterval || '5m';
+        aiMultimodalSaveResults = config.multimodal.saveResults ?? true;
+        aiMultimodalMaxResults = config.multimodal.maxResults || 1000;
+
+        const providers = config.multimodal.providers || {};
+        if (providers.deepseek) {
+          aiProviderDeepseekApiKey = providers.deepseek.apiKey || '';
+          aiProviderDeepseekEndpoint = providers.deepseek.endpoint || 'https://api.deepseek.com/v1';
+          aiProviderDeepseekModel = providers.deepseek.model || 'deepseek-chat';
+          aiProviderDeepseekVisionModel = providers.deepseek.visionModel || 'deepseek-vl';
+          aiProviderDeepseekMaxTokens = providers.deepseek.maxTokens || 2000;
+          aiProviderDeepseekTemperature = providers.deepseek.temperature ?? 0.7;
+          aiProviderDeepseekTimeout = providers.deepseek.timeout || 60;
+        }
+        if (providers.openai) {
+          aiProviderOpenaiApiKey = providers.openai.apiKey || '';
+          aiProviderOpenaiEndpoint = providers.openai.endpoint || 'https://api.openai.com/v1';
+          aiProviderOpenaiModel = providers.openai.model || 'gpt-4o';
+          aiProviderOpenaiMaxTokens = providers.openai.maxTokens || 2000;
+          aiProviderOpenaiTemperature = providers.openai.temperature ?? 0.7;
+          aiProviderOpenaiTimeout = providers.openai.timeout || 60;
+        }
+        const customKey = Object.keys(providers).find((key) => key !== 'deepseek' && key !== 'openai');
+        if (customKey) {
+          const custom = providers[customKey];
+          aiProviderCustomName = customKey;
+          aiProviderCustomApiKey = custom.apiKey || '';
+          aiProviderCustomEndpoint = custom.endpoint || '';
+          aiProviderCustomModel = custom.model || '';
+          aiProviderCustomVisionModel = custom.visionModel || '';
+          aiProviderCustomMaxTokens = custom.maxTokens || 2000;
+          aiProviderCustomTemperature = custom.temperature ?? 0.7;
+          aiProviderCustomTimeout = custom.timeout || 60;
+        }
       }
     } catch (e) {
       console.warn('Failed to load AI backend config:', e);
@@ -742,12 +815,13 @@ function getAffectedCameraCount(protocol: string): number {
         frame_skip_rate: aiFrameSkip,
         confidence_threshold: aiConfidenceThreshold,
         inference_timeout_ms: aiInferenceTimeout,
+        ffmpeg_path: aiFFmpegPath,
       };
 
       if (aiBackend === 'http') {
         config.http = {
           endpoint: aiHttpEndpoint,
-          api_key: aiHttpApiKey,
+          apiKey: aiHttpApiKey,
           headers: {},
           timeout: aiHttpTimeout,
         };
@@ -756,6 +830,54 @@ function getAffectedCameraCount(protocol: string): number {
       if (aiBackend === 'webhook') {
         config.webhook = {
           enabled: aiWebhookEnabled,
+        };
+      }
+
+      const customProviderName = aiProviderCustomName.trim();
+      const activeProvider = aiMultimodalProvider === 'custom' ? customProviderName : aiMultimodalProvider;
+      if (aiBackend === 'http' || aiBackend === 'multimodal') {
+        const providers: AiBackendConfig['multimodal']['providers'] = {
+          deepseek: {
+            provider: 'deepseek',
+            apiKey: aiProviderDeepseekApiKey,
+            endpoint: aiProviderDeepseekEndpoint,
+            model: aiProviderDeepseekModel,
+            visionModel: aiProviderDeepseekVisionModel,
+            maxTokens: aiProviderDeepseekMaxTokens,
+            temperature: aiProviderDeepseekTemperature,
+            timeout: aiProviderDeepseekTimeout,
+          },
+          openai: {
+            provider: 'openai',
+            apiKey: aiProviderOpenaiApiKey,
+            endpoint: aiProviderOpenaiEndpoint,
+            model: aiProviderOpenaiModel,
+            visionModel: aiProviderOpenaiModel,
+            maxTokens: aiProviderOpenaiMaxTokens,
+            temperature: aiProviderOpenaiTemperature,
+            timeout: aiProviderOpenaiTimeout,
+          },
+        };
+        if (customProviderName) {
+          providers[customProviderName] = {
+            provider: customProviderName,
+            apiKey: aiProviderCustomApiKey,
+            endpoint: aiProviderCustomEndpoint,
+            model: aiProviderCustomModel,
+            visionModel: aiProviderCustomVisionModel,
+            maxTokens: aiProviderCustomMaxTokens,
+            temperature: aiProviderCustomTemperature,
+            timeout: aiProviderCustomTimeout,
+          };
+        }
+        config.multimodal = {
+          enabled: aiMultimodalEnabled,
+          provider: activeProvider || 'deepseek',
+          providers,
+          analysisPrompt: aiMultimodalAnalysisPrompt,
+          analysisInterval: aiMultimodalAnalysisInterval,
+          saveResults: aiMultimodalSaveResults,
+          maxResults: aiMultimodalMaxResults,
         };
       }
 
@@ -1686,14 +1808,14 @@ function getAffectedCameraCount(protocol: string): number {
               <!-- Backend Type Selection -->
               <div>
                 <div class="input-label mb-2">AI 后端类型</div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <button
                     type="button"
                     class="p-4 rounded-lg border-2 text-left transition-colors {aiBackend === 'http' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'th-border th-bg-hover'}"
                     onclick={() => { aiBackend = 'http'; }}
                   >
                     <div class="font-medium th-text-primary">HTTP 远程服务</div>
-                    <div class="text-sm th-text-secondary mt-1">发送帧到远程 AI 服务进行检测</div>
+                    <div class="text-sm th-text-secondary mt-1">实时视频帧送 YOLO/HTTP 服务检测</div>
                   </button>
                   <button
                     type="button"
@@ -1703,7 +1825,27 @@ function getAffectedCameraCount(protocol: string): number {
                     <div class="font-medium th-text-primary">Webhook 推送</div>
                     <div class="text-sm th-text-secondary mt-1">外部 AI 服务主动推送检测结果</div>
                   </button>
+                  <button
+                    type="button"
+                    class="p-4 rounded-lg border-2 text-left transition-colors {aiBackend === 'multimodal' ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'th-border th-bg-hover'}"
+                    onclick={() => { aiBackend = 'multimodal'; }}
+                  >
+                    <div class="font-medium th-text-primary">纯大模型分析</div>
+                    <div class="text-sm th-text-secondary mt-1">不经过 YOLO，直接用大模型看图分析</div>
+                  </button>
                 </div>
+              </div>
+
+              <div class="p-4 rounded-lg border th-border bg-gray-50 dark:bg-gray-800/50">
+                <label class="input-label" for="ai-ffmpeg-path">FFmpeg 路径</label>
+                <input
+                  id="ai-ffmpeg-path"
+                  type="text"
+                  class="input mt-1"
+                  bind:value={aiFFmpegPath}
+                  placeholder="留空自动查找，Docker 镜像内已内置 ffmpeg"
+                />
+                <p class="text-xs th-text-tertiary mt-1">H264/H265 实时 AI 分析需要 FFmpeg 解码；留空时会自动从 PATH 查找。</p>
               </div>
 
               <!-- HTTP Backend Config -->
@@ -1776,6 +1918,327 @@ function getAffectedCameraCount(protocol: string): number {
 }`}</pre>
                     </div>
                   </div>
+                </div>
+              {/if}
+
+              <!-- Multimodal Backend Config -->
+              {#if aiBackend === 'http' || aiBackend === 'multimodal'}
+                <div class="p-4 rounded-lg border th-border bg-gray-50 dark:bg-gray-800/50 space-y-6">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <h4 class="font-medium th-text-primary">{aiBackend === 'http' ? '检测后语义分析' : '大模型分析配置'}</h4>
+                      <p class="text-sm th-text-secondary mt-1">{aiBackend === 'http' ? 'YOLO 命中后异步调用大模型分析行为语义；关闭后只展示 YOLO 检测结果。' : '直接使用大模型分析实时画面。'}</p>
+                    </div>
+                    <button
+                      type="button"
+                      class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors {aiMultimodalEnabled ? 'bg-green-600' : 'th-bg-tertiary'}"
+                      onclick={() => { aiMultimodalEnabled = !aiMultimodalEnabled; }}
+                      aria-label="启用大模型分析"
+                    >
+                      <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {aiMultimodalEnabled ? 'translate-x-6' : 'translate-x-1'}"></span>
+                    </button>
+                  </div>
+
+                  {#if aiMultimodalEnabled}
+                    <!-- Provider Selection -->
+                    <div>
+                      <div class="input-label mb-2">模型提供商</div>
+                      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <button
+                          type="button"
+                          class="p-3 rounded-lg border-2 text-left transition-colors {aiMultimodalProvider === 'deepseek' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'th-border th-bg-hover'}"
+                          onclick={() => { aiMultimodalProvider = 'deepseek'; }}
+                        >
+                          <div class="font-medium th-text-primary">DeepSeek</div>
+                          <div class="text-xs th-text-secondary mt-1">国产大模型，性价比高</div>
+                        </button>
+                        <button
+                          type="button"
+                          class="p-3 rounded-lg border-2 text-left transition-colors {aiMultimodalProvider === 'openai' ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'th-border th-bg-hover'}"
+                          onclick={() => { aiMultimodalProvider = 'openai'; }}
+                        >
+                          <div class="font-medium th-text-primary">OpenAI</div>
+                          <div class="text-xs th-text-secondary mt-1">GPT-4o 多模态模型</div>
+                        </button>
+                        <button
+                          type="button"
+                          class="p-3 rounded-lg border-2 text-left transition-colors {aiMultimodalProvider === 'custom' ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20' : 'th-border th-bg-hover'}"
+                          onclick={() => { aiMultimodalProvider = 'custom'; }}
+                        >
+                          <div class="font-medium th-text-primary">自定义</div>
+                          <div class="text-xs th-text-secondary mt-1">兼容 OpenAI 接口的服务</div>
+                        </button>
+                      </div>
+                    </div>
+
+                    <!-- DeepSeek Config -->
+                    {#if aiMultimodalProvider === 'deepseek'}
+                      <div class="space-y-4 p-4 rounded-lg border th-border">
+                        <h5 class="font-medium th-text-primary">DeepSeek 配置</h5>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label class="input-label" for="deepseek-api-key">API Key</label>
+                            <input
+                              id="deepseek-api-key"
+                              type="password"
+                              class="input mt-1"
+                              bind:value={aiProviderDeepseekApiKey}
+                              placeholder="sk-xxx"
+                            />
+                          </div>
+                          <div>
+                            <label class="input-label" for="deepseek-endpoint">API 地址</label>
+                            <input
+                              id="deepseek-endpoint"
+                              type="text"
+                              class="input mt-1"
+                              bind:value={aiProviderDeepseekEndpoint}
+                              placeholder="https://api.deepseek.com/v1"
+                            />
+                          </div>
+                          <div>
+                            <label class="input-label" for="deepseek-model">文本模型</label>
+                            <input
+                              id="deepseek-model"
+                              type="text"
+                              class="input mt-1"
+                              bind:value={aiProviderDeepseekModel}
+                              placeholder="deepseek-chat"
+                            />
+                          </div>
+                          <div>
+                            <label class="input-label" for="deepseek-vision-model">视觉模型</label>
+                            <input
+                              id="deepseek-vision-model"
+                              type="text"
+                              class="input mt-1"
+                              bind:value={aiProviderDeepseekVisionModel}
+                              placeholder="deepseek-vl"
+                            />
+                          </div>
+                          <div>
+                            <label class="input-label" for="deepseek-max-tokens">最大 Token 数</label>
+                            <input
+                              id="deepseek-max-tokens"
+                              type="number"
+                              class="input mt-1"
+                              bind:value={aiProviderDeepseekMaxTokens}
+                              min="100"
+                              max="8000"
+                            />
+                          </div>
+                          <div>
+                            <label class="input-label" for="deepseek-temperature">温度 (0-1)</label>
+                            <input
+                              id="deepseek-temperature"
+                              type="number"
+                              class="input mt-1"
+                              bind:value={aiProviderDeepseekTemperature}
+                              min="0"
+                              max="1"
+                              step="0.1"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    {/if}
+
+                    <!-- OpenAI Config -->
+                    {#if aiMultimodalProvider === 'openai'}
+                      <div class="space-y-4 p-4 rounded-lg border th-border">
+                        <h5 class="font-medium th-text-primary">OpenAI 配置</h5>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label class="input-label" for="openai-api-key">API Key</label>
+                            <input
+                              id="openai-api-key"
+                              type="password"
+                              class="input mt-1"
+                              bind:value={aiProviderOpenaiApiKey}
+                              placeholder="sk-xxx"
+                            />
+                          </div>
+                          <div>
+                            <label class="input-label" for="openai-endpoint">API 地址</label>
+                            <input
+                              id="openai-endpoint"
+                              type="text"
+                              class="input mt-1"
+                              bind:value={aiProviderOpenaiEndpoint}
+                              placeholder="https://api.openai.com/v1"
+                            />
+                          </div>
+                          <div>
+                            <label class="input-label" for="openai-model">模型</label>
+                            <input
+                              id="openai-model"
+                              type="text"
+                              class="input mt-1"
+                              bind:value={aiProviderOpenaiModel}
+                              placeholder="gpt-4o"
+                            />
+                          </div>
+                          <div>
+                            <label class="input-label" for="openai-max-tokens">最大 Token 数</label>
+                            <input
+                              id="openai-max-tokens"
+                              type="number"
+                              class="input mt-1"
+                              bind:value={aiProviderOpenaiMaxTokens}
+                              min="100"
+                              max="8000"
+                            />
+                          </div>
+                          <div>
+                            <label class="input-label" for="openai-temperature">温度 (0-1)</label>
+                            <input
+                              id="openai-temperature"
+                              type="number"
+                              class="input mt-1"
+                              bind:value={aiProviderOpenaiTemperature}
+                              min="0"
+                              max="1"
+                              step="0.1"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    {/if}
+
+                    <!-- Custom Provider Config -->
+                    {#if aiMultimodalProvider === 'custom'}
+                      <div class="space-y-4 p-4 rounded-lg border th-border">
+                        <h5 class="font-medium th-text-primary">自定义 provider 配置</h5>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label class="input-label" for="custom-provider-name">Provider 名称</label>
+                            <input
+                              id="custom-provider-name"
+                              type="text"
+                              class="input mt-1"
+                              bind:value={aiProviderCustomName}
+                              placeholder="qwen, kimi, etc."
+                            />
+                          </div>
+                          <div>
+                            <label class="input-label" for="custom-api-key">API Key</label>
+                            <input
+                              id="custom-api-key"
+                              type="password"
+                              class="input mt-1"
+                              bind:value={aiProviderCustomApiKey}
+                              placeholder="sk-xxx"
+                            />
+                          </div>
+                          <div>
+                            <label class="input-label" for="custom-endpoint">API 地址</label>
+                            <input
+                              id="custom-endpoint"
+                              type="text"
+                              class="input mt-1"
+                              bind:value={aiProviderCustomEndpoint}
+                              placeholder="https://api.example.com/v1"
+                            />
+                          </div>
+                          <div>
+                            <label class="input-label" for="custom-model">文本模型</label>
+                            <input
+                              id="custom-model"
+                              type="text"
+                              class="input mt-1"
+                              bind:value={aiProviderCustomModel}
+                              placeholder="model-name"
+                            />
+                          </div>
+                          <div>
+                            <label class="input-label" for="custom-vision-model">视觉模型</label>
+                            <input
+                              id="custom-vision-model"
+                              type="text"
+                              class="input mt-1"
+                              bind:value={aiProviderCustomVisionModel}
+                              placeholder="vision-model-name"
+                            />
+                          </div>
+                          <div>
+                            <label class="input-label" for="custom-max-tokens">最大 Token 数</label>
+                            <input
+                              id="custom-max-tokens"
+                              type="number"
+                              class="input mt-1"
+                              bind:value={aiProviderCustomMaxTokens}
+                              min="100"
+                              max="8000"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    {/if}
+
+                    <!-- Common Multimodal Settings -->
+                    <div class="space-y-4 p-4 rounded-lg border th-border">
+                      <h5 class="font-medium th-text-primary">分析设置</h5>
+                      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label class="input-label" for="mm-analysis-interval">分析间隔</label>
+                          <input
+                            id="mm-analysis-interval"
+                            type="text"
+                            class="input mt-1"
+                            bind:value={aiMultimodalAnalysisInterval}
+                            placeholder="5m"
+                          />
+                          <p class="text-xs th-text-tertiary mt-1">如 1m, 5m, 1h</p>
+                        </div>
+                        <div>
+                          <label class="input-label" for="mm-max-results">最大结果数</label>
+                          <input
+                            id="mm-max-results"
+                            type="number"
+                            class="input mt-1"
+                            bind:value={aiMultimodalMaxResults}
+                            min="100"
+                            max="10000"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label class="input-label" for="mm-analysis-prompt">分析提示词 (可选)</label>
+                        <textarea
+                          id="mm-analysis-prompt"
+                          class="input mt-1 h-24"
+                          bind:value={aiMultimodalAnalysisPrompt}
+                          placeholder="留空使用默认提示词..."
+                        ></textarea>
+                      </div>
+                      <div class="flex items-center justify-between">
+                        <div>
+                          <div class="font-medium th-text-primary">保存分析结果</div>
+                          <div class="text-sm th-text-secondary">将分析结果保存到数据库</div>
+                        </div>
+                        <button
+                          type="button"
+                          class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors {aiMultimodalSaveResults ? 'bg-green-600' : 'th-bg-tertiary'}"
+                          onclick={() => { aiMultimodalSaveResults = !aiMultimodalSaveResults; }}
+                          aria-label="保存分析结果"
+                        >
+                          <span class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform {aiMultimodalSaveResults ? 'translate-x-6' : 'translate-x-1'}"></span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <!-- Usage Tips -->
+                    <div class="p-3 rounded-md bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800">
+                      <div class="text-sm text-green-800 dark:text-green-200">
+                        <div class="font-medium mb-1">使用提示:</div>
+                        <ul class="list-disc list-inside space-y-1">
+                          <li>大模型分析适合场景理解、异常描述等精细化任务</li>
+                          <li>建议配合本地 YOLO 使用：YOLO 做实时检测，大模型做深度分析</li>
+                          <li>分析间隔不宜过短，建议 5 分钟以上以控制 API 成本</li>
+                        </ul>
+                      </div>
+                    </div>
+                  {/if}
                 </div>
               {/if}
 

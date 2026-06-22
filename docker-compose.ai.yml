@@ -1,17 +1,16 @@
-# Docker Compose for lalmax-nvr with YOLO AI Service
+# Docker Compose for lalmax-nvr with AI Services
 #
 # Usage:
 #   docker compose -f docker-compose.ai.yml up -d
 #
 # This will start:
 #   1. lalmax-nvr (the NVR)
-#   2. yolo-service (YOLO object detection)
+#   2. yolo-service (YOLO object detection - optional)
 #
-# After startup, configure AI in the NVR web UI:
+# For multimodal analysis (DeepSeek/OpenAI), configure in the NVR web UI:
 #   - Go to Settings -> AI Detection
-#   - Enable AI
-#   - Select "HTTP 远程服务" as backend
-#   - Set endpoint to: http://yolo-service:8080/api/detect
+#   - Select "大模型分析" as backend
+#   - Configure your API key and provider settings
 
 services:
   lalmax-nvr:
@@ -21,30 +20,33 @@ services:
       dockerfile: Dockerfile
     ports:
       - "9090:9090"
+      - "5060:5060/tcp"
+      - "5060:5060/udp"
     volumes:
       - ./data:/var/lib/lalmax-nvr
-    restart: unless-stopped
-    depends_on:
-      yolo-service:
-        condition: service_healthy
-
-  yolo-service:
-    build:
-      context: ./docker/yolo-service
-      dockerfile: Dockerfile
     environment:
-      - PORT=8080
-      - MODEL=yolov8n.pt
-      - CONFIDENCE=0.5
-      - DEVICE=cpu
-    ports:
-      - "8080:8080"
+      - YOLO_SERVICE_URL=http://yolo-service:8080
     restart: unless-stopped
-    # Uncomment for GPU support:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+
+  # YOLO Service - Local object detection
+  # Uncomment to enable local YOLO detection
+  # yolo-service:
+  #   build:
+  #     context: ./docker/yolo-service
+  #     dockerfile: Dockerfile
+  #   environment:
+  #     - PORT=8080
+  #     - MODEL=yolov8n.pt
+  #     - CONFIDENCE=0.5
+  #     - DEVICE=cpu
+  #   ports:
+  #     - "8080:8080"
+  #   restart: unless-stopped
+  #   # Uncomment for GPU support (requires nvidia-docker):
+  #   # deploy:
+  #   #   resources:
+  #   #     reservations:
+  #   #       devices:
+  #   #         - driver: nvidia
+  #   #           count: 1
+  #   #           capabilities: [gpu]
