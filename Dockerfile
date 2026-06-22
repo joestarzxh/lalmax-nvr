@@ -18,8 +18,7 @@ WORKDIR /build
 
 # Cache go module downloads
 COPY go.mod go.sum ./
-COPY third/lal/go.mod third/lal/go.sum ./third/lal/
-COPY third/lalmax/go.mod third/lalmax/go.sum ./third/lalmax/
+COPY third/ ./third/
 RUN go mod download
 
 # Copy Go source

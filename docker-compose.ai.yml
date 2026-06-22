@@ -14,7 +14,10 @@
 
 services:
   lalmax-nvr:
-    image: ghcr.io/lalmax-pro/lalmax-nvr:latest
+    image: lalmax-nvr:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: lalmax-nvr
     restart: unless-stopped
     ports:
