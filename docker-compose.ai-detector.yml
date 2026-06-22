@@ -1,7 +1,7 @@
-# Docker Compose for gocv-yolo Service (Python + YOLO)
+# Docker Compose for AI Detector Service (Python + YOLO)
 #
 # Usage:
-#   docker compose -f docker-compose.gocv-yolo.yml up -d
+#   docker compose -f docker-compose.ai-detector.yml up -d
 #
 # This service:
 #   - Connects to lalmax-nvr API to get camera list
@@ -14,9 +14,9 @@
 #   - RTSP stream available (port 15544)
 
 services:
-  gocv-yolo:
+  ai-detector:
     build:
-      context: ./docker/gocv-yolo
+      context: ./docker/ai-detector
       dockerfile: Dockerfile
     environment:
       # NVR connection
