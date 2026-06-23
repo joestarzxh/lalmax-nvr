@@ -369,6 +369,14 @@ type HealthAutoRemediationConfig struct {
 	CooldownMinutes    int  `yaml:"cooldown_minutes"`
 	BlacklistHours     int  `yaml:"blacklist_hours"`
 	GlobalMaxPerMin    int  `yaml:"global_max_per_min"`
+	// OfflineRestartSeconds is how long a recorder may stay reconnecting/offline
+	// before auto-remediation restarts it. This catches "stuck" streams that the
+	// recorder's own reconnect loop can never recover — e.g. when the source video
+	// encoding changes mid-stream and the codec-locked recorder can't reattach.
+	// A full restart re-probes the encoding and resumes recording with the new
+	// codec. Set high enough that normal transient reconnects and brief camera
+	// reboots heal on their own. Default 90.
+	OfflineRestartSeconds int `yaml:"offline_restart_seconds"`
 }
 
 // RemoteLogConfig defines remote log shipping settings (e.g. VictoriaLogs).
@@ -830,6 +838,9 @@ func Validate(cfg *Config) error {
 			if cfg.Health.AutoRemediation.CooldownMinutes < 1 {
 				return fmt.Errorf("health.auto_remediation.cooldown_minutes must be >= 1")
 			}
+			if cfg.Health.AutoRemediation.OfflineRestartSeconds < 1 {
+				return fmt.Errorf("health.auto_remediation.offline_restart_seconds must be >= 1")
+			}
 		}
 	}
 	return nil
@@ -1143,6 +1154,9 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.Health.AutoRemediation.GlobalMaxPerMin == 0 {
 		cfg.Health.AutoRemediation.GlobalMaxPerMin = 10
+	}
+	if cfg.Health.AutoRemediation.OfflineRestartSeconds == 0 {
+		cfg.Health.AutoRemediation.OfflineRestartSeconds = 90
 	}
 
 	// Remote log defaults

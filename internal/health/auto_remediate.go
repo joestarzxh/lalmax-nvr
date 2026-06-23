@@ -25,8 +25,11 @@ type cameraRestartState struct {
 }
 
 // AutoRemediator decides whether to automatically restart a failed camera recorder.
-// It enforces safety rules: only triggers on StatusError, never on StatusReconnecting,
-// with per-camera rate limiting, cooldown, global rate limiting, and blacklisting.
+// It triggers immediately on StatusError, and also on a recorder that has stayed
+// StatusReconnecting/StatusOffline for longer than OfflineRestartSeconds — which
+// catches "stuck" streams the reconnect loop can never recover on its own (e.g. the
+// source encoding changed mid-stream). It enforces safety rules: per-camera rate
+// limiting, cooldown, global rate limiting, and blacklisting.
 type AutoRemediator struct {
 	cfg         config.HealthAutoRemediationConfig
 	restartFn   RestartRecorderFunc
@@ -35,6 +38,9 @@ type AutoRemediator struct {
 	mu             sync.Mutex
 	cameraStates   map[string]*cameraRestartState
 	globalRestarts []time.Time
+	// unhealthySince tracks when a camera first entered a sustained-unhealthy
+	// state (reconnecting/offline). Cleared when it recovers or is restarted.
+	unhealthySince map[string]time.Time
 }
 
 // NewAutoRemediator creates a new AutoRemediator with the given config and injected functions.
@@ -45,6 +51,7 @@ func NewAutoRemediator(cfg config.HealthAutoRemediationConfig, restartFn Restart
 		isEnabledFn:    isEnabledFn,
 		cameraStates:   make(map[string]*cameraRestartState),
 		globalRestarts: make([]time.Time, 0),
+		unhealthySince: make(map[string]time.Time),
 	}
 }
 
@@ -56,12 +63,7 @@ func (r *AutoRemediator) Check(cameraID string, status string) error {
 		return nil
 	}
 
-	// Safety check 1: only trigger on StatusError.
-	if status != string(model.StatusError) {
-		return nil
-	}
-
-	// Safety check 2: camera must be enabled.
+	// Safety check 1: camera must be enabled.
 	if r.isEnabledFn != nil && !r.isEnabledFn(cameraID) {
 		return nil
 	}
@@ -70,6 +72,31 @@ func (r *AutoRemediator) Check(cameraID string, status string) error {
 	defer r.mu.Unlock()
 
 	now := time.Now()
+
+	// Safety check 2: status must be actionable.
+	switch status {
+	case string(model.StatusError):
+		// Recorder gave up — act immediately.
+		delete(r.unhealthySince, cameraID)
+	case string(model.StatusReconnecting), string(model.StatusOffline):
+		// A stuck stream the reconnect loop can never recover on its own (e.g.
+		// the source video encoding changed mid-stream and the codec-locked
+		// recorder can't reattach). Only act once it has stayed unhealthy for
+		// OfflineRestartSeconds, so transient reconnects and brief camera
+		// reboots heal without intervention.
+		since, ok := r.unhealthySince[cameraID]
+		if !ok {
+			r.unhealthySince[cameraID] = now
+			return nil
+		}
+		if now.Sub(since) < time.Duration(r.cfg.OfflineRestartSeconds)*time.Second {
+			return nil
+		}
+	default:
+		// Healthy or intentional state (recording/paused/stopped) — never restart.
+		delete(r.unhealthySince, cameraID)
+		return nil
+	}
 
 	state := r.getOrCreateState(cameraID)
 
@@ -108,6 +135,9 @@ func (r *AutoRemediator) Check(cameraID string, status string) error {
 	// All checks passed — record attempt and trigger restart.
 	state.attempts = append(state.attempts, now)
 	r.globalRestarts = append(r.globalRestarts, now)
+	// Re-arm sustained-unhealthy tracking; if the restart doesn't recover the
+	// stream, the next cycle starts counting toward another attempt afresh.
+	delete(r.unhealthySince, cameraID)
 
 	// Check if this attempt triggers blacklisting.
 	updatedRecent := filterRecent(state.attempts, now, time.Hour)

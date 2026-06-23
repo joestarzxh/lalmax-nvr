@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
@@ -312,5 +313,103 @@ func TestAutoRemediator_DisabledConfig(t *testing.T) {
 	}
 	if got := mock.callCount(t); got != 0 {
 		t.Fatalf("expected 0 restart calls when disabled, got %d", got)
+	}
+}
+
+// sustainedConfig is the default test config plus an offline-restart window.
+func sustainedConfig(offlineRestartSeconds int) config.HealthAutoRemediationConfig {
+	return config.HealthAutoRemediationConfig{
+		Enabled:               true,
+		MaxRestartsPerHour:    3,
+		CooldownMinutes:       5,
+		BlacklistHours:        1,
+		GlobalMaxPerMin:       10,
+		OfflineRestartSeconds: offlineRestartSeconds,
+	}
+}
+
+func TestAutoRemediator_TriggersOnSustainedReconnect(t *testing.T) {
+	t.Parallel()
+	r, mock, _ := newTestRemediatorWithConfig(t, sustainedConfig(90))
+
+	// First sighting only records the time — must not restart yet.
+	if err := r.Check("cam-1", string(model.StatusReconnecting)); err != nil {
+		t.Fatalf("Check() returned error: %v", err)
+	}
+	if got := mock.callCount(t); got != 0 {
+		t.Fatalf("expected no restart on first sighting, got %d", got)
+	}
+
+	// Simulate the recorder having been reconnecting past the window.
+	r.mu.Lock()
+	r.unhealthySince["cam-1"] = time.Now().Add(-2 * time.Minute)
+	r.mu.Unlock()
+
+	if err := r.Check("cam-1", string(model.StatusReconnecting)); err != nil {
+		t.Fatalf("Check() returned error: %v", err)
+	}
+	if got := mock.callCount(t); got != 1 {
+		t.Fatalf("expected 1 restart after sustained reconnect, got %d", got)
+	}
+}
+
+func TestAutoRemediator_TriggersOnSustainedOffline(t *testing.T) {
+	t.Parallel()
+	r, mock, _ := newTestRemediatorWithConfig(t, sustainedConfig(30))
+
+	if err := r.Check("cam-1", string(model.StatusOffline)); err != nil {
+		t.Fatalf("Check() returned error: %v", err)
+	}
+	r.mu.Lock()
+	r.unhealthySince["cam-1"] = time.Now().Add(-time.Minute)
+	r.mu.Unlock()
+
+	if err := r.Check("cam-1", string(model.StatusOffline)); err != nil {
+		t.Fatalf("Check() returned error: %v", err)
+	}
+	if got := mock.callCount(t); got != 1 {
+		t.Fatalf("expected 1 restart after sustained offline, got %d", got)
+	}
+}
+
+func TestAutoRemediator_DoesNotTriggerWithinOfflineWindow(t *testing.T) {
+	t.Parallel()
+	r, mock, _ := newTestRemediatorWithConfig(t, sustainedConfig(90))
+
+	// Repeated checks within the window mimic a normal transient reconnect.
+	for i := 0; i < 3; i++ {
+		if err := r.Check("cam-1", string(model.StatusReconnecting)); err != nil {
+			t.Fatalf("Check() returned error: %v", err)
+		}
+	}
+	if got := mock.callCount(t); got != 0 {
+		t.Fatalf("expected no restart within offline window, got %d", got)
+	}
+}
+
+func TestAutoRemediator_ClearsUnhealthyOnRecovery(t *testing.T) {
+	t.Parallel()
+	r, mock, _ := newTestRemediatorWithConfig(t, sustainedConfig(90))
+
+	// Enter reconnecting, then recover — tracking must be cleared.
+	if err := r.Check("cam-1", string(model.StatusReconnecting)); err != nil {
+		t.Fatalf("Check() returned error: %v", err)
+	}
+	if err := r.Check("cam-1", string(model.StatusRecording)); err != nil {
+		t.Fatalf("Check() returned error: %v", err)
+	}
+	r.mu.Lock()
+	_, tracked := r.unhealthySince["cam-1"]
+	r.mu.Unlock()
+	if tracked {
+		t.Fatalf("expected unhealthySince cleared after recovery")
+	}
+
+	// A fresh reconnect after recovery starts the window over — no instant restart.
+	if err := r.Check("cam-1", string(model.StatusReconnecting)); err != nil {
+		t.Fatalf("Check() returned error: %v", err)
+	}
+	if got := mock.callCount(t); got != 0 {
+		t.Fatalf("expected no restart immediately after recovery, got %d", got)
 	}
 }
