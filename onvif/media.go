@@ -103,6 +103,12 @@ func (s *MediaService) getMedia1Profiles(ctx context.Context) ([]MediaProfile, e
 }
 
 // getMedia2Profiles retrieves profiles using Media2 service (Profile T).
+//
+// NOTE: The Media2 (ver20) schema differs from Media1: each profile's
+// configurations are nested under a <Configurations> wrapper and the encoder
+// element is named <VideoEncoder> (not <VideoEncoderConfiguration>). Parsing
+// must follow Profiles > Configurations > VideoEncoder > Encoding, otherwise
+// Encoding/Resolution come back empty for Profile T devices.
 func (s *MediaService) getMedia2Profiles(ctx context.Context) ([]MediaProfile, error) {
 	body := `<GetProfiles xmlns="http://www.onvif.org/ver20/media/wsdl">
   <Type>All</Type>
@@ -119,29 +125,31 @@ func (s *MediaService) getMedia2Profiles(ctx context.Context) ([]MediaProfile, e
 	var result struct {
 		XMLName xml.Name `xml:"GetProfilesResponse"`
 		Profiles []struct {
-			Token string `xml:"token,attr"`
-			Name  string `xml:"Name"`
-			VideoSourceConfiguration struct {
-				Token string `xml:"token,attr"`
-			} `xml:"VideoSourceConfiguration"`
-			VideoEncoderConfiguration struct {
-				Token      string `xml:"token,attr"`
-				Encoding   string `xml:"Encoding"`
-				Resolution struct {
-					Width  int `xml:"Width"`
-					Height int `xml:"Height"`
-				} `xml:"Resolution"`
-				RateControl struct {
-					FrameRateLimit int `xml:"FrameRateLimit"`
-					BitrateLimit   int `xml:"BitrateLimit"`
-				} `xml:"RateControl"`
-			} `xml:"VideoEncoderConfiguration"`
-			AudioSourceConfiguration struct {
-				Token string `xml:"token,attr"`
-			} `xml:"AudioSourceConfiguration"`
-			AudioEncoderConfiguration struct {
-				Token string `xml:"token,attr"`
-			} `xml:"AudioEncoderConfiguration"`
+			Token          string `xml:"token,attr"`
+			Name           string `xml:"Name"`
+			Configurations struct {
+				VideoSource struct {
+					Token string `xml:"token,attr"`
+				} `xml:"VideoSource"`
+				VideoEncoder struct {
+					Token      string `xml:"token,attr"`
+					Encoding   string `xml:"Encoding"`
+					Resolution struct {
+						Width  int `xml:"Width"`
+						Height int `xml:"Height"`
+					} `xml:"Resolution"`
+					RateControl struct {
+						FrameRateLimit int `xml:"FrameRateLimit"`
+						BitrateLimit   int `xml:"BitrateLimit"`
+					} `xml:"RateControl"`
+				} `xml:"VideoEncoder"`
+				AudioSource struct {
+					Token string `xml:"token,attr"`
+				} `xml:"AudioSource"`
+				AudioEncoder struct {
+					Token string `xml:"token,attr"`
+				} `xml:"AudioEncoder"`
+			} `xml:"Configurations"`
 		} `xml:"Profiles"`
 	}
 
@@ -151,20 +159,21 @@ func (s *MediaService) getMedia2Profiles(ctx context.Context) ([]MediaProfile, e
 
 	profiles := make([]MediaProfile, 0, len(result.Profiles))
 	for _, p := range result.Profiles {
+		cfg := p.Configurations
 		profile := MediaProfile{
 			Token:        p.Token,
 			Name:         p.Name,
-			VideoSource:  p.VideoSourceConfiguration.Token,
-			VideoEncoder: p.VideoEncoderConfiguration.Token,
-			AudioSource:  p.AudioSourceConfiguration.Token,
-			AudioEncoder: p.AudioEncoderConfiguration.Token,
-			Encoding:     p.VideoEncoderConfiguration.Encoding,
+			VideoSource:  cfg.VideoSource.Token,
+			VideoEncoder: cfg.VideoEncoder.Token,
+			AudioSource:  cfg.AudioSource.Token,
+			AudioEncoder: cfg.AudioEncoder.Token,
+			Encoding:     cfg.VideoEncoder.Encoding,
 			Resolution: Resolution{
-				Width:  p.VideoEncoderConfiguration.Resolution.Width,
-				Height: p.VideoEncoderConfiguration.Resolution.Height,
+				Width:  cfg.VideoEncoder.Resolution.Width,
+				Height: cfg.VideoEncoder.Resolution.Height,
 			},
-			Framerate: p.VideoEncoderConfiguration.RateControl.FrameRateLimit,
-			Bitrate:   p.VideoEncoderConfiguration.RateControl.BitrateLimit,
+			Framerate: cfg.VideoEncoder.RateControl.FrameRateLimit,
+			Bitrate:   cfg.VideoEncoder.RateControl.BitrateLimit,
 		}
 		profiles = append(profiles, profile)
 	}
