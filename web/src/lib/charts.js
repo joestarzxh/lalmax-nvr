@@ -111,6 +111,185 @@ export function createTrendChart(Chart, canvas, trends) {
 }
 
 /**
+ * Format a Unix timestamp (seconds) to a short time label (HH:MM).
+ * @param {number} ts
+ * @returns {string}
+ */
+function fmtTime(ts) {
+  const d = new Date(ts * 1000);
+  return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+}
+
+/**
+ * Create a system-resource time-series line chart.
+ * @param {import('chart.js')} Chart
+ * @param {HTMLCanvasElement} canvas
+ * @param {{ ts: number; cpu: number; mem: number; net_up: number; net_dn: number }[]} samples
+ * @param {'cpu'|'mem'|'net'} metric  which metric to chart
+ * @param {string} label  display label
+ * @returns {import('chart.js').Chart | null}
+ */
+export function createSystemMetricChart(Chart, canvas, samples, metric, label) {
+  if (!canvas || !samples || samples.length === 0) return null;
+  const { gridColor, textColor, accentColor, accentFill } = getChartThemeColors();
+
+  const labels = samples.map(s => fmtTime(s.ts));
+  let data;
+  let unit = '';
+  if (metric === 'cpu') {
+    data = samples.map(s => +s.cpu.toFixed(1));
+    unit = '%';
+  } else if (metric === 'mem') {
+    data = samples.map(s => +s.mem.toFixed(1));
+    unit = '%';
+  } else if (metric === 'goroutines') {
+    data = samples.map(s => s.goroutines ?? 0);
+  } else {
+    // net: show upload + download as two datasets, in KB/s
+    const up = samples.map(s => +(s.net_up / 1024).toFixed(1));
+    const dn = samples.map(s => +(s.net_dn / 1024).toFixed(1));
+    return new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: '↑ KB/s',
+            data: up,
+            borderColor: 'rgba(56, 189, 248, 0.8)',
+            backgroundColor: 'rgba(56, 189, 248, 0.08)',
+            fill: true, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+          },
+          {
+            label: '↓ KB/s',
+            data: dn,
+            borderColor: 'rgba(16, 185, 129, 0.8)',
+            backgroundColor: 'rgba(16, 185, 129, 0.08)',
+            fill: true, tension: 0.3, pointRadius: 0, borderWidth: 1.5,
+          },
+        ],
+      },
+      options: netChartOptions(gridColor, textColor),
+    });
+  }
+
+  return new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: `${label} (${unit})`,
+        data,
+        borderColor: accentColor,
+        backgroundColor: accentFill,
+        fill: true,
+        tension: 0.3,
+        pointRadius: 0,
+        borderWidth: 1.5,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { mode: 'index', intersect: false },
+      },
+      scales: {
+        x: { grid: { color: gridColor }, ticks: { color: textColor, maxTicksLimit: 6, maxRotation: 0 } },
+        y: {
+          grid: { color: gridColor },
+          ticks: { color: textColor, callback: v => v + unit },
+          beginAtZero: true,
+          ...(unit === '%' ? { max: 100 } : {}),
+        },
+      },
+    },
+  });
+}
+
+function netChartOptions(gridColor, textColor) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { labels: { color: textColor, boxWidth: 12, font: { size: 11 } } },
+      tooltip: { mode: 'index', intersect: false },
+    },
+    scales: {
+      x: { grid: { color: gridColor }, ticks: { color: textColor, maxTicksLimit: 6, maxRotation: 0 } },
+      y: { grid: { color: gridColor }, ticks: { color: textColor, callback: v => v + ' KB/s' }, beginAtZero: true },
+    },
+  };
+}
+
+/**
+ * Update an existing system-metric chart in place (no destroy/recreate, no flicker).
+ * @param {import('chart.js').Chart} chart
+ * @param {{ ts: number; cpu: number; mem: number; net_up: number; net_dn: number }[]} samples
+ * @param {'cpu'|'mem'|'net'} metric
+ */
+export function updateSystemMetricChart(chart, samples, metric) {
+  if (!chart || !samples || samples.length === 0) return;
+  chart.data.labels = samples.map(s => fmtTime(s.ts));
+  if (metric === 'net') {
+    chart.data.datasets[0].data = samples.map(s => +(s.net_up / 1024).toFixed(1));
+    chart.data.datasets[1].data = samples.map(s => +(s.net_dn / 1024).toFixed(1));
+  } else if (metric === 'cpu') {
+    chart.data.datasets[0].data = samples.map(s => +s.cpu.toFixed(1));
+  } else if (metric === 'goroutines') {
+    chart.data.datasets[0].data = samples.map(s => s.goroutines ?? 0);
+  } else {
+    chart.data.datasets[0].data = samples.map(s => +s.mem.toFixed(1));
+  }
+  chart.update('none'); // 'none' = skip animation for live updates
+}
+
+/**
+ * Create the hourly recording activity bar chart.
+ * @param {import('chart.js')} Chart
+ * @param {HTMLCanvasElement} canvas
+ * @param {{ hour: string; recordings: number; total_size: number }[]} hourly
+ * @returns {import('chart.js').Chart | null}
+ */
+export function createHourlyActivityChart(Chart, canvas, hourly) {
+  if (!canvas || !hourly || hourly.length === 0) return null;
+  const { gridColor, textColor } = getChartThemeColors();
+
+  const labels = hourly.map(h => {
+    const d = new Date(h.hour);
+    return d.getMonth() + 1 + '/' + d.getDate() + ' ' + d.getHours() + 'h';
+  });
+  const data = hourly.map(h => h.recordings);
+
+  return new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Recordings',
+        data,
+        backgroundColor: 'rgba(139, 92, 246, 0.6)',
+        borderRadius: 3,
+        borderSkipped: false,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { mode: 'index', intersect: false },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: textColor, maxTicksLimit: 12, maxRotation: 45 } },
+        y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true },
+      },
+    },
+  });
+}
+
+/**
  * Aggregate camera recording counts from trend data.
  * @param {{ date: string; total_size: number; cameras?: Record<string, number> }[]} trends
  * @returns {Record<string, number>}

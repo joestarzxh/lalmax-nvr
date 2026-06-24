@@ -36,6 +36,7 @@ export interface HealthResponse {
   status: 'ok' | 'degraded' | 'unhealthy';
   checks: Record<string, HealthCheck>;
   uptime: string;
+  start_time?: string; // RFC3339
   setup_required?: boolean;
 }
 
@@ -227,6 +228,47 @@ export interface NetworkInterface {
 // Get local network interfaces
 export async function getLocalNetworkInterfaces(signal?: AbortSignal): Promise<{ interfaces: NetworkInterface[] }> {
   return apiRequest<{ interfaces: NetworkInterface[] }>('/network', { signal });
+}
+
+// System metrics history sample
+export interface SystemMetricSample {
+  ts: number;         // Unix seconds
+  cpu: number;        // 0–100
+  mem: number;        // 0–100
+  net_up: number;     // bytes/sec
+  net_dn: number;     // bytes/sec
+  goroutines: number;
+}
+
+// Get system resource history (period: "1h" | "6h" | "24h")
+export async function getSystemMetricsHistory(period: string, signal?: AbortSignal): Promise<SystemMetricSample[]> {
+  return apiRequest<SystemMetricSample[]>(`/stats/system/history?period=${encodeURIComponent(period)}`, { signal });
+}
+
+// Hourly recording activity
+export interface HourlyStats {
+  hour: string;       // RFC3339, e.g. "2024-01-01T14:00:00Z"
+  recordings: number;
+  total_size: number;
+}
+
+// Get hourly recording stats (hours: 24, 48, 168)
+export async function getHourlyStats(hours: number, signal?: AbortSignal): Promise<HourlyStats[]> {
+  return apiRequest<HourlyStats[]>(`/stats/hourly?hours=${hours}`, { signal });
+}
+
+// Camera uptime / stability stat
+export interface CameraUptimeStat {
+  camera_id: string;
+  camera_name: string;
+  connection_losses: number;
+  connection_restores: number;
+  total_events: number;
+}
+
+// Get camera stability stats (days: 7, 14, 30)
+export async function getCameraUptimeStats(days: number, signal?: AbortSignal): Promise<CameraUptimeStat[]> {
+  return apiRequest<CameraUptimeStat[]>(`/stats/camera-uptime?days=${days}`, { signal });
 }
 
 // Setup response

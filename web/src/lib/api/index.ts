@@ -20,6 +20,9 @@ export {
   apiRequestBlob,
   ApiRequestError,
   setupApi,
+  getSystemMetricsHistory,
+  getHourlyStats,
+  getCameraUptimeStats,
 } from './client';
 
 export type {
@@ -31,6 +34,9 @@ export type {
   SystemStats,
   SetupResponse,
   NetworkInterface,
+  SystemMetricSample,
+  HourlyStats,
+  CameraUptimeStat,
 } from './client';
 
 // Cameras — CRUD, ONVIF, PTZ, protocols

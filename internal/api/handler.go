@@ -43,6 +43,7 @@ type HealthResponse struct {
 	Status        string                 `json:"status"` // "ok" | "degraded" | "unhealthy"
 	Checks        map[string]HealthCheck `json:"checks"`
 	Uptime        string                 `json:"uptime"`
+	StartTime     time.Time              `json:"start_time"`
 	SetupRequired bool                   `json:"setup_required"`
 	Cameras       *CameraHealthSummary   `json:"cameras,omitempty"`
 }
@@ -148,6 +149,8 @@ type Handler struct {
 	snapshotMgr       *camera.SnapshotManager
 	// readyzDiskUsage overrides disk probing for /api/readyz (tests only).
 	readyzDiskUsage func() (total, used int64, err error)
+	// sysMetrics holds the in-memory ring buffer of periodic system metric samples.
+	sysMetrics *sysMetricsHistory
 }
 
 // GB28181StreamStatus reports active GB28181 play sessions for stream status overlay.
@@ -180,6 +183,7 @@ func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler
 		snapshots:        make(map[string]*snapshotCache),
 		mergeMgr:         mergeMgr,
 		cloudProxy:       cloudProxy,
+		sysMetrics:       newSysMetricsHistory(),
 		onvifDiscover:    onvif.Discover,
 		onvifProbeDevice: onvif.ProbeDevice,
 		onvifNewClient: func(endpoint, username, password string) onvifDeviceClient {
@@ -228,7 +232,9 @@ func (h *Handler) SetAIManager(mgr *ai.Manager) {
 }
 
 // Routes returns a chi.Router with all routes registered.
+// It also starts the background system-metrics sampler (once per handler instance).
 func (h *Handler) Routes() http.Handler {
+	h.startMetricsSampler(context.Background())
 	r := chi.NewRouter()
 
 	// Public routes with rate limiting on health/readyz
@@ -335,6 +341,9 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/stats", h.handleStats)
 		r.Get("/api/stats/system", h.handleSystemStats)
 		r.Get("/api/stats/trends", h.handleStatsTrends)
+		r.Get("/api/stats/system/history", h.handleSystemHistory)
+		r.Get("/api/stats/hourly", h.handleHourlyStats)
+		r.Get("/api/stats/camera-uptime", h.handleCameraUptimeStats)
 		r.Get("/api/network", h.handleGetNetworkInterfaces)
 		r.Get("/api/streams", h.handleListStreams)
 		r.Get("/api/streams/{stream_id}", h.handleGetStream)

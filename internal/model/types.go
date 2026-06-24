@@ -327,3 +327,29 @@ type CameraHealth struct {
 	LatestMessage string    `json:"latest_message"`
 	LastEventAt   time.Time `json:"last_event_at"`
 }
+
+// HourlyStats represents recording activity aggregated per hour.
+type HourlyStats struct {
+	Hour       string `json:"hour"`        // RFC3339, e.g. "2024-01-01T14:00:00Z"
+	Recordings int    `json:"recordings"`
+	TotalSize  int64  `json:"total_size"`
+}
+
+// CameraUptimeStat summarises health-event activity for a single camera over a period.
+type CameraUptimeStat struct {
+	CameraID           string `json:"camera_id"`
+	CameraName         string `json:"camera_name"`
+	ConnectionLosses   int    `json:"connection_losses"`
+	ConnectionRestores int    `json:"connection_restores"`
+	TotalEvents        int    `json:"total_events"`
+}
+
+// SystemMetricSample is a single periodic snapshot of system resource usage.
+type SystemMetricSample struct {
+	Timestamp  int64   `json:"ts"`         // Unix seconds
+	CPUPct     float64 `json:"cpu"`        // 0–100
+	MemPct     float64 `json:"mem"`        // 0–100
+	NetUpBps   float64 `json:"net_up"`     // bytes/sec sent
+	NetDnBps   float64 `json:"net_dn"`     // bytes/sec received
+	Goroutines int     `json:"goroutines"` // runtime.NumGoroutine()
+}

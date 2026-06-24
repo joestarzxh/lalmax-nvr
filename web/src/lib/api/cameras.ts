@@ -32,6 +32,7 @@ export interface Camera {
   audio_enabled?: boolean;
   source_type?: string;
   recording_paused?: boolean;
+  created_at?: string; // RFC3339
 }
 
 export interface CreateCameraRequest {

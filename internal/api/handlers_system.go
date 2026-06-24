@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lalmax-pro/lalmax-nvr/internal/ai"
@@ -24,6 +26,183 @@ import (
 	gopsutilnet "github.com/shirou/gopsutil/v4/net"
 	"github.com/shirou/gopsutil/v4/process"
 )
+
+// --- System metrics history ---
+
+const metricsHistoryCap = 2880 // 24h at 30s intervals
+
+// sysMetricsHistory is a fixed-capacity ring buffer of SystemMetricSample.
+type sysMetricsHistory struct {
+	mu       sync.RWMutex
+	samples  [metricsHistoryCap]model.SystemMetricSample
+	head     int  // next write position
+	count    int  // number of valid entries (≤ cap)
+	prevCPUTotal uint64
+	prevCPUIdle  uint64
+	prevNetSent  uint64
+	prevNetRecv  uint64
+	prevTS       int64
+}
+
+func newSysMetricsHistory() *sysMetricsHistory {
+	return &sysMetricsHistory{}
+}
+
+// sample collects one data point and appends it to the ring buffer.
+func (h *sysMetricsHistory) sample() {
+	now := time.Now().Unix()
+
+	cpuTotal, cpuIdle, _ := readCPURaw()
+	memTotal, memAvailable, _ := readMemoryInfo()
+	netSent, netRecv, _ := readNetworkInfo()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	s := model.SystemMetricSample{Timestamp: now}
+
+	if h.prevTS > 0 {
+		dt := float64(now - h.prevTS)
+		if dt > 0 {
+			totalDelta := cpuTotal - h.prevCPUTotal
+			idleDelta := cpuIdle - h.prevCPUIdle
+			if totalDelta > 0 {
+				s.CPUPct = math.Round((float64(totalDelta-idleDelta)/float64(totalDelta)*100)*10) / 10
+			}
+			s.NetUpBps = math.Round(float64(netSent-h.prevNetSent)/dt*10) / 10
+			s.NetDnBps = math.Round(float64(netRecv-h.prevNetRecv)/dt*10) / 10
+		}
+	}
+	if memTotal > 0 {
+		s.MemPct = math.Round((float64(memTotal-memAvailable)/float64(memTotal)*100)*10) / 10
+	}
+	s.Goroutines = runtime.NumGoroutine()
+
+	h.prevCPUTotal = cpuTotal
+	h.prevCPUIdle = cpuIdle
+	h.prevNetSent = netSent
+	h.prevNetRecv = netRecv
+	h.prevTS = now
+
+	h.samples[h.head] = s
+	h.head = (h.head + 1) % metricsHistoryCap
+	if h.count < metricsHistoryCap {
+		h.count++
+	}
+}
+
+// since returns all samples newer than cutoff, in chronological order.
+func (h *sysMetricsHistory) since(cutoff int64) []model.SystemMetricSample {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	if h.count == 0 {
+		return []model.SystemMetricSample{}
+	}
+
+	// Determine start position in ring
+	start := (h.head - h.count + metricsHistoryCap) % metricsHistoryCap
+	var result []model.SystemMetricSample
+	for i := 0; i < h.count; i++ {
+		pos := (start + i) % metricsHistoryCap
+		if h.samples[pos].Timestamp >= cutoff {
+			result = append(result, h.samples[pos])
+		}
+	}
+	if result == nil {
+		return []model.SystemMetricSample{}
+	}
+	return result
+}
+
+// startMetricsSampler launches a background goroutine that samples every 30 seconds.
+func (h *Handler) startMetricsSampler(ctx context.Context) {
+	if h.sysMetrics == nil {
+		return
+	}
+	go func() {
+		// Immediate first sample so we have a baseline for delta computation
+		h.sysMetrics.sample()
+		// Second sample after 2s for an early CPU/net rate
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+		h.sysMetrics.sample()
+
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				h.sysMetrics.sample()
+			}
+		}
+	}()
+}
+
+// handleSystemHistory returns a time-series of system resource samples.
+// Query param: period=1h|6h|24h (default 1h)
+func (h *Handler) handleSystemHistory(w http.ResponseWriter, r *http.Request) {
+	if h.sysMetrics == nil {
+		writeJSON(w, http.StatusOK, []model.SystemMetricSample{})
+		return
+	}
+	period := r.URL.Query().Get("period")
+	var cutoff int64
+	switch period {
+	case "5m":
+		cutoff = time.Now().Add(-5 * time.Minute).Unix()
+	case "15m":
+		cutoff = time.Now().Add(-15 * time.Minute).Unix()
+	case "30m":
+		cutoff = time.Now().Add(-30 * time.Minute).Unix()
+	case "6h":
+		cutoff = time.Now().Add(-6 * time.Hour).Unix()
+	case "24h":
+		cutoff = time.Now().Add(-24 * time.Hour).Unix()
+	default: // "1h"
+		cutoff = time.Now().Add(-1 * time.Hour).Unix()
+	}
+	writeJSON(w, http.StatusOK, h.sysMetrics.since(cutoff))
+}
+
+// handleHourlyStats returns per-hour recording activity.
+// Query param: hours=24|48|168 (default 24)
+func (h *Handler) handleHourlyStats(w http.ResponseWriter, r *http.Request) {
+	hours := 24
+	if v := r.URL.Query().Get("hours"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 720 {
+			hours = n
+		}
+	}
+	data, err := h.db.GetHourlyRecordingStats(r.Context(), hours)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get hourly stats")
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+// handleCameraUptimeStats returns health-event activity per camera.
+// Query param: days=7|14|30 (default 7)
+func (h *Handler) handleCameraUptimeStats(w http.ResponseWriter, r *http.Request) {
+	days := 7
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 90 {
+			days = n
+		}
+	}
+	data, err := h.db.GetCameraUptimeStats(r.Context(), days)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get camera uptime stats")
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
 
 // --- Public endpoints ---
 
@@ -110,6 +289,7 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	// Uptime
 	resp.Uptime = formatUptime(time.Since(appStartTime))
+	resp.StartTime = appStartTime
 
 	// SetupRequired — true when no password is configured
 	resp.SetupRequired = h.config != nil && h.config.Auth.PasswordHash == "" && h.config.Auth.Password == ""

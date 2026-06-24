@@ -92,6 +92,91 @@ func (d *DB) GetLastRecordingTime(ctx context.Context, cameraID string) (*time.T
 	return &t, nil
 }
 
+// GetHourlyRecordingStats returns per-hour recording counts and sizes for the last N hours.
+func (d *DB) GetHourlyRecordingStats(ctx context.Context, hours int) ([]model.HourlyStats, error) {
+	if hours <= 0 {
+		hours = 24
+	}
+	if hours > 720 {
+		hours = 720
+	}
+	cutoff := time.Now().Add(-time.Duration(hours) * time.Hour).UTC()
+
+	query := `SELECT strftime('%Y-%m-%dT%H:00:00Z', started_at) as hour,
+		COUNT(*) as recordings,
+		SUM(COALESCE(file_size, 0)) as total_size
+		FROM recordings
+		WHERE started_at >= ?
+		GROUP BY strftime('%Y-%m-%dT%H:00:00Z', started_at)
+		ORDER BY hour ASC`
+
+	rows, err := d.db.QueryContext(ctx, query, formatTime(cutoff))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []model.HourlyStats
+	for rows.Next() {
+		var s model.HourlyStats
+		if err := rows.Scan(&s.Hour, &s.Recordings, &s.TotalSize); err != nil {
+			return nil, err
+		}
+		result = append(result, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = []model.HourlyStats{}
+	}
+	return result, nil
+}
+
+// GetCameraUptimeStats returns health-event-based activity summaries per camera over the last N days.
+func (d *DB) GetCameraUptimeStats(ctx context.Context, days int) ([]model.CameraUptimeStat, error) {
+	if days <= 0 {
+		days = 7
+	}
+	if days > 90 {
+		days = 90
+	}
+	cutoff := time.Now().AddDate(0, 0, -days).UTC()
+
+	query := `SELECT e.camera_id,
+		COALESCE(c.name, e.camera_id) as camera_name,
+		COUNT(CASE WHEN e.event_type = 'connection_lost' THEN 1 END) as connection_losses,
+		COUNT(CASE WHEN e.event_type = 'connection_restored' THEN 1 END) as connection_restores,
+		COUNT(*) as total_events
+		FROM camera_health_events e
+		LEFT JOIN cameras c ON e.camera_id = c.id
+		WHERE e.created_at >= ?
+		GROUP BY e.camera_id
+		ORDER BY connection_losses DESC`
+
+	rows, err := d.db.QueryContext(ctx, query, formatTime(cutoff))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []model.CameraUptimeStat
+	for rows.Next() {
+		var s model.CameraUptimeStat
+		if err := rows.Scan(&s.CameraID, &s.CameraName, &s.ConnectionLosses, &s.ConnectionRestores, &s.TotalEvents); err != nil {
+			return nil, err
+		}
+		result = append(result, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		result = []model.CameraUptimeStat{}
+	}
+	return result, nil
+}
+
 // GetAllLastRecordingTimes returns the last recording time for each camera.
 func (d *DB) GetAllLastRecordingTimes(ctx context.Context) (map[string]*time.Time, error) {
 	rows, err := d.db.QueryContext(ctx,
