@@ -203,18 +203,6 @@ func (h *Handler) captureStreamSnapshot(ctx context.Context, cameraID string) ([
 }
 
 func (h *Handler) resolveSnapshotFFmpegPath() (string, error) {
-	if h.config != nil && h.config.Transcoding.FFmpegPath != "" {
-		if _, err := os.Stat(h.config.Transcoding.FFmpegPath); err == nil {
-			return h.config.Transcoding.FFmpegPath, nil
-		}
-	}
-	if h.downloader != nil {
-		if path := h.downloader.FFmpegPath(); path != "" {
-			if _, err := os.Stat(path); err == nil {
-				return path, nil
-			}
-		}
-	}
 	if path, err := exec.LookPath("ffmpeg"); err == nil {
 		return path, nil
 	}

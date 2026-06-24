@@ -129,7 +129,6 @@ media:
 | [摄像头指南](docs/zh/camera-guide.md) | 摄像头协议设置 |
 | [流管理](docs/zh/stream-management-design.md) | 运行时流清单和绑定 |
 | [部署指南](docs/zh/deployment.md) | 反向代理、交叉编译 |
-| [转码](docs/zh/transcoding.md) | FFmpeg 转码设置 |
 | [MQTT 集成](docs/zh/mqtt-integration.md) | MQTT 触发录像 |
 | [WebDAV 集成](docs/zh/webdav-integration.md) | WebDAV 文件访问 |
 | [故障排除](docs/zh/troubleshooting.md) | 常见问题及解决方案 |
@@ -161,8 +160,6 @@ internal/              # 核心模块
   rtmp/                # RTMP 接入服务器
   srt/                 # SRT 接收器
   storage/             # SQLite 数据库 + 文件管理
-  timelapse/           # 延时摄影生成
-  transcoding/         # FFmpeg 转码队列
   ui/                  # 内嵌 SPA 静态文件
   upload/              # 文件上传处理
   webdav/              # WebDAV 服务

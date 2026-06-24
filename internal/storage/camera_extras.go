@@ -8,25 +8,23 @@ import (
 
 // cameraExtras holds per-camera settings that are not stored in dedicated DB columns.
 type cameraExtras struct {
-	Timelapse            *config.CameraTimelapseConfig   `json:"timelapse,omitempty"`
-	Transcoding          *config.CameraTranscodingConfig `json:"transcoding,omitempty"`
-	HealthOverrides      config.HealthOverrides          `json:"health_overrides,omitempty"`
-	AudioEnabled         *bool                           `json:"audio_enabled,omitempty"`
-	SubStreamURL         string                          `json:"sub_stream_url,omitempty"`
-	SnapshotURL          string                          `json:"snapshot_url,omitempty"`
-	SampleInterval       int                             `json:"sample_interval,omitempty"`
-	HLSMaxFPS            int                             `json:"hls_max_fps,omitempty"`
-	FrameWatchdogTimeout string                          `json:"frame_watchdog_timeout,omitempty"`
-	PullRetryNum         int                             `json:"pull_retry_num,omitempty"`
-	DID                  string                          `json:"did,omitempty"`
-	Vendor               string                          `json:"vendor,omitempty"`
-	SourceType           string                          `json:"source_type,omitempty"`
+	Timelapse            *config.CameraTimelapseConfig `json:"timelapse,omitempty"`
+	HealthOverrides      config.HealthOverrides        `json:"health_overrides,omitempty"`
+	AudioEnabled         *bool                         `json:"audio_enabled,omitempty"`
+	SubStreamURL         string                        `json:"sub_stream_url,omitempty"`
+	SnapshotURL          string                        `json:"snapshot_url,omitempty"`
+	SampleInterval       int                           `json:"sample_interval,omitempty"`
+	HLSMaxFPS            int                           `json:"hls_max_fps,omitempty"`
+	FrameWatchdogTimeout string                        `json:"frame_watchdog_timeout,omitempty"`
+	PullRetryNum         int                           `json:"pull_retry_num,omitempty"`
+	DID                  string                        `json:"did,omitempty"`
+	Vendor               string                        `json:"vendor,omitempty"`
+	SourceType           string                        `json:"source_type,omitempty"`
 }
 
 func extrasFromCameraConfig(cam config.CameraConfig) cameraExtras {
 	extras := cameraExtras{
 		Timelapse:            cam.Timelapse,
-		Transcoding:          cam.Transcoding,
 		HealthOverrides:      cam.HealthOverrides,
 		SubStreamURL:         cam.SubStreamURL,
 		SnapshotURL:          cam.SnapshotURL,
@@ -47,7 +45,6 @@ func extrasFromCameraConfig(cam config.CameraConfig) cameraExtras {
 
 func applyExtrasToCamera(cam *config.CameraConfig, extras cameraExtras) {
 	cam.Timelapse = extras.Timelapse
-	cam.Transcoding = extras.Transcoding
 	cam.HealthOverrides = extras.HealthOverrides
 	if extras.AudioEnabled != nil {
 		cam.AudioEnabled = *extras.AudioEnabled

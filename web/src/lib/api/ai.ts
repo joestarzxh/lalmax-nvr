@@ -98,7 +98,7 @@ import { apiRequest, getAuthToken } from './client';
 /** AI engine status response from GET /api/ai/status. */
 export interface AiStatusResponse {
   available: boolean;
-  backend: 'http' | 'webhook' | 'multimodal' | 'disabled';
+  backend: 'webhook' | 'disabled';
   reason: string;
 }
 
@@ -116,27 +116,13 @@ export interface AiDetection {
   label: string;
   confidence: number;
   box: [number, number, number, number]; // [x, y, w, h] normalized
+  track_id?: number; // Object tracking ID (from ByteTrack/supervision)
+  zone_id?: string;  // Zone identifier for region-based detection
 }
 
 /** Get AI engine status. */
 export async function getAiStatus(): Promise<AiStatusResponse> {
   return apiRequest<AiStatusResponse>('/ai/status');
-}
-
-/** Enable AI detection for a camera. */
-export async function enableAiDetection(cameraId: string): Promise<{ status: string; camera_id: string }> {
-  return apiRequest('/ai/enable', {
-    method: 'POST',
-    body: JSON.stringify({ camera_id: cameraId }),
-  });
-}
-
-/** Disable AI detection for a camera. */
-export async function disableAiDetection(cameraId: string): Promise<{ status: string; camera_id: string }> {
-  return apiRequest('/ai/disable', {
-    method: 'POST',
-    body: JSON.stringify({ camera_id: cameraId }),
-  });
 }
 
 /** Subscribe to AI detection events via SSE. Returns cleanup function. */
@@ -171,17 +157,10 @@ export function subscribeAiEvents(
 /** AI backend configuration from GET /api/settings/ai. */
 export interface AiBackendConfig {
   enabled: boolean;
-  backend: 'http' | 'webhook' | 'multimodal' | 'disabled';
+  backend: 'webhook' | 'disabled';
   frame_skip_rate: number;
   confidence_threshold: number;
   inference_timeout_ms: number;
-  ffmpeg_path?: string;
-  http: {
-    endpoint: string;
-    apiKey: string;
-    headers: Record<string, string>;
-    timeout: number;
-  } | null;
   webhook: {
     enabled: boolean;
   } | null;

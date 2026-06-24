@@ -298,9 +298,9 @@ func TestHealth_CameraAggregation(t *testing.T) {
 	t.Parallel()
 	mgr := &mockHealthManager{
 		allHealth: map[string]*model.CameraHealth{
-			"cam-1": {CameraID: "cam-1", LatestStatus: "healthy", Score: 100},
-			"cam-2": {CameraID: "cam-2", LatestStatus: "reconnecting", Score: 40},
-			"cam-3": {CameraID: "cam-3", LatestStatus: "error", Score: 10},
+			"cam-1": {CameraID: "cam-1", LatestStatus: "healthy"},
+			"cam-2": {CameraID: "cam-2", LatestStatus: "reconnecting"},
+			"cam-3": {CameraID: "cam-3", LatestStatus: "error"},
 		},
 	}
 	h := setupHealthHandler(t, mgr)
@@ -330,7 +330,6 @@ func TestHealth_CameraAggregation(t *testing.T) {
 		detailMap[d.ID] = d
 	}
 	require.Equal(t, "Front Door", detailMap["cam-1"].Name)
-	require.Equal(t, 100, detailMap["cam-1"].Score)
 	require.Equal(t, "healthy", detailMap["cam-1"].Status)
 }
 
@@ -372,8 +371,8 @@ func TestHealth_CameraAggregation_OfflineStatus(t *testing.T) {
 	t.Parallel()
 	mgr := &mockHealthManager{
 		allHealth: map[string]*model.CameraHealth{
-			"cam-1": {CameraID: "cam-1", LatestStatus: "disabled", Score: 0},
-			"cam-2": {CameraID: "cam-2", LatestStatus: "unknown", Score: 0},
+			"cam-1": {CameraID: "cam-1", LatestStatus: "disabled"},
+			"cam-2": {CameraID: "cam-2", LatestStatus: "unknown"},
 		},
 	}
 	h := setupHealthHandler(t, mgr)
@@ -397,8 +396,8 @@ func TestHealthCameras_OK(t *testing.T) {
 	t.Parallel()
 	mgr := &mockHealthManager{
 		allHealth: map[string]*model.CameraHealth{
-			"cam-1": {CameraID: "cam-1", LatestStatus: "healthy", Score: 100, ScoreFactors: []string{"recording"}},
-			"cam-2": {CameraID: "cam-2", LatestStatus: "error", Score: 10, ScoreFactors: []string{"connection_lost"}},
+			"cam-1": {CameraID: "cam-1", LatestStatus: "healthy"},
+			"cam-2": {CameraID: "cam-2", LatestStatus: "error"},
 		},
 	}
 	h := setupHealthHandler(t, mgr)
@@ -410,7 +409,6 @@ func TestHealthCameras_OK(t *testing.T) {
 	parseJSON(t, rr, &resp)
 	require.Len(t, resp, 2)
 	require.NotNil(t, resp["cam-1"])
-	require.Equal(t, 100, resp["cam-1"].Score)
 	require.Equal(t, "healthy", resp["cam-1"].LatestStatus)
 }
 
@@ -460,11 +458,7 @@ func TestHealthCameras_IncludesConfiguredCamerasWithoutHealthData(t *testing.T) 
 	parseJSON(t, rr, &resp)
 	require.Len(t, resp, 2)
 	require.Equal(t, "unknown", resp["cam-1"].LatestStatus)
-	require.Equal(t, 50, resp["cam-1"].Score)
-	require.Equal(t, []string{"not_monitored"}, resp["cam-1"].ScoreFactors)
 	require.Equal(t, "stopped", resp["cam-2"].LatestStatus)
-	require.Equal(t, 100, resp["cam-2"].Score)
-	require.Equal(t, []string{"disabled"}, resp["cam-2"].ScoreFactors)
 }
 
 func TestHealthCameras_PublicEndpoint(t *testing.T) {
@@ -472,7 +466,7 @@ func TestHealthCameras_PublicEndpoint(t *testing.T) {
 	// Verify /api/health/cameras is accessible without auth
 	mgr := &mockHealthManager{
 		allHealth: map[string]*model.CameraHealth{
-			"cam-1": {CameraID: "cam-1", LatestStatus: "healthy", Score: 100},
+			"cam-1": {CameraID: "cam-1", LatestStatus: "healthy"},
 		},
 	}
 	db, store := setupTestDB(t)

@@ -16,7 +16,6 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/onvif"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
-	"github.com/lalmax-pro/lalmax-nvr/internal/transcoding"
 )
 
 // --- Camera and stats endpoints ---
@@ -39,9 +38,6 @@ func (h *Handler) injectCameraConfigFields(row *storage.CameraRow) {
 		if cam := h.camMgr.GetCameraConfig(row.ID); cam != nil {
 			row.AudioEnabled = cam.AudioEnabled
 			row.SourceType = cam.SourceType
-			if cam.Transcoding != nil {
-				row.Transcoding = cam.Transcoding
-			}
 			return
 		}
 	}
@@ -50,9 +46,6 @@ func (h *Handler) injectCameraConfigFields(row *storage.CameraRow) {
 			if cam.ID == row.ID {
 				row.AudioEnabled = cam.AudioEnabled
 				row.SourceType = cam.SourceType
-				if cam.Transcoding != nil {
-					row.Transcoding = cam.Transcoding
-				}
 				return
 			}
 		}
@@ -457,7 +450,6 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		ONVIFEndpoint  *string                         `json:"onvif_endpoint"`
 		ProfileToken   *string                         `json:"profile_token"`
 		StreamEncoding *string                         `json:"stream_encoding"`
-		Transcoding    *config.CameraTranscodingConfig `json:"transcoding"`
 		AudioEnabled   *bool                           `json:"audio_enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -473,19 +465,6 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 	password := body.Password
 	if password != nil && *password == "" {
 		password = nil
-	}
-
-	// Validate transcoding config against hardware capabilities
-	if body.Transcoding != nil && body.Transcoding.TargetCodec == "h265" {
-		ffmpegPath := ""
-		if h.config != nil && h.config.Transcoding.FFmpegPath != "" {
-			ffmpegPath = h.config.Transcoding.FFmpegPath
-		}
-		caps := transcoding.ProbeHardwareCapabilities(ffmpegPath)
-		if caps.H265EncoderType == transcoding.EncoderSoftware {
-			writeError(w, http.StatusBadRequest, "H.265 transcoding is not available on this device (no hardware encoder)")
-			return
-		}
 	}
 
 	updates := camera.CameraUpdate{
@@ -506,7 +485,6 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		ONVIFEndpoint:  body.ONVIFEndpoint,
 		ProfileToken:   body.ProfileToken,
 		StreamEncoding: body.StreamEncoding,
-		Transcoding:    body.Transcoding,
 		AudioEnabled:   body.AudioEnabled,
 	}
 	if body.RTSPTransport != nil && !config.IsValidRTSPTransport(*body.RTSPTransport) {

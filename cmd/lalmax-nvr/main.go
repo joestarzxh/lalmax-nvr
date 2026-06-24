@@ -42,7 +42,6 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/srt"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 	"github.com/lalmax-pro/lalmax-nvr/internal/streamhistory"
-	"github.com/lalmax-pro/lalmax-nvr/internal/transcoding"
 	ui "github.com/lalmax-pro/lalmax-nvr/internal/ui"
 	"github.com/lalmax-pro/lalmax-nvr/internal/upload"
 	"github.com/lalmax-pro/lalmax-nvr/internal/webdav"
@@ -370,7 +369,6 @@ type App struct {
 	// Optional network services (nil when disabled)
 	mqttClient   *mqtt.Client
 	ftpServer    *ftp.Server
-	transcodeMgr *transcoding.TranscodeManager
 	rtmpIngest   *rtmp.IngestHandler
 	srtIngest    *srt.IngestHandler
 	gb28181Svr   *gb28181.Server
@@ -521,29 +519,8 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		func() []config.CameraConfig { return cfg.Cameras },
 	)
 
-	// Step 5.5: Transcode manager (after merge, before camera)
-	if cfg.Transcoding.Enabled {
-		ffmpegPath := cfg.Transcoding.FFmpegPath
-		// Leave empty to let probe auto-detect via exec.LookPath
-		// Only override when user explicitly configured a custom path
-		mgr, err := transcoding.NewTranscodeManager(db, transcoding.ManagerConfig{
-			Transcoding:     cfg.Transcoding,
-			DataDir:         cfg.Storage.RootDir,
-			FFmpegPath:      ffmpegPath,
-			MaxWorkers:      cfg.Transcoding.MaxWorkers,
-			ReplaceOriginal: cfg.Transcoding.ReplaceOriginal,
-		}, a.metrics)
-		if err != nil {
-			slog.Warn("Transcoding disabled", "error", err)
-			transcoding.SetDisabledReason(err.Error())
-		} else {
-			a.transcodeMgr = mgr
-			slog.Info("Transcoding enabled", "workers", cfg.Transcoding.MaxWorkers)
-		}
-	}
-
 	// Step 6: Camera manager
-	a.camMgr = camera.NewCameraManager(cfg, store, db, configPath, a.metrics, a.mergeMgr, a.transcodeMgr)
+	a.camMgr = camera.NewCameraManager(cfg, store, db, configPath, a.metrics, a.mergeMgr)
 	a.camMgr.SetEventBus(a.eventBus)
 	// Step 6.5: Health manager (after camera manager, before streaming)
 	a.healthMgr = health.NewManager(cfg.Health, db)
@@ -633,19 +610,6 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 		}
 	}
 
-	// Wire transcode orphan cleanup into periodic cleanup
-	if a.transcodeMgr != nil {
-		dataDir := cfg.Storage.RootDir
-		a.cleanupMgr.SetTranscodeOrphanCleanup(func(ctx context.Context) error {
-			return transcoding.CleanOrphanedTranscodes(ctx, dataDir, db)
-		})
-	}
-	// Wire transcode history retention cleanup
-	if cfg.Transcoding.HistoryRetention != "" {
-		if hr, err := time.ParseDuration(cfg.Transcoding.HistoryRetention); err == nil {
-			a.cleanupMgr.SetTranscodeHistoryRetention(hr)
-		}
-	}
 	// Wire ffprobe path for zero-duration recording repair
 	if path, err := exec.LookPath("ffprobe"); err == nil {
 		a.cleanupMgr.SetFFprobePath(path)
@@ -812,14 +776,6 @@ func (a *App) buildRouter() http.Handler {
 	reg.Register(&api.WSStreamHandler{})
 	handler.SetStreamRegistry(reg)
 
-	// Wire FFmpeg downloader for transcoding status/download APIs
-	if a.transcodeMgr != nil {
-		handler.SetDownloader(a.transcodeMgr.Downloader())
-		handler.SetTranscodeManager(a.transcodeMgr)
-	} else {
-		// Always provide a downloader so FFmpeg status APIs work even when transcoding is disabled
-		handler.SetDownloader(transcoding.NewDownloader(cfg.Storage.RootDir, nil))
-	}
 
 	// WebDAV
 	var davHandler http.Handler
@@ -961,11 +917,6 @@ func (a *App) Start() error {
 			slog.Info("merge-manager stopped")
 		}
 	}()
-
-	// Start transcode manager (optional)
-	if a.transcodeMgr != nil {
-		go a.transcodeMgr.Run(ctx)
-	}
 
 	// Start cleanup manager
 	go a.cleanupMgr.Run(ctx)
@@ -1161,11 +1112,6 @@ func (a *App) Stop() error {
 			a.healthMgr.Stop()
 		}
 
-		// 7.8. Transcode manager
-		if a.transcodeMgr != nil {
-			log.Info("stopping transcode manager")
-			a.transcodeMgr.Stop()
-		}
 
 		// 7.9. Recording scheduler
 		if a.recSched != nil {

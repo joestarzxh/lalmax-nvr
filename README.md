@@ -129,7 +129,6 @@ See [Configuration](docs/en/configuration.md) for full reference.
 | [Camera Guide](docs/en/camera-guide.md) | Camera protocol setup |
 | [Stream Management](docs/en/stream-management-design.md) | Runtime stream inventory and binding |
 | [Deployment](docs/en/deployment.md) | Reverse proxy, cross-compile |
-| [Transcoding](docs/en/transcoding.md) | FFmpeg transcoding setup |
 | [MQTT Integration](docs/en/mqtt-integration.md) | MQTT trigger recording |
 | [WebDAV Integration](docs/en/webdav-integration.md) | WebDAV file access |
 | [Troubleshooting](docs/en/troubleshooting.md) | Common issues and fixes |
@@ -161,8 +160,6 @@ internal/              # Core packages
   rtmp/                # RTMP ingest server
   srt/                 # SRT receiver
   storage/             # SQLite DB + file manager
-  timelapse/           # Timelapse generation
-  transcoding/         # FFmpeg transcoding queue
   ui/                  # Embedded SPA static files
   upload/              # File upload handling
   webdav/              # WebDAV server

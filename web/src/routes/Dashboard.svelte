@@ -60,7 +60,37 @@
   let snapshotUrls = $state<Record<string, string>>({});
   let snapshotLoading = $state<Record<string, boolean>>({});
   let snapshotTransientErrors = $state<Record<string, boolean>>({});
-  let healthScores = $state<Record<string, number>>({});
+  let healthStatuses = $state<Record<string, string>>({});
+
+  function healthDotColor(status: string): string {
+    switch (status) {
+      case 'healthy':
+      case 'recording':
+        return 'var(--color-success)';
+      case 'reconnecting':
+        return 'var(--color-warning)';
+      case 'error':
+      case 'offline':
+        return 'var(--color-danger)';
+      default:
+        return 'var(--color-text-tertiary)';
+    }
+  }
+
+  function healthDotLabel(status: string): string {
+    switch (status) {
+      case 'healthy':
+      case 'recording':
+        return t('dashboard.healthOnline');
+      case 'reconnecting':
+        return t('health.status.reconnecting');
+      case 'error':
+      case 'offline':
+        return t('dashboard.healthOffline');
+      default:
+        return t('health.status.unknown');
+    }
+  }
   let streamPlayURLs = $state<Record<string, Record<string, string>>>({});
 
   // Snapshot manager — handles fetch, interval, and cleanup lifecycle
@@ -419,16 +449,16 @@
       loading = false;
     }
     await loadCameraPlayURLs(getAssignedIds(slotAssignments));
-    // Fetch camera health scores (public, no auth)
+    // Fetch camera health status (public, no auth)
     try {
       const healthData = await getHealthCameras();
-      const scores: Record<string, number> = {};
+      const statuses: Record<string, string> = {};
       for (const [id, detail] of Object.entries(healthData)) {
-        scores[id] = detail.score;
+        statuses[id] = detail.latest_status;
       }
-      healthScores = scores;
+      healthStatuses = statuses;
     } catch (e) {
-      console.warn('Failed to load camera health scores:', e);
+      console.warn('Failed to load camera health status:', e);
     }
     // Load protocol capabilities
     try {
@@ -847,16 +877,15 @@
               </span>
             {/if}
 
-            <!-- Health indicator dot + score -->
-            {#if healthScores[camera.id] !== undefined}
-              {@const hs = healthScores[camera.id]}
-              {@const healthColor = hs >= 80 ? 'var(--color-success)' : hs >= 30 ? 'var(--color-warning)' : 'var(--color-danger)'}
+            <!-- Health indicator dot + status -->
+            {#if healthStatuses[camera.id] !== undefined}
+              {@const hStatus = healthStatuses[camera.id]}
               <span
                 class="absolute top-2 left-2 z-10 flex items-center gap-1 bg-black/60 text-white text-[10px] font-medium px-1.5 py-0.5 rounded-full select-none"
-                title={t('dashboard.healthScore', { score: hs })}
+                title={healthDotLabel(hStatus)}
               >
-                <span class="w-2 h-2 rounded-full flex-shrink-0" style="background-color: {healthColor}"></span>
-                {hs}
+                <span class="w-2 h-2 rounded-full flex-shrink-0" style="background-color: {healthDotColor(hStatus)}"></span>
+                {healthDotLabel(hStatus)}
               </span>
             {/if}
 

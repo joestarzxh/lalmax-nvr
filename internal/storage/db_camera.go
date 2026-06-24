@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/lalmax-pro/lalmax-nvr/internal/config"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 )
 
@@ -48,8 +47,6 @@ type CameraRow struct {
 	Archived                bool       `json:"archived"`
 	ArchivedAt              *time.Time `json:"archived_at,omitempty"`
 	ArchiveRetentionDays    int        `json:"archive_retention_days"`
-	// Transcoding config injected from YAML at API response time
-	Transcoding *config.CameraTranscodingConfig `json:"transcoding,omitempty"`
 	// AudioEnabled is injected from camera config extras at API response time.
 	AudioEnabled bool `json:"audio_enabled,omitempty"`
 	// SourceType describes ingest origin (rtmp_push, srt_push, relay_pull, etc.).

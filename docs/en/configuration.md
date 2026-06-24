@@ -615,20 +615,6 @@ health:
     global_max_per_min: 5
 ```
 
-## Transcoding Configuration
-
-See [Transcoding Documentation](./transcoding.md).
-
-```yaml
-transcoding:
-  enabled: false
-  ffmpeg_path: ""                # auto-detected
-  max_workers: 1                 # max concurrent jobs, range [1,4]
-  replace_original: false        # replace original after transcode
-  job_timeout: "30m"             # per-job timeout, max 4h
-  history_retention: "168h"      # task history retention
-```
-
 ## Remote Log Configuration
 
 ```yaml

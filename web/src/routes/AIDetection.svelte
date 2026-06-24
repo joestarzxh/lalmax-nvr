@@ -2,8 +2,6 @@
   import { onMount } from 'svelte';
   import {
     getAiStatus,
-    enableAiDetection,
-    disableAiDetection,
     subscribeAiEvents,
     subscribeMultimodalEvents,
     getMultimodalStatus,
@@ -14,10 +12,9 @@
   import type { AiStatusResponse, AiDetectionEvent, Camera, MultimodalStatus, MultimodalAnalysisEvent } from '$lib/api';
   import { showToast } from '$lib/toast';
   import {
-    Brain, RefreshCw, Play, Square, Activity,
+    Brain, RefreshCw, Activity,
     AlertTriangle, CheckCircle, XCircle, Cpu,
     Eye, MessageSquare, Clock, Camera as CameraIcon,
-    Settings, ExternalLink, Monitor,
   } from 'lucide-svelte';
 
   // State
@@ -25,15 +22,12 @@
   let multimodalStatus = $state<MultimodalStatus | null>(null);
   let loading = $state(true);
   let cameras = $state<Camera[]>([]);
-  let enabledCameras = $state<Set<string>>(new Set());
   let events = $state<AiDetectionEvent[]>([]);
   let multimodalEvents = $state<MultimodalAnalysisEvent[]>([]);
   let eventCleanup: (() => void) | null = null;
   let multimodalCleanup: (() => void) | null = null;
   let selectedCamera = $state<string>('all');
-  let activeTab = $state<'detection' | 'analysis' | 'setup'>('detection');
-  let yoloServiceUrl = $state('http://localhost:8080');
-  let yoloStatus = $state<'checking' | 'available' | 'unavailable'>('checking');
+  let activeTab = $state<'detection' | 'analysis'>('detection');
 
   // Load AI status
   async function loadAiStatus() {
@@ -53,8 +47,7 @@
   // Load cameras
   async function loadCameras() {
     try {
-      const res = await listCameras();
-      cameras = res.cameras || [];
+      cameras = await listCameras() || [];
     } catch (e) {
       console.warn('Failed to load cameras:', e);
     }
@@ -70,25 +63,6 @@
       multimodalEvents = analysisHistory.analyses || [];
     } catch (e) {
       console.warn('Failed to load AI history:', e);
-    }
-  }
-
-  // Toggle AI for a camera
-  async function toggleCameraAi(cameraId: string, enable: boolean) {
-    try {
-      if (enable) {
-        await enableAiDetection(cameraId);
-        enabledCameras = new Set([...enabledCameras, cameraId]);
-        showToast(`AI detection enabled for ${cameraId}`, 'success');
-      } else {
-        await disableAiDetection(cameraId);
-        const next = new Set(enabledCameras);
-        next.delete(cameraId);
-        enabledCameras = next;
-        showToast(`AI detection disabled for ${cameraId}`, 'success');
-      }
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Failed to toggle AI', 'error');
     }
   }
 
@@ -116,33 +90,6 @@
     );
   }
 
-  // Check YOLO service status
-  async function checkYoloStatus() {
-    yoloStatus = 'checking';
-    try {
-      const response = await fetch(`${yoloServiceUrl}/health`, {
-        method: 'GET',
-        signal: AbortSignal.timeout(5000)
-      });
-      if (response.ok) {
-        const data = await response.json();
-        yoloStatus = data.status === 'healthy' ? 'available' : 'unavailable';
-      } else {
-        yoloStatus = 'unavailable';
-      }
-    } catch (e) {
-      yoloStatus = 'unavailable';
-    }
-  }
-
-  // Get OS type for installation guide
-  function getOSType(): string {
-    const userAgent = navigator.userAgent.toLowerCase();
-    if (userAgent.includes('mac')) return 'macos';
-    if (userAgent.includes('win')) return 'windows';
-    return 'linux';
-  }
-
   // Format confidence as percentage
   function formatConfidence(confidence: number): string {
     return `${Math.round(confidence * 100)}%`;
@@ -151,9 +98,7 @@
   // Get backend label
   function getBackendLabel(backend: string): string {
     switch (backend) {
-      case 'http': return 'HTTP 远程服务';
       case 'webhook': return 'Webhook 推送';
-      case 'multimodal': return '大模型分析';
       case 'disabled': return '已禁用';
       default: return '未知';
     }
@@ -205,7 +150,6 @@
     loadAiStatus();
     loadCameras();
     loadHistory();
-    checkYoloStatus();
     startEventStream();
     startMultimodalStream();
 
@@ -323,22 +267,19 @@
         </div>
       {:else}
         <div class="space-y-3">
+          <div class="text-sm th-text-secondary mb-2">
+            <Activity size={14} class="inline mr-1" />
+            ai-detector 将自动订阅以下 RTSP 摄像头流进行检测
+          </div>
           {#each cameras as camera}
             <div class="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-800">
               <div>
                 <div class="font-medium th-text-primary">{camera.name}</div>
                 <div class="text-sm th-text-secondary">{camera.id}</div>
               </div>
-              <button
-                class="btn btn-sm {enabledCameras.has(camera.id) ? 'btn-danger' : 'btn-primary'}"
-                onclick={() => toggleCameraAi(camera.id, !enabledCameras.has(camera.id))}
-              >
-                {#if enabledCameras.has(camera.id)}
-                  <Square size={14} /> 禁用
-                {:else}
-                  <Play size={14} /> 启用
-                {/if}
-              </button>
+              <span class="text-xs px-2 py-1 rounded bg-gray-200 dark:bg-gray-700 th-text-secondary">
+                {camera.enabled ? '运行中' : '已停用'}
+              </span>
             </div>
           {/each}
         </div>
@@ -361,13 +302,6 @@
     >
       <MessageSquare size={16} class="inline mr-1" />
       大模型分析
-    </button>
-    <button
-      class="px-4 py-2 rounded-lg font-medium transition-colors {activeTab === 'setup' ? 'bg-purple-600 text-white' : 'bg-gray-100 dark:bg-gray-800 th-text-secondary'}"
-      onclick={() => activeTab = 'setup'}
-    >
-      <Settings size={16} class="inline mr-1" />
-      环境配置
     </button>
   </div>
 
@@ -414,7 +348,7 @@
                       <div class="flex flex-wrap gap-1">
                         {#each event.detections as det}
                           <span class="px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
-                            {det.label} ({formatConfidence(det.confidence)})
+                            {det.label} ({formatConfidence(det.confidence)}){#if det.track_id != null} #{det.track_id}{/if}
                           </span>
                         {/each}
                       </div>
@@ -511,7 +445,7 @@
                   <div class="mt-3 flex flex-wrap gap-2">
                     {#each event.trigger_detections as det}
                       <span class="px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
-                        {det.label} ({formatConfidence(det.confidence)})
+                        {det.label} ({formatConfidence(det.confidence)}){#if det.track_id != null} #{det.track_id}{/if}
                       </span>
                     {/each}
                   </div>

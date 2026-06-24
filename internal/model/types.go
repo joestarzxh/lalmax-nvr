@@ -326,6 +326,4 @@ type CameraHealth struct {
 	LatestEvent   string    `json:"latest_event"`
 	LatestMessage string    `json:"latest_message"`
 	LastEventAt   time.Time `json:"last_event_at"`
-	Score         int       `json:"score"`
-	ScoreFactors  []string  `json:"score_factors,omitempty"`
 }

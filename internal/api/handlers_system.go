@@ -134,7 +134,6 @@ func (h *Handler) aggregateCameraHealth(r *http.Request) *CameraHealthSummary {
 		detail := CameraHealthDetail{
 			ID:     id,
 			Name:   nameLookup[id],
-			Score:  ch.Score,
 			Status: ch.LatestStatus,
 		}
 		summary.Details = append(summary.Details, detail)
@@ -182,18 +181,12 @@ func (h *Handler) cameraHealthWithConfiguredCameras(r *http.Request) map[string]
 			continue
 		}
 		status := string(model.HealthStatusUnknown)
-		score := 50
-		factors := []string{"not_monitored"}
 		if !cam.Enabled {
 			status = string(model.StatusStopped)
-			score = 100
-			factors = []string{"disabled"}
 		}
 		health[cam.ID] = &model.CameraHealth{
 			CameraID:     cam.ID,
 			LatestStatus: status,
-			Score:        score,
-			ScoreFactors: factors,
 		}
 	}
 	return health
@@ -651,59 +644,6 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
-func (h *Handler) handleGetTranscodingSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled":          h.config.Transcoding.Enabled,
-		"max_workers":      h.config.Transcoding.MaxWorkers,
-		"replace_original": h.config.Transcoding.ReplaceOriginal,
-	})
-}
-
-func (h *Handler) handleUpdateTranscodingSettings(w http.ResponseWriter, r *http.Request) {
-	if h.config == nil {
-		writeError(w, http.StatusInternalServerError, "config not available")
-		return
-	}
-
-	var body struct {
-		Enabled         *bool `json:"enabled"`
-		MaxWorkers      *int  `json:"max_workers"`
-		ReplaceOriginal *bool `json:"replace_original"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if body.MaxWorkers != nil {
-		if *body.MaxWorkers < 1 || *body.MaxWorkers > 4 {
-			writeError(w, http.StatusBadRequest, "max_workers must be between 1 and 4")
-			return
-		}
-		h.config.Transcoding.MaxWorkers = *body.MaxWorkers
-	}
-
-	if body.Enabled != nil {
-		h.config.Transcoding.Enabled = *body.Enabled
-	}
-
-	if body.ReplaceOriginal != nil {
-		h.config.Transcoding.ReplaceOriginal = *body.ReplaceOriginal
-	}
-
-	// Persist config to disk (with conflict detection)
-	if !h.saveConfig(w) {
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
-}
 
 func (h *Handler) handleGetAISettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
@@ -718,8 +658,6 @@ func (h *Handler) handleGetAISettings(w http.ResponseWriter, r *http.Request) {
 		"frame_skip_rate":      ai.FrameSkipRate,
 		"confidence_threshold": ai.ConfidenceThreshold,
 		"inference_timeout_ms": ai.InferenceTimeoutMs,
-		"ffmpeg_path":          ai.FFmpegPath,
-		"http":                 ai.HTTP,
 		"webhook":              ai.Webhook,
 		"multimodal":           ai.Multimodal,
 	})
@@ -737,8 +675,6 @@ func (h *Handler) handleUpdateAISettings(w http.ResponseWriter, r *http.Request)
 		FrameSkipRate       *int                       `json:"frame_skip_rate"`
 		ConfidenceThreshold *float64                   `json:"confidence_threshold"`
 		InferenceTimeoutMs  *int                       `json:"inference_timeout_ms"`
-		FFmpegPath          *string                    `json:"ffmpeg_path"`
-		HTTP                *config.AIHTTPConfig       `json:"http"`
 		Webhook             *config.AIWebhookConfig    `json:"webhook"`
 		Multimodal          *config.AIMultimodalConfig `json:"multimodal"`
 	}
@@ -753,13 +689,13 @@ func (h *Handler) handleUpdateAISettings(w http.ResponseWriter, r *http.Request)
 		h.config.AI.Enabled = *body.Enabled
 	}
 
-	// Update backend
+	// Update backend (webhook mode only)
 	if body.Backend != nil {
 		switch *body.Backend {
-		case "http", "webhook", "multimodal", "disabled":
+		case "webhook", "disabled":
 			h.config.AI.Backend = *body.Backend
 		default:
-			writeError(w, http.StatusBadRequest, "backend must be 'http', 'webhook', 'multimodal', or 'disabled'")
+			writeError(w, http.StatusBadRequest, "backend must be 'webhook' or 'disabled'")
 			return
 		}
 	}
@@ -789,28 +725,6 @@ func (h *Handler) handleUpdateAISettings(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		h.config.AI.InferenceTimeoutMs = *body.InferenceTimeoutMs
-	}
-	if body.FFmpegPath != nil {
-		h.config.AI.FFmpegPath = *body.FFmpegPath
-	}
-
-	// Update HTTP config
-	if body.HTTP != nil {
-		if h.config.AI.HTTP == nil {
-			h.config.AI.HTTP = &config.AIHTTPConfig{}
-		}
-		if body.HTTP.Endpoint != "" {
-			h.config.AI.HTTP.Endpoint = body.HTTP.Endpoint
-		}
-		if body.HTTP.APIKey != "" {
-			h.config.AI.HTTP.APIKey = body.HTTP.APIKey
-		}
-		if body.HTTP.Headers != nil {
-			h.config.AI.HTTP.Headers = body.HTTP.Headers
-		}
-		if body.HTTP.Timeout > 0 {
-			h.config.AI.HTTP.Timeout = body.HTTP.Timeout
-		}
 	}
 
 	// Update webhook config

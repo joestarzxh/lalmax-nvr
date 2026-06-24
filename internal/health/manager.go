@@ -2,7 +2,6 @@ package health
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -276,17 +275,10 @@ func (m *Manager) GetCameraHealth(cameraID string) *model.CameraHealth {
 		return nil
 	}
 	status := m.pipeline.GetCameraStatus(cameraID)
-	// Map pipeline health status to recorder status for score computation
-	recorderStatus := m.knownRecorderStatus(cameraID)
-	offlineDur := m.conn.GetOfflineDuration(cameraID)
-	anomalyCount := m.pipeline.GetAnomalyCount(cameraID)
-	score := ComputeHealthScore(recorderStatus, offlineDur, anomalyCount, 100.0)
 	return &model.CameraHealth{
 		CameraID:     cameraID,
 		LatestStatus: status,
-		Score:        score.Score,
-		ScoreFactors: formatFactors(score.Factors),
-}
+	}
 }
 
 // GetAllHealth returns health status for all monitored cameras.
@@ -297,15 +289,9 @@ func (m *Manager) GetAllHealth() map[string]*model.CameraHealth {
 	statuses := m.pipeline.GetAllStatuses()
 	result := make(map[string]*model.CameraHealth, len(statuses))
 	for camID, status := range statuses {
-		recorderStatus := m.knownRecorderStatus(camID)
-		offlineDur := m.conn.GetOfflineDuration(camID)
-		anomalyCount := m.pipeline.GetAnomalyCount(camID)
-		score := ComputeHealthScore(recorderStatus, offlineDur, anomalyCount, 100.0)
 		result[camID] = &model.CameraHealth{
 			CameraID:     camID,
 			LatestStatus: status,
-			Score:        score.Score,
-			ScoreFactors: formatFactors(score.Factors),
 		}
 	}
 	return result
@@ -343,18 +329,6 @@ func (m *Manager) knownRecorderStatus(cameraID string) string {
 		return s
 	}
 	return m.pipeline.GetCameraStatus(cameraID)
-}
-
-// formatFactors converts ScoreFactor slice to human-readable strings.
-func formatFactors(factors []ScoreFactor) []string {
-	if len(factors) == 0 {
-		return nil
-	}
-	result := make([]string, len(factors))
-	for i, f := range factors {
-		result[i] = fmt.Sprintf("%s: %+d (%s)", f.Name, f.Impact, f.Detail)
-	}
-	return result
 }
 
 // StabilityData represents the stability quality metrics for a single camera,

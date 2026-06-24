@@ -15,9 +15,7 @@
   import Streams from './routes/Streams.svelte';
   import StreamDetail from './routes/StreamDetail.svelte';
 
-  import TranscodingHistory from './routes/TranscodingHistory.svelte';
   import Devices from './routes/Devices.svelte';
-  import Status from './routes/Status.svelte';
   import DeviceGroups from './routes/DeviceGroups.svelte';
   import RecordingPlans from './routes/RecordingPlans.svelte';
   import Users from './routes/Users.svelte';
@@ -111,10 +109,6 @@
       return { route: 'devices', params: {} };
     }
 
-    if (segments[0] === 'status') {
-      const tab = segments[1] === 'transcoding' ? 'transcoding' : 'health';
-      return { route: 'status', params: { tab } };
-    }
     if (segments[0] === 'streams') {
       const streamPath = path.replace(/^\/?streams\/?/, '');
       if (streamPath) {
@@ -134,10 +128,6 @@
 
     if (segments[0] === 'settings') {
       return { route: 'settings', params: {} };
-    }
-
-    if (segments[0] === 'transcoding-history') {
-      return { route: 'transcoding-history', params: {} };
     }
 
     if (segments[0] === 'dashboard') {
@@ -167,9 +157,9 @@
 
   // Current route — initialize from hash synchronously to prevent
   // Login component from redirecting to recordings before onMount runs
-  // Redirect legacy #/health route
-  if (typeof window !== 'undefined' && window.location.hash === '#/health') {
-    window.location.replace('#/status');
+  // Redirect legacy #/health and #/status routes
+  if (typeof window !== 'undefined' && (window.location.hash === '#/health' || window.location.hash.startsWith('#/status'))) {
+    window.location.replace('#/dashboard');
   }
 
   const initialRoute = typeof window !== 'undefined' ? parseRoute(window.location.hash) : { route: 'login', params: {} };
@@ -179,9 +169,9 @@
 
   function updateRoute() {
     const hash = window.location.hash;
-    // Redirect legacy #/health route
-    if (hash === '#/health') {
-      window.location.replace('#/status');
+    // Redirect legacy #/health and #/status routes
+    if (hash === '#/health' || hash.startsWith('#/status')) {
+      window.location.replace('#/dashboard');
       return;
     }
     const { route, params: routeParams } = parseRoute(hash);
@@ -251,8 +241,6 @@
         <LiveView cameraId={params.id} />
       {:else if currentRoute === 'devices'}
         <Devices />
-      {:else if currentRoute === 'status'}
-        <Status initialTab={params.tab || 'health'} />
       {:else if currentRoute === 'streams'}
         <Streams />
       {:else if currentRoute === 'stream-detail'}
@@ -263,8 +251,6 @@
         <Settings />
       {:else if currentRoute === 'dashboard'}
         <Dashboard initialTab={params.tab || 'dashboard'} />
-      {:else if currentRoute === 'transcoding-history'}
-        <TranscodingHistory />
       {:else if currentRoute === 'device-groups'}
         <DeviceGroups />
       {:else if currentRoute === 'recording-plans'}

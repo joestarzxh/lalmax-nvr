@@ -83,12 +83,10 @@ export async function getCameraHealth(cameraId: string): Promise<CameraHealth> {
   return apiRequest<CameraHealth>(`/cameras/${cameraId}/health`);
 }
 
-// Camera health detail with score
+// Camera health detail (online/offline status)
 export interface CameraHealthDetail {
   camera_id: string;
   latest_status: string;
-  score: number;
-  score_factors?: Record<string, number>;
 }
 
 // Health cameras response (map of camera ID to detail)

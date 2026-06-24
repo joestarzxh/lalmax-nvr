@@ -62,7 +62,6 @@ type CameraHealthDetail struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Status string `json:"status"`
-	Score  int    `json:"score"`
 }
 
 // SystemStats is the response from /api/stats/system.
@@ -138,8 +137,6 @@ type Handler struct {
 	stabilityProvider StabilityProvider
 	cloudProxy        CloudAuthProxy
 	streamRegistry    *StreamRegistry
-	downloader        TranscodeDownloader
-	transcodeMgr      TranscodeManagerAPI
 	aiManager         *ai.Manager
 	onvifDiscover     func(ctx context.Context, timeout time.Duration) *onvif.DiscoveryResult
 	onvifProbeDevice  func(ctx context.Context, host string, port int, timeout time.Duration) (*onvif.DiscoveredDevice, error)
@@ -357,8 +354,6 @@ func (h *Handler) Routes() http.Handler {
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/merge", h.handleUpdateMergeSettings)
 		r.Get("/api/settings/streaming", h.handleGetStreamingSettings)
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/streaming", h.handleUpdateStreamingSettings)
-		r.Get("/api/settings/transcoding", h.handleGetTranscodingSettings)
-		r.With(middleware.RequireOperatePermission()).Put("/api/settings/transcoding", h.handleUpdateTranscodingSettings)
 		r.Get("/api/settings/gb28181", h.handleGetGB28181Settings)
 		r.With(middleware.RequireOperatePermission()).Put("/api/settings/gb28181", h.handleUpdateGB28181Settings)
 		r.Get("/api/settings/hls", h.handleGetHLSSettings)
@@ -414,21 +409,9 @@ func (h *Handler) Routes() http.Handler {
 		r.Get("/api/health/stability", h.handleGetStability)
 		r.Get("/api/health/stability/{camera_id}", h.handleGetCameraStability)
 		r.Get("/api/cameras/{id}/health", h.handleGetCameraHealth)
-		// Transcoding endpoints
-		r.Get("/api/transcoding/check", h.handleTranscodingCheck)
-		r.Get("/api/transcoding/ffmpeg/status", h.handleFFmpegStatus)
-		r.Post("/api/transcoding/ffmpeg/download", h.handleFFmpegDownload)
-		r.Post("/api/transcoding/ffmpeg/download/retry", h.handleFFmpegDownloadRetry)
-		r.Get("/api/transcoding/status", h.handleTranscodingStatus)
-		r.Get("/api/transcoding/tasks", h.handleTranscodingTasksList)
-		r.Post("/api/transcoding/tasks", h.handleTranscodingTaskCreate)
-		r.Delete("/api/transcoding/tasks/{id}", h.handleTranscodingTaskCancel)
-		r.Get("/api/transcoding/cameras", h.handleTranscodingCameraConfigs)
-		// AI Detection routes
+		// AI Detection routes (Webhook mode only - external ai-detector pushes results)
 		r.Route("/api/ai", func(r chi.Router) {
 			r.Get("/status", h.handleGetAIStatus)
-			r.Post("/enable", h.handleEnableAI)
-			r.Post("/disable", h.handleDisableAI)
 			r.Get("/events", h.handleAIEvents)
 			r.Get("/detections", h.handleListAIDetections)
 			r.Get("/analyses", h.handleListAIAnalyses)
@@ -619,11 +602,6 @@ func (h *Handler) SetHealthManager(mgr HealthManager) {
 // SetStabilityProvider sets the stability data provider on the handler.
 func (h *Handler) SetStabilityProvider(p StabilityProvider) {
 	h.stabilityProvider = p
-}
-
-// SetDownloader sets the FFmpeg downloader on the handler.
-func (h *Handler) SetDownloader(d TranscodeDownloader) {
-	h.downloader = d
 }
 
 // BanManager provides stream ban operations.

@@ -4,13 +4,14 @@ import json
 import base64
 import logging
 import threading
-from typing import List, Optional
+from typing import List, Optional, Dict
 from contextlib import asynccontextmanager
 
 import requests
 import cv2
 import numpy as np
 from ultralytics import YOLO
+import supervision as sv
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("gocv-yolo")
@@ -28,6 +29,21 @@ RTSP_PORT = int(os.getenv("RTSP_PORT", "15544"))
 # Global state
 model = None
 active_cameras = {}
+# Per-camera trackers for object tracking
+trackers: Dict[str, sv.ByteTrack] = {}
+ENABLE_TRACKING = os.getenv("ENABLE_TRACKING", "true").lower() == "true"
+
+
+def get_tracker(camera_id: str) -> sv.ByteTrack:
+    """Get or create a ByteTrack tracker for a specific camera."""
+    if camera_id not in trackers:
+        trackers[camera_id] = sv.ByteTrack(
+            track_activation_threshold=0.25,
+            lost_track_buffer=30,
+            minimum_matching_threshold=0.8,
+            frame_rate=30
+        )
+    return trackers[camera_id]
 
 def get_auth_headers():
     headers = {"Content-Type": "application/json"}
@@ -65,15 +81,37 @@ def get_rtsp_url(camera):
     nvr_host = NVR_URL.replace("http://", "").replace("https://", "").split(":")[0]
     return f"rtsp://{nvr_host}:{RTSP_PORT}/live/{camera_id}"
 
-def send_webhook(camera_id, detections, frame_num):
-    """Send detection results to lalmax-nvr webhook"""
+def encode_frame_base64(frame, quality=80):
+    """Encode frame to base64 JPEG data URL for multimodal analysis."""
+    try:
+        encode_param = [cv2.IMWRITE_JPEG_QUALITY, quality]
+        _, buffer = cv2.imencode('.jpg', frame, encode_param)
+        b64_data = base64.b64encode(buffer).decode('utf-8')
+        return f"data:image/jpeg;base64,{b64_data}"
+    except Exception as e:
+        logger.warning(f"Failed to encode frame: {e}")
+        return ""
+
+def send_webhook(camera_id, detections, frame_num, image_url=""):
+    """Send detection results to lalmax-nvr webhook.
+
+    Args:
+        camera_id: Camera identifier
+        detections: List of detection results
+        frame_num: Frame number (PTS)
+        image_url: Optional base64 encoded image for multimodal analysis
+    """
     payload = {
         "camera_id": camera_id,
         "pts": frame_num,
         "timestamp": int(time.time() * 1000),
         "detections": detections
     }
-    
+
+    # Include image for multimodal LLM analysis
+    if image_url:
+        payload["image_url"] = image_url
+
     try:
         resp = requests.post(
             f"{NVR_URL}/api/ai/webhook",
@@ -113,31 +151,59 @@ def process_stream(camera_id, camera_name, stream_url):
                 
                 # Run YOLO detection
                 results = model(frame, conf=CONFIDENCE, iou=NMS_THRESHOLD, verbose=False)
-                
+                h, w = frame.shape[:2]
+
                 detections = []
                 for result in results:
                     boxes = result.boxes
-                    if boxes is not None:
-                        for box in boxes:
-                            x1, y1, x2, y2 = box.xyxy[0].tolist()
-                            h, w = frame.shape[:2]
-                            
-                            # Normalize coordinates
-                            detection = {
-                                "label": model.names[int(box.cls[0])],
-                                "confidence": float(box.conf[0]),
-                                "box": [
-                                    x1 / w,  # x
-                                    y1 / h,  # y
-                                    (x2 - x1) / w,  # width
-                                    (y2 - y1) / h   # height
-                                ]
-                            }
-                            detections.append(detection)
+                    if boxes is not None and len(boxes) > 0:
+                        if ENABLE_TRACKING:
+                            # Convert to supervision Detections format for tracking
+                            sv_detections = sv.Detections.from_ultralytics(result)
+                            tracker = get_tracker(camera_id)
+                            sv_detections = tracker.update_with_detections(sv_detections)
+
+                            # Extract tracked detections
+                            for i in range(len(sv_detections)):
+                                x1, y1, x2, y2 = sv_detections.xyxy[i]
+                                class_id = sv_detections.class_id[i] if sv_detections.class_id is not None else 0
+                                confidence = sv_detections.confidence[i] if sv_detections.confidence is not None else 0.0
+                                track_id = sv_detections.tracker_id[i] if sv_detections.tracker_id is not None else None
+
+                                detection = {
+                                    "label": model.names[int(class_id)],
+                                    "confidence": float(confidence),
+                                    "box": [
+                                        float(x1) / w,
+                                        float(y1) / h,
+                                        float(x2 - x1) / w,
+                                        float(y2 - y1) / h
+                                    ],
+                                    "track_id": int(track_id) if track_id is not None else None
+                                }
+                                detections.append(detection)
+                        else:
+                            # No tracking, just return raw detections
+                            for box in boxes:
+                                x1, y1, x2, y2 = box.xyxy[0].tolist()
+
+                                detection = {
+                                    "label": model.names[int(box.cls[0])],
+                                    "confidence": float(box.conf[0]),
+                                    "box": [
+                                        x1 / w,
+                                        y1 / h,
+                                        (x2 - x1) / w,
+                                        (y2 - y1) / h
+                                    ]
+                                }
+                                detections.append(detection)
                 
                 if detections:
                     logger.info(f"[{camera_id}] Detected {len(detections)} objects")
-                    send_webhook(camera_id, detections, frame_count)
+                    # Encode frame for multimodal analysis
+                    image_url = encode_frame_base64(frame)
+                    send_webhook(camera_id, detections, frame_count, image_url)
             
             cap.release()
             time.sleep(2)

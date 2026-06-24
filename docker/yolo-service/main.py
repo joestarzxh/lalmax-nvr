@@ -2,7 +2,7 @@ import os
 import io
 import base64
 import time
-from typing import List, Optional
+from typing import List, Optional, Dict
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -11,9 +11,12 @@ from pydantic import BaseModel
 from PIL import Image
 import numpy as np
 import cv2
+import supervision as sv
 
 # Global model instance
 model = None
+# Per-camera trackers for object tracking
+trackers: Dict[str, sv.ByteTrack] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -46,6 +49,19 @@ class Detection(BaseModel):
     label: str
     confidence: float
     box: List[float]  # [x, y, width, height] normalized
+    track_id: Optional[int] = None  # Object tracking ID
+
+
+def get_tracker(camera_id: str) -> sv.ByteTrack:
+    """Get or create a ByteTrack tracker for a specific camera."""
+    if camera_id not in trackers:
+        trackers[camera_id] = sv.ByteTrack(
+            track_activation_threshold=0.25,
+            lost_track_buffer=30,
+            minimum_matching_threshold=0.8,
+            frame_rate=30
+        )
+    return trackers[camera_id]
 
 class DetectionResponse(BaseModel):
     detections: List[Detection]
@@ -84,30 +100,61 @@ async def detect(request: DetectionRequest):
         # Run detection
         results = model(img_array, conf=conf_threshold, verbose=False)
 
-        # Parse results
+        # Check if tracking is enabled
+        enable_tracking = os.getenv("ENABLE_TRACKING", "true").lower() == "true"
+        camera_id = request.camera_id or "default"
+        img_h, img_w = img_array.shape[:2]
+
+        # Parse results and apply tracking
         detections = []
         for result in results:
             boxes = result.boxes
-            if boxes is not None:
-                for box in boxes:
-                    # Get normalized coordinates
-                    x1, y1, x2, y2 = box.xyxy[0].tolist()
-                    img_h, img_w = img_array.shape[:2]
+            if boxes is not None and len(boxes) > 0:
+                # Convert to supervision Detections format for tracking
+                if enable_tracking:
+                    sv_detections = sv.Detections.from_ultralytics(result)
+                    tracker = get_tracker(camera_id)
+                    sv_detections = tracker.update_with_detections(sv_detections)
 
-                    # Normalize to [0, 1]
-                    x_norm = x1 / img_w
-                    y_norm = y1 / img_h
-                    w_norm = (x2 - x1) / img_w
-                    h_norm = (y2 - y1) / img_h
+                    # Extract tracked detections
+                    for i in range(len(sv_detections)):
+                        x1, y1, x2, y2 = sv_detections.xyxy[i]
+                        class_id = sv_detections.class_id[i] if sv_detections.class_id is not None else 0
+                        confidence = sv_detections.confidence[i] if sv_detections.confidence is not None else 0.0
+                        track_id = sv_detections.tracker_id[i] if sv_detections.tracker_id is not None else None
 
-                    # Get label
-                    label = model.names[int(box.cls[0])]
+                        # Normalize to [0, 1]
+                        x_norm = float(x1) / img_w
+                        y_norm = float(y1) / img_h
+                        w_norm = float(x2 - x1) / img_w
+                        h_norm = float(y2 - y1) / img_h
 
-                    detections.append(Detection(
-                        label=label,
-                        confidence=float(box.conf[0]),
-                        box=[x_norm, y_norm, w_norm, h_norm]
-                    ))
+                        label = model.names[int(class_id)]
+
+                        detections.append(Detection(
+                            label=label,
+                            confidence=float(confidence),
+                            box=[x_norm, y_norm, w_norm, h_norm],
+                            track_id=int(track_id) if track_id is not None else None
+                        ))
+                else:
+                    # No tracking, just return raw detections
+                    for box in boxes:
+                        x1, y1, x2, y2 = box.xyxy[0].tolist()
+
+                        # Normalize to [0, 1]
+                        x_norm = x1 / img_w
+                        y_norm = y1 / img_h
+                        w_norm = (x2 - x1) / img_w
+                        h_norm = (y2 - y1) / img_h
+
+                        label = model.names[int(box.cls[0])]
+
+                        detections.append(Detection(
+                            label=label,
+                            confidence=float(box.conf[0]),
+                            box=[x_norm, y_norm, w_norm, h_norm]
+                        ))
 
         processing_time = (time.time() - start_time) * 1000
 

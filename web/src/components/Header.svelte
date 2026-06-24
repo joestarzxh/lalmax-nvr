@@ -18,7 +18,6 @@
     Radio,
     Link,
     BarChart3,
-    Activity,
     Settings,
     Clock,
     ChevronLeft,
@@ -91,7 +90,6 @@
     { href: '#/ai', labelKey: 'nav.ai_detection', route: '/ai', icon: Brain },
     { href: '#/users', labelKey: 'nav.users', route: '/users', icon: Users },
     { href: '#/stats', labelKey: 'nav.stats', route: '/stats', icon: BarChart3 },
-    { href: '#/status', labelKey: 'nav.status', route: '/status', icon: Activity },
     { href: '#/settings', labelKey: 'nav.settings', route: '/settings', icon: Settings },
   ];
 

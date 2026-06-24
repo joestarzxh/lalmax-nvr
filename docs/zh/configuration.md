@@ -615,20 +615,6 @@ health:
     global_max_per_min: 5
 ```
 
-## 转码配置
-
-详见 [转码文档](./transcoding.md)。
-
-```yaml
-transcoding:
-  enabled: false
-  ffmpeg_path: ""                # 自动检测
-  max_workers: 1                 # 最大并发转码数，范围 [1,4]
-  replace_original: false        # 转码后是否替换原始文件
-  job_timeout: "30m"             # 单任务超时，最大 4h
-  history_retention: "168h"      # 任务历史保留时长
-```
-
 ## 远程日志配置
 
 ```yaml

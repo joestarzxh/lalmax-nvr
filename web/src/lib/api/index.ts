@@ -97,7 +97,6 @@ export {
   takeSnapshot,
 } from './cameras';
 export type {
-  CameraTranscodingConfig,
   Camera,
   CreateCameraRequest,
   UpdateCameraRequest,
@@ -288,38 +287,12 @@ export type {
   StabilityDataResponse,
 } from './health';
 
-// Transcoding — hardware check, FFmpeg, task management
-export {
-  getTranscodingCheck,
-  getFFmpegStatus,
-  downloadFFmpeg,
-  retryDownload,
-  getTranscodingStatus,
-  getTranscodingTasks,
-  enqueueTranscodeTask,
-  cancelTranscodeTask,
-  getTranscodingCameras,
-  getTranscodingSettings,
-  updateTranscodingSettings,
-} from './transcoding';
-
-export type {
-  HardwareCapabilities,
-  SelfCheckResult,
-  DownloadStatus,
-  TranscodeTask,
-  ManagerStatus,
-  TranscodingSettings,
-} from './transcoding';
-
-// AI Detection — localStorage-backed settings + backend API
+// AI Detection — localStorage-backed settings + backend API (Webhook mode only)
 export {
   getAiSettings,
   saveAiSettings,
   detectAiBackend,
   getAiStatus,
-  enableAiDetection,
-  disableAiDetection,
   subscribeAiEvents,
   getAiBackendConfig,
   updateAiBackendConfig,

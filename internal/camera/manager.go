@@ -20,7 +20,6 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/onvif"
 	"github.com/lalmax-pro/lalmax-nvr/internal/recorder"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
-	"github.com/lalmax-pro/lalmax-nvr/internal/transcoding"
 	"github.com/lalmax-pro/lalmax-nvr/internal/xiaomi"
 )
 
@@ -46,7 +45,6 @@ type CameraUpdate struct {
 	ONVIFEndpoint  *string
 	ProfileToken   *string
 	StreamEncoding *string
-	Transcoding    *config.CameraTranscodingConfig
 	AudioEnabled   *bool
 }
 
@@ -57,9 +55,8 @@ type CameraManager struct {
 	configPath           string
 	recorders            map[string]model.Recorder // camera_id → Recorder
 	metrics              *metrics.Metrics
-	mergeMgr             *merge.MergeManager           // segment merge manager (nil = no merge)
-	transcodeMgr         *transcoding.TranscodeManager // transcoding manager (nil = no transcoding)
-	healthMgr            *health.Manager               // health monitoring (nil when disabled)
+	mergeMgr             *merge.MergeManager // segment merge manager (nil = no merge)
+	healthMgr            *health.Manager     // health monitoring (nil when disabled)
 	eventBus             *event.EventBus
 	mediaEngine          media.Engine
 	onvifProfileResolver func(context.Context, config.CameraConfig) ([]onvif.DeviceProfile, error)
@@ -76,15 +73,12 @@ type CameraManager struct {
 func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB, configPath string, opts ...interface{}) *CameraManager {
 	var m *metrics.Metrics
 	var mm *merge.MergeManager
-	var tm *transcoding.TranscodeManager
 	for _, opt := range opts {
 		switch v := opt.(type) {
 		case *metrics.Metrics:
 			m = v
 		case *merge.MergeManager:
 			mm = v
-		case *transcoding.TranscodeManager:
-			tm = v
 		}
 	}
 	return &CameraManager{
@@ -95,7 +89,6 @@ func NewCameraManager(cfg *config.Config, store *storage.Manager, db *storage.DB
 		recorders:        make(map[string]model.Recorder),
 		metrics:          m,
 		mergeMgr:         mm,
-		transcodeMgr:     tm,
 		errorDetails:     make(map[string]*model.CameraErrorDetail),
 		onvifClients:     make(map[string]*onvif.Client),
 		eventSubscribers: make(map[string]onvif.EventSubscriber),
@@ -129,53 +122,11 @@ func (cm *CameraManager) SetHealthManager(m *health.Manager) {
 	}
 }
 
-// SetTranscodeManager sets the transcoding manager for post-recording enqueue.
-// Can be called with nil to disable transcoding. Thread-safe.
-func (cm *CameraManager) SetTranscodeManager(m *transcoding.TranscodeManager) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.transcodeMgr = m
-}
-
 // SetMediaEngine sets the lal/lalmax-backed media engine used for relay pulls.
 func (cm *CameraManager) SetMediaEngine(engine media.Engine) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	cm.mediaEngine = engine
-}
-
-// EnqueueTranscode checks per-camera transcoding config and enqueues a
-// transcoding task if enabled. Non-blocking — runs the enqueue in a goroutine.
-func (cm *CameraManager) EnqueueTranscode(cameraID, recordingID, inputPath, inputFormat string) {
-	cm.mu.RLock()
-	tm := cm.transcodeMgr
-	cm.mu.RUnlock()
-
-	if tm == nil {
-		return
-	}
-
-	// Resolve per-camera transcoding config
-	tcfg := cm.cfg.ResolveTranscodingConfig(cameraID)
-	if tcfg == nil || !tcfg.Enabled {
-		return
-	}
-
-	// Determine target codec (default to h264)
-	targetCodec := tcfg.TargetCodec
-	if targetCodec == "" {
-		targetCodec = "h264"
-	}
-
-	// Non-blocking enqueue — don't block recording pipeline
-	go func() {
-		if err := tm.EnqueueRecording(cameraID, recordingID, inputPath, inputFormat, targetCodec); err != nil {
-			logger.Warn("failed to enqueue transcode task",
-				"camera_id", cameraID,
-				"recording_id", recordingID,
-				"error", err)
-		}
-	}()
 }
 
 // createRecorder creates a recorder for the given camera config.
@@ -1397,10 +1348,6 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 	if updates.AudioEnabled != nil && *updates.AudioEnabled != cam.AudioEnabled {
 		needsRestart = true
 		cam.AudioEnabled = *updates.AudioEnabled
-	}
-
-	if updates.Transcoding != nil {
-		cam.Transcoding = updates.Transcoding
 	}
 
 	// Handle enabled state changes

@@ -1304,8 +1304,6 @@
             {protocols}
             {protocolsMap}
             {xiaomiDeviceList}
-            globalTranscodingEnabled={false}
-            h265Available={true}
             onsave={handleFormSave}
             oncancel={handleFormCancel}
           />

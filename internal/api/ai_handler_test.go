@@ -59,24 +59,6 @@ func TestGetAIStatus_Disabled(t *testing.T) {
 	require.Equal(t, "disabled", resp.Backend)
 }
 
-func TestGetAIStatus_HTTPBackend(t *testing.T) {
-	t.Parallel()
-	h := setupAIHandlerWithManager(t, config.AIConfig{
-		Enabled: true,
-		Backend: "http",
-		HTTP: &config.AIHTTPConfig{
-			Endpoint: "http://localhost:8080/detect",
-		},
-	})
-
-	rr := doJSONRequest(t, h.Routes(), http.MethodGet, "/api/ai/status", nil)
-	require.Equal(t, http.StatusOK, rr.Code)
-
-	var resp aiStatusResponse
-	parseJSON(t, rr, &resp)
-	require.Equal(t, "http", resp.Backend)
-}
-
 func TestGetAIStatus_WebhookBackend(t *testing.T) {
 	t.Parallel()
 	h := setupAIHandlerWithManager(t, config.AIConfig{
@@ -106,90 +88,6 @@ func TestGetAIStatus_NoManager(t *testing.T) {
 	parseJSON(t, rr, &resp)
 	require.False(t, resp.Available)
 	require.Equal(t, "disabled", resp.Backend)
-}
-
-func TestEnableAI_CameraNotFound(t *testing.T) {
-	t.Parallel()
-	h := setupAIHandlerWithManager(t, config.AIConfig{
-		Enabled: true,
-		Backend: "http",
-		HTTP: &config.AIHTTPConfig{
-			Endpoint: "http://localhost:8080/detect",
-		},
-	})
-
-	rr := doJSONRequest(t, h.Routes(), http.MethodPost, "/api/ai/enable", aiEnableRequest{CameraID: "nonexistent-cam"})
-	require.Equal(t, http.StatusNotFound, rr.Code)
-}
-
-func TestEnableAI_NoManager(t *testing.T) {
-	t.Parallel()
-	db, store := setupTestDB(t)
-	h := TestHandler(db, store)
-
-	rr := doJSONRequest(t, h.Routes(), http.MethodPost, "/api/ai/enable", aiEnableRequest{CameraID: "test-cam"})
-	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
-}
-
-func TestEnableAI_MissingCameraID(t *testing.T) {
-	t.Parallel()
-	h := setupAIHandlerWithManager(t, config.AIConfig{
-		Enabled: true,
-		Backend: "http",
-	})
-
-	rr := doJSONRequest(t, h.Routes(), http.MethodPost, "/api/ai/enable", aiEnableRequest{CameraID: ""})
-	require.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-func TestEnableAI_InvalidBody(t *testing.T) {
-	t.Parallel()
-	h := setupAIHandlerWithManager(t, config.AIConfig{
-		Enabled: true,
-		Backend: "http",
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/ai/enable", strings.NewReader("not json"))
-	req.SetBasicAuth("admin", "admin12345")
-	rr := httptest.NewRecorder()
-	h.Routes().ServeHTTP(rr, req)
-	require.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-func TestDisableAI_Success(t *testing.T) {
-	t.Parallel()
-	h := setupAIHandlerWithManager(t, config.AIConfig{
-		Enabled: true,
-		Backend: "http",
-	})
-
-	rr := doJSONRequest(t, h.Routes(), http.MethodPost, "/api/ai/disable", aiDisableRequest{CameraID: "test-cam"})
-	require.Equal(t, http.StatusOK, rr.Code)
-
-	var resp map[string]string
-	parseJSON(t, rr, &resp)
-	require.Equal(t, "disabled", resp["status"])
-	require.Equal(t, "test-cam", resp["camera_id"])
-}
-
-func TestDisableAI_NoManager(t *testing.T) {
-	t.Parallel()
-	db, store := setupTestDB(t)
-	h := TestHandler(db, store)
-
-	rr := doJSONRequest(t, h.Routes(), http.MethodPost, "/api/ai/disable", aiDisableRequest{CameraID: "test-cam"})
-	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
-}
-
-func TestDisableAI_MissingCameraID(t *testing.T) {
-	t.Parallel()
-	h := setupAIHandlerWithManager(t, config.AIConfig{
-		Enabled: true,
-		Backend: "http",
-	})
-
-	rr := doJSONRequest(t, h.Routes(), http.MethodPost, "/api/ai/disable", aiDisableRequest{CameraID: ""})
-	require.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 func TestAIEvents_SSEHeaders(t *testing.T) {

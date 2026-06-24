@@ -1,16 +1,28 @@
-# Docker Compose for lalmax-nvr with AI Services
+# Docker Compose for lalmax-nvr with AI Detection (Webhook Mode)
+#
+# Architecture:
+#   ai-detector subscribes to NVR's RTSP streams → runs YOLO detection
+#   → pushes results via webhook to NVR → triggers multimodal LLM analysis
 #
 # Usage:
 #   docker compose -f docker-compose.ai.yml up -d
 #
 # This will start:
 #   1. lalmax-nvr (the NVR)
-#   2. yolo-service (YOLO object detection - optional)
+#   2. ai-detector (YOLO + ByteTrack object detection, pushes via webhook)
 #
-# For multimodal analysis (DeepSeek/OpenAI), configure in the NVR web UI:
-#   - Go to Settings -> AI Detection
-#   - Select "大模型分析" as backend
-#   - Configure your API key and provider settings
+# For multimodal analysis (DeepSeek/OpenAI), configure in lalmax-nvr.yaml:
+#   ai:
+#     enabled: true
+#     backend: webhook
+#     multimodal:
+#       enabled: true
+#       provider: deepseek
+#       providers:
+#         deepseek:
+#           api_key: your-api-key
+#           model: deepseek-chat
+#           vision_model: deepseek-vision
 
 services:
   lalmax-nvr:
@@ -22,25 +34,33 @@ services:
     restart: unless-stopped
     ports:
       - "9090:9090"
+      - "15544:15544"  # RTSP server (for ai-detector to subscribe)
       - "5060:5060/tcp"
       - "5060:5060/udp"
     volumes:
       - ./data:/data
     environment:
       - NVR_DATA_DIR=/data
-      - YOLO_SERVICE_URL=http://yolo-service:18888
 
-  yolo-service:
+  ai-detector:
     build:
-      context: ./docker/yolo-service
+      context: ./docker/ai-detector
       dockerfile: Dockerfile
+    container_name: ai-detector
+    depends_on:
+      - lalmax-nvr
     environment:
-      - PORT=18888
-      - MODEL=yolov8n.pt
+      - NVR_URL=http://lalmax-nvr:9090
+      - NVR_AUTH=  # Base64 encoded auth if needed
+      - YOLO_MODEL=yolov8n.pt
       - CONFIDENCE=0.5
-      - DEVICE=cpu
+      - FRAME_SKIP=5
+      - SYNC_INTERVAL=30
+      - RTSP_PORT=15544
+      - ENABLE_TRACKING=true
+      - PORT=8080
     ports:
-      - "18888:18888"
+      - "8080:8080"  # Health check endpoint
     restart: unless-stopped
     # Uncomment for GPU support (requires nvidia-docker):
     # deploy:

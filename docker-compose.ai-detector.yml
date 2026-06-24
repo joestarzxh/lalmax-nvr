@@ -32,6 +32,8 @@ services:
       - FRAME_SKIP=5  # Process every 5th frame
       - SYNC_INTERVAL=30  # Sync camera list every 30 seconds
       - RTSP_PORT=15544  # lalmax RTSP port
+      # Object tracking (supervision library)
+      - ENABLE_TRACKING=true
       # Health check port
       - PORT=8080
     extra_hosts:

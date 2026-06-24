@@ -5,13 +5,6 @@ import { apiRequest, getAuthHeader, getAuthToken, API_BASE } from './client';
 
 // --- Types ---
 
-export interface CameraTranscodingConfig {
-  enabled: boolean;
-  target_codec: string;
-  preset: string;
-  bitrate: string;
-}
-
 export interface Camera {
   id: string;
   name: string;
@@ -36,7 +29,6 @@ export interface Camera {
   profile_token?: string;
   profile_name?: string;
   stream_encoding?: string;
-  transcoding?: CameraTranscodingConfig;
   audio_enabled?: boolean;
   source_type?: string;
   recording_paused?: boolean;
@@ -60,7 +52,6 @@ export interface CreateCameraRequest {
   profile_token?: string;
   profile_name?: string;
   stream_encoding?: string;
-  transcoding?: CameraTranscodingConfig;
   audio_enabled?: boolean;
 }
 
@@ -83,7 +74,6 @@ export interface UpdateCameraRequest {
   profile_token?: string;
   profile_name?: string;
   stream_encoding?: string;
-  transcoding?: CameraTranscodingConfig;
   audio_enabled?: boolean;
 }
 

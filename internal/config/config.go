@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -44,7 +43,6 @@ type Config struct {
 	GB28181       GB28181Config       `yaml:"gb28181"`
 	Health        HealthConfig        `yaml:"health"`
 	RemoteLog     RemoteLogConfig     `yaml:"remote_log"`
-	Transcoding   TranscodingConfig   `yaml:"transcoding"`
 	WebSocket     WebSocketConfig     `yaml:"websocket"`
 	AI            AIConfig            `yaml:"ai"`
 	MetricsAuth   MetricsAuthConfig   `yaml:"metrics_auth"`
@@ -103,7 +101,6 @@ type CameraConfig struct {
 	SampleInterval       int                      `yaml:"sample_interval"`
 	HLSMaxFPS            int                      `yaml:"hls_max_fps"`
 	Merge                *MergeConfig             `yaml:"merge"`
-	Transcoding          *CameraTranscodingConfig `yaml:"transcoding,omitempty"`
 	Timelapse            *CameraTimelapseConfig   `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
 	AudioEnabled         bool                     `yaml:"audio_enabled"`
 	SourceType           string                   `yaml:"source_type,omitempty" json:"source_type,omitempty"`
@@ -190,23 +187,6 @@ type MergeConfig struct {
 	BatchLimit         int    `yaml:"batch_limit"`
 	MinSegmentAge      string `yaml:"min_segment_age"`
 	MinSegmentsToMerge int    `yaml:"min_segments_to_merge"`
-}
-
-type TranscodingConfig struct {
-	Enabled          bool   `yaml:"enabled" json:"enabled"`                               // default false
-	FFmpegPath       string `yaml:"ffmpeg_path,omitempty" json:"ffmpeg_path"`             // auto-detected or user-specified
-	MaxWorkers       int    `yaml:"max_workers,omitempty" json:"max_workers"`             // default 1, max 4
-	ReplaceOriginal  bool   `yaml:"replace_original,omitempty" json:"replace_original"`   // default false
-	DownloadURL      string `yaml:"download_url,omitempty" json:"download_url"`           // auto-populated per platform
-	JobTimeout       string `yaml:"job_timeout,omitempty" json:"job_timeout"`             // per-job timeout, default "30m", max 4h
-	HistoryRetention string `yaml:"history_retention,omitempty" json:"history_retention"` // e.g. "168h" (7d), "720h" (30d), ""=never
-}
-
-type CameraTranscodingConfig struct {
-	Enabled     bool   `yaml:"enabled" json:"enabled"`                     // default false
-	TargetCodec string `yaml:"target_codec,omitempty" json:"target_codec"` // h264, h265
-	Preset      string `yaml:"preset,omitempty" json:"preset"`             // ultrafast, faster, medium
-	Bitrate     string `yaml:"bitrate,omitempty" json:"bitrate"`           // e.g. "2M"
 }
 
 type CameraTimelapseConfig struct {
@@ -402,12 +382,10 @@ type WebSocketConfig struct {
 
 type AIConfig struct {
 	Enabled             bool                `yaml:"enabled" json:"enabled"`
-	Backend             string              `yaml:"backend" json:"backend"` // "http", "webhook", "multimodal", "disabled"
+	Backend             string              `yaml:"backend" json:"backend"` // "webhook" or "disabled"
 	FrameSkipRate       int                 `yaml:"frame_skip_rate" json:"frameSkipRate"`
 	ConfidenceThreshold float64             `yaml:"confidence_threshold" json:"confidenceThreshold"`
 	InferenceTimeoutMs  int                 `yaml:"inference_timeout_ms" json:"inferenceTimeoutMs"`
-	FFmpegPath          string              `yaml:"ffmpeg_path,omitempty" json:"ffmpegPath,omitempty"`
-	HTTP                *AIHTTPConfig       `yaml:"http,omitempty" json:"http,omitempty"`
 	Webhook             *AIWebhookConfig    `yaml:"webhook,omitempty" json:"webhook,omitempty"`
 	Multimodal          *AIMultimodalConfig `yaml:"multimodal,omitempty" json:"multimodal,omitempty"`
 }
@@ -431,13 +409,6 @@ type AIProviderConfig struct {
 	MaxTokens   int     `yaml:"max_tokens" json:"maxTokens"`
 	Temperature float32 `yaml:"temperature" json:"temperature"`
 	Timeout     int     `yaml:"timeout" json:"timeout"` // seconds
-}
-
-type AIHTTPConfig struct {
-	Endpoint string            `yaml:"endpoint" json:"endpoint"`
-	APIKey   string            `yaml:"api_key" json:"apiKey"`
-	Headers  map[string]string `yaml:"headers" json:"headers"`
-	Timeout  int               `yaml:"timeout" json:"timeout"` // milliseconds
 }
 
 type AIWebhookConfig struct {
@@ -677,50 +648,6 @@ func Validate(cfg *Config) error {
 		}
 		if cfg.Merge.MinSegmentsToMerge < 2 {
 			return fmt.Errorf("merge min_segments_to_merge must be at least 2")
-		}
-	}
-	// Validate transcoding configuration
-	if cfg.Transcoding.MaxWorkers < 1 || cfg.Transcoding.MaxWorkers > 4 {
-		return fmt.Errorf("transcoding.max_workers must be between 1 and 4, got %d", cfg.Transcoding.MaxWorkers)
-	}
-	if cfg.Transcoding.JobTimeout != "" {
-		jobTimeout, err := time.ParseDuration(cfg.Transcoding.JobTimeout)
-		if err != nil {
-			return fmt.Errorf("transcoding.job_timeout invalid duration: %w", err)
-		}
-		if jobTimeout < time.Second {
-			return fmt.Errorf("transcoding.job_timeout must be at least 1s, got %s", cfg.Transcoding.JobTimeout)
-		}
-		if jobTimeout > 4*time.Hour {
-			return fmt.Errorf("transcoding.job_timeout must be <= 4h, got %s", cfg.Transcoding.JobTimeout)
-		}
-	}
-	if cfg.Transcoding.HistoryRetention != "" {
-		hr, err := time.ParseDuration(cfg.Transcoding.HistoryRetention)
-		if err != nil {
-			return fmt.Errorf("transcoding.history_retention invalid duration: %w", err)
-		}
-		if hr < 24*time.Hour {
-			return fmt.Errorf("transcoding.history_retention must be at least 24h, got %s", cfg.Transcoding.HistoryRetention)
-		}
-	}
-	for _, cam := range cfg.Cameras {
-		if cam.Transcoding == nil {
-			continue
-		}
-		if cam.Transcoding.TargetCodec != "" && cam.Transcoding.TargetCodec != "h264" && cam.Transcoding.TargetCodec != "h265" {
-			return fmt.Errorf("cameras.%s.transcoding.target_codec must be h264 or h265, got %q", cam.ID, cam.Transcoding.TargetCodec)
-		}
-		validPresets := map[string]bool{"": true, "ultrafast": true, "faster": true, "medium": true}
-		if !validPresets[cam.Transcoding.Preset] {
-			return fmt.Errorf("cameras.%s.transcoding.preset must be ultrafast, faster, or medium, got %q", cam.ID, cam.Transcoding.Preset)
-		}
-
-		if cam.Transcoding.Bitrate != "" {
-			matched, err := regexp.MatchString(`^(0|\d+(\.\d+)?[kMG])$`, cam.Transcoding.Bitrate)
-			if err != nil || !matched {
-				return fmt.Errorf("cameras.%s.transcoding.bitrate must be in format like 500k, 2M, 1.5G (got %q)", cam.ID, cam.Transcoding.Bitrate)
-			}
 		}
 	}
 
@@ -1063,16 +990,6 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.Merge.MinSegmentsToMerge <= 0 {
 		cfg.Merge.MinSegmentsToMerge = 3
 	}
-	// Transcoding defaults
-	if cfg.Transcoding.MaxWorkers == 0 {
-		cfg.Transcoding.MaxWorkers = 1
-	}
-	if cfg.Transcoding.JobTimeout == "" {
-		cfg.Transcoding.JobTimeout = "30m"
-	}
-	if cfg.Transcoding.HistoryRetention == "" {
-		cfg.Transcoding.HistoryRetention = "168h" // 7 days
-	}
 	// RTMP defaults
 	if cfg.RTMP.Enabled == nil {
 		cfg.RTMP.Enabled = new(bool)
@@ -1176,9 +1093,6 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.AI.InferenceTimeoutMs <= 0 {
 		cfg.AI.InferenceTimeoutMs = 30000
 	}
-	if cfg.AI.HTTP != nil && cfg.AI.HTTP.Timeout <= 0 {
-		cfg.AI.HTTP.Timeout = 10000
-	}
 	// Multimodal AI defaults
 	if cfg.AI.Multimodal != nil && cfg.AI.Multimodal.Enabled {
 		if cfg.AI.Multimodal.Provider == "" {
@@ -1271,31 +1185,6 @@ func ResolveMergeConfig(global MergeConfig, perCamera *MergeConfig) MergeConfig 
 	}
 	if perCamera.MinSegmentsToMerge > 0 {
 		result.MinSegmentsToMerge = perCamera.MinSegmentsToMerge
-	}
-	return result
-}
-
-// ResolveTranscodingConfig returns the effective transcoding config for a camera.
-// If per-camera config is nil, the global enabled state is used.
-// If per-camera config is set, its fields override the global enabled state.
-func (c *Config) ResolveTranscodingConfig(cameraID string) *CameraTranscodingConfig {
-	result := &CameraTranscodingConfig{
-		Enabled: c.Transcoding.Enabled,
-	}
-	for i := range c.Cameras {
-		cam := &c.Cameras[i]
-		if cam.ID == cameraID && cam.Transcoding != nil {
-			result.Enabled = cam.Transcoding.Enabled
-			if cam.Transcoding.TargetCodec != "" {
-				result.TargetCodec = cam.Transcoding.TargetCodec
-			}
-			if cam.Transcoding.Preset != "" {
-				result.Preset = cam.Transcoding.Preset
-			}
-			if cam.Transcoding.Bitrate != "" {
-				result.Bitrate = cam.Transcoding.Bitrate
-			}
-		}
 	}
 	return result
 }

@@ -9,57 +9,53 @@ import (
 type Metrics struct {
 	Registry *prometheus.Registry
 
-	RecordingBytesTotal *prometheus.CounterVec // labels: camera_id, codec
-	ActiveCameras      prometheus.Gauge
-	ActiveRecordings   prometheus.Gauge
-	SegmentsCreated    *prometheus.CounterVec // labels: camera_id, codec
-	CleanupDeleted     *prometheus.CounterVec // labels: reason
-	StorageUsedBytes   prometheus.Gauge
-	StorageTotalBytes  prometheus.Gauge
-	RecordingCount     prometheus.Gauge
-	CameraErrors       *prometheus.CounterVec // labels: camera_id, error_type
-	HLSFramesDropped  *prometheus.CounterVec // labels: camera_id
-	HLSWriteErrors      *prometheus.CounterVec // labels: camera_id
-	HLSMuxerRestarts    *prometheus.CounterVec // labels: camera_id
-	HLSActiveStreams     *prometheus.GaugeVec   // labels: camera_id
-	HLSSegmentSizeBytes  *prometheus.HistogramVec // labels: camera_id
-	HLSIdleEvictions    *prometheus.CounterVec // labels: camera_id
-	WebRTCActivePeers           *prometheus.GaugeVec   // labels: camera_id
-	WebRTCFramesSent            *prometheus.CounterVec // labels: camera_id
-	WebRTCFramesDropped         *prometheus.CounterVec // labels: camera_id
-	WebRTCConnectionStateChanges *prometheus.CounterVec // labels: camera_id, state
-	FLVActiveStreams    *prometheus.GaugeVec   // labels: camera_id
-	FLVFramesSent       *prometheus.CounterVec // labels: camera_id
-	FLVFramesDropped    *prometheus.CounterVec // labels: camera_id
-	FLVGOPCacheHits         *prometheus.CounterVec // labels: camera_id
-	FLVGOPCacheMisses       *prometheus.CounterVec // labels: camera_id
-	XiaomiDisconnects       *prometheus.CounterVec // labels: camera_id, reason
-	XiaomiReconnects        *prometheus.CounterVec // labels: camera_id
-	TranscodingJobsTotal       *prometheus.CounterVec   // labels: codec_from, codec_to, status
-	TranscodingActiveJobs      prometheus.Gauge
-	TranscodingDurationSeconds *prometheus.HistogramVec // labels: codec_from, codec_to
-	TranscodingBytesProcessed  prometheus.Counter
-	TranscodingFFmpegStatus    prometheus.Gauge
-	RemoteLogSentTotal     prometheus.Counter
-	RemoteLogDroppedTotal prometheus.Counter
-	RemoteLogBatchSize     prometheus.Histogram
-	StreamHubFramesDropped  *prometheus.CounterVec  // labels: camera_id, consumer, is_idr
-	StreamHubBufferDepth     *prometheus.GaugeVec    // labels: camera_id, consumer
-	StreamHubFramesInTotal      *prometheus.CounterVec    // labels: camera_id
+	RecordingBytesTotal            *prometheus.CounterVec // labels: camera_id, codec
+	ActiveCameras                  prometheus.Gauge
+	ActiveRecordings               prometheus.Gauge
+	SegmentsCreated                *prometheus.CounterVec // labels: camera_id, codec
+	CleanupDeleted                 *prometheus.CounterVec // labels: reason
+	StorageUsedBytes               prometheus.Gauge
+	StorageTotalBytes              prometheus.Gauge
+	RecordingCount                 prometheus.Gauge
+	CameraErrors                   *prometheus.CounterVec   // labels: camera_id, error_type
+	HLSFramesDropped               *prometheus.CounterVec   // labels: camera_id
+	HLSWriteErrors                 *prometheus.CounterVec   // labels: camera_id
+	HLSMuxerRestarts               *prometheus.CounterVec   // labels: camera_id
+	HLSActiveStreams               *prometheus.GaugeVec     // labels: camera_id
+	HLSSegmentSizeBytes            *prometheus.HistogramVec // labels: camera_id
+	HLSIdleEvictions               *prometheus.CounterVec   // labels: camera_id
+	WebRTCActivePeers              *prometheus.GaugeVec     // labels: camera_id
+	WebRTCFramesSent               *prometheus.CounterVec   // labels: camera_id
+	WebRTCFramesDropped            *prometheus.CounterVec   // labels: camera_id
+	WebRTCConnectionStateChanges   *prometheus.CounterVec   // labels: camera_id, state
+	FLVActiveStreams               *prometheus.GaugeVec     // labels: camera_id
+	FLVFramesSent                  *prometheus.CounterVec   // labels: camera_id
+	FLVFramesDropped               *prometheus.CounterVec   // labels: camera_id
+	FLVGOPCacheHits                *prometheus.CounterVec   // labels: camera_id
+	FLVGOPCacheMisses              *prometheus.CounterVec   // labels: camera_id
+	XiaomiDisconnects              *prometheus.CounterVec   // labels: camera_id, reason
+	XiaomiReconnects               *prometheus.CounterVec   // labels: camera_id
+	RemoteLogSentTotal             prometheus.Counter
+	RemoteLogDroppedTotal          prometheus.Counter
+	RemoteLogBatchSize             prometheus.Histogram
+	StreamHubFramesDropped         *prometheus.CounterVec   // labels: camera_id, consumer, is_idr
+	StreamHubBufferDepth           *prometheus.GaugeVec     // labels: camera_id, consumer
+	StreamHubFramesInTotal         *prometheus.CounterVec   // labels: camera_id
 	FrameProcessingDurationSeconds *prometheus.HistogramVec // labels: camera_id, protocol
-	JitterBufferDepth          *prometheus.GaugeVec    // labels: camera_id
-	JitterBufferReordersTotal  *prometheus.CounterVec   // labels: camera_id
-	RecorderRingBufferDropsTotal *prometheus.CounterVec // labels: camera_id
+	JitterBufferDepth              *prometheus.GaugeVec     // labels: camera_id
+	JitterBufferReordersTotal      *prometheus.CounterVec   // labels: camera_id
+	RecorderRingBufferDropsTotal   *prometheus.CounterVec   // labels: camera_id
 	// Health→Prometheus bridge metrics (stream stats)
-	StreamFPS                 *prometheus.GaugeVec    // labels: camera_id
-	StreamBitrateKbps         *prometheus.GaugeVec    // labels: camera_id
-	StreamIDRIntervalSeconds  *prometheus.GaugeVec    // labels: camera_id
+	StreamFPS                *prometheus.GaugeVec // labels: camera_id
+	StreamBitrateKbps        *prometheus.GaugeVec // labels: camera_id
+	StreamIDRIntervalSeconds *prometheus.GaugeVec // labels: camera_id
 	// Camera connection metrics
-	CameraConnectionErrorsTotal    *prometheus.CounterVec // labels: camera_id, error_type
+	CameraConnectionErrorsTotal   *prometheus.CounterVec // labels: camera_id, error_type
 	CameraReconnectAttemptsTotal  *prometheus.CounterVec // labels: camera_id
-	CameraReconnectBackoffSeconds *prometheus.GaugeVec    // labels: camera_id
+	CameraReconnectBackoffSeconds *prometheus.GaugeVec   // labels: camera_id
 
 }
+
 // NewMetrics creates a new Metrics instance with a custom registry,
 // Go runtime collectors (memstats only for RPi 3B), and all custom NVR metrics.
 func NewMetrics() *Metrics {
@@ -152,12 +148,12 @@ func NewMetrics() *Metrics {
 		Name: "nvr_webrtc_frames_sent_total",
 		Help: "Total WebRTC frames sent, partitioned by camera.",
 	}, []string{"camera_id"})
-webrtcFramesDropped := prometheus.NewCounterVec(prometheus.CounterOpts{
+	webrtcFramesDropped := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "nvr_webrtc_frames_dropped_total",
 		Help: "Total WebRTC frames dropped due to buffer full, partitioned by camera.",
 	}, []string{"camera_id"})
 
-webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
+	webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "nvr_webrtc_connection_state_changes_total",
 		Help: "Total WebRTC connection state changes, partitioned by camera and state.",
 	}, []string{"camera_id", "state"})
@@ -191,32 +187,6 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "nvr_xiaomi_reconnects_total",
 		Help: "Total Xiaomi camera reconnects, partitioned by camera.",
 	}, []string{"camera_id"})
-
-	transcodingJobsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "nvr_transcoding_jobs_total",
-		Help: "Total number of transcoding jobs by codec conversion and status",
-	}, []string{"codec_from", "codec_to", "status"})
-
-	transcodingActiveJobs := prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "nvr_transcoding_active_jobs",
-		Help: "Number of currently active transcoding jobs",
-	})
-
-	transcodingDurationSeconds := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "nvr_transcoding_duration_seconds",
-		Help:    "Duration of transcoding jobs in seconds",
-		Buckets: prometheus.DefBuckets,
-	}, []string{"codec_from", "codec_to"})
-
-	transcodingBytesProcessed := prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "nvr_transcoding_bytes_processed",
-		Help: "Total bytes processed by transcoding jobs",
-	})
-
-	transcodingFFmpegStatus := prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "nvr_transcoding_ffmpeg_status",
-		Help: "FFmpeg status: 0=not_installed, 1=downloading, 2=available",
-	})
 
 	remoteLogSentTotal := prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "nvr_remote_log_sent_total",
@@ -322,11 +292,6 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 		flvGOPCacheMisses,
 		xiaomiDisconnects,
 		xiaomiReconnects,
-		transcodingJobsTotal,
-		transcodingActiveJobs,
-		transcodingDurationSeconds,
-		transcodingBytesProcessed,
-		transcodingFFmpegStatus,
 		remoteLogSentTotal,
 		remoteLogDroppedTotal,
 		remoteLogBatchSize,
@@ -346,54 +311,49 @@ webrtcConnectionStateChanges := prometheus.NewCounterVec(prometheus.CounterOpts{
 	)
 
 	return &Metrics{
-		Registry:            reg,
-		RecordingBytesTotal: recordingBytesTotal,
-		ActiveCameras:       activeCameras,
-		ActiveRecordings:    activeRecordings,
-		SegmentsCreated:     segmentsCreated,
-		CleanupDeleted:      cleanupDeleted,
-		StorageUsedBytes:    storageUsedBytes,
-		StorageTotalBytes:   storageTotalBytes,
-		RecordingCount:      recordingCount,
-		CameraErrors:        cameraErrors,
-		HLSFramesDropped:    hlsFramesDropped,
-		HLSWriteErrors:      hlsWriteErrors,
-		HLSMuxerRestarts:    hlsMuxerRestarts,
-		HLSActiveStreams:     hlsActiveStreams,
-		HLSSegmentSizeBytes:  hlsSegmentSizeBytes,
-		HLSIdleEvictions:    hlsIdleEvictions,
-		WebRTCActivePeers:   webrtcActivePeers,
-		WebRTCFramesSent:    webrtcFramesSent,
-		WebRTCFramesDropped:         webrtcFramesDropped,
-		WebRTCConnectionStateChanges: webrtcConnectionStateChanges,
-		FLVActiveStreams:    flvActiveStreams,
-		FLVFramesSent:       flvFramesSent,
-		FLVFramesDropped:    flvFramesDropped,
-		FLVGOPCacheHits:     flvGOPCacheHits,
-		FLVGOPCacheMisses:  flvGOPCacheMisses,
-		XiaomiDisconnects:       xiaomiDisconnects,
-		XiaomiReconnects:           xiaomiReconnects,
-		TranscodingJobsTotal:       transcodingJobsTotal,
-		TranscodingActiveJobs:      transcodingActiveJobs,
-		TranscodingDurationSeconds: transcodingDurationSeconds,
-		TranscodingBytesProcessed:  transcodingBytesProcessed,
-		TranscodingFFmpegStatus:    transcodingFFmpegStatus,
-		RemoteLogSentTotal:       remoteLogSentTotal,
-		RemoteLogDroppedTotal:    remoteLogDroppedTotal,
-		RemoteLogBatchSize:      remoteLogBatchSize,
-		StreamHubFramesDropped: streamHubFramesDropped,
-		StreamHubBufferDepth:    streamHubBufferDepth,
-		StreamHubFramesInTotal:      streamHubFramesInTotal,
+		Registry:                       reg,
+		RecordingBytesTotal:            recordingBytesTotal,
+		ActiveCameras:                  activeCameras,
+		ActiveRecordings:               activeRecordings,
+		SegmentsCreated:                segmentsCreated,
+		CleanupDeleted:                 cleanupDeleted,
+		StorageUsedBytes:               storageUsedBytes,
+		StorageTotalBytes:              storageTotalBytes,
+		RecordingCount:                 recordingCount,
+		CameraErrors:                   cameraErrors,
+		HLSFramesDropped:               hlsFramesDropped,
+		HLSWriteErrors:                 hlsWriteErrors,
+		HLSMuxerRestarts:               hlsMuxerRestarts,
+		HLSActiveStreams:               hlsActiveStreams,
+		HLSSegmentSizeBytes:            hlsSegmentSizeBytes,
+		HLSIdleEvictions:               hlsIdleEvictions,
+		WebRTCActivePeers:              webrtcActivePeers,
+		WebRTCFramesSent:               webrtcFramesSent,
+		WebRTCFramesDropped:            webrtcFramesDropped,
+		WebRTCConnectionStateChanges:   webrtcConnectionStateChanges,
+		FLVActiveStreams:               flvActiveStreams,
+		FLVFramesSent:                  flvFramesSent,
+		FLVFramesDropped:               flvFramesDropped,
+		FLVGOPCacheHits:                flvGOPCacheHits,
+		FLVGOPCacheMisses:              flvGOPCacheMisses,
+		XiaomiDisconnects:              xiaomiDisconnects,
+		XiaomiReconnects:               xiaomiReconnects,
+		RemoteLogSentTotal:             remoteLogSentTotal,
+		RemoteLogDroppedTotal:          remoteLogDroppedTotal,
+		RemoteLogBatchSize:             remoteLogBatchSize,
+		StreamHubFramesDropped:         streamHubFramesDropped,
+		StreamHubBufferDepth:           streamHubBufferDepth,
+		StreamHubFramesInTotal:         streamHubFramesInTotal,
 		FrameProcessingDurationSeconds: frameProcessingDurationSeconds,
-		JitterBufferDepth:          jitterBufferDepth,
-		JitterBufferReordersTotal:  jitterBufferReordersTotal,
-		RecorderRingBufferDropsTotal: recorderRingBufferDropsTotal,
-		StreamFPS:                    streamFPS,
-		StreamBitrateKbps:             streamBitrateKbps,
-		StreamIDRIntervalSeconds:      streamIDRIntervalSeconds,
-		CameraConnectionErrorsTotal:   cameraConnectionErrorsTotal,
-		CameraReconnectAttemptsTotal: cameraReconnectAttemptsTotal,
-		CameraReconnectBackoffSeconds: cameraReconnectBackoffSeconds,
+		JitterBufferDepth:              jitterBufferDepth,
+		JitterBufferReordersTotal:      jitterBufferReordersTotal,
+		RecorderRingBufferDropsTotal:   recorderRingBufferDropsTotal,
+		StreamFPS:                      streamFPS,
+		StreamBitrateKbps:              streamBitrateKbps,
+		StreamIDRIntervalSeconds:       streamIDRIntervalSeconds,
+		CameraConnectionErrorsTotal:    cameraConnectionErrorsTotal,
+		CameraReconnectAttemptsTotal:   cameraReconnectAttemptsTotal,
+		CameraReconnectBackoffSeconds:  cameraReconnectBackoffSeconds,
 	}
 
 }

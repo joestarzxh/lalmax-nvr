@@ -23,17 +23,15 @@ var logger = slog.Default().With("component", "cleanup")
 //   - Time-based: delete recordings older than retention period
 //   - Disk-threshold: delete oldest recordings when disk usage exceeds threshold
 type CleanupManager struct {
-	db                        *storage.DB
-	store                     *storage.Manager
-	retention                 time.Duration
-	diskThreshold             int // percent
-	interval                  time.Duration
-	metrics                   *metrics.Metrics
-	healthEnabled             bool
-	healthRetention           time.Duration
-	transcodeOrphanFn         func(ctx context.Context) error
-	transcodeHistoryRetention time.Duration // 0 = disabled
-	ffprobePath               string         // empty = skip repair
+	db              *storage.DB
+	store           *storage.Manager
+	retention       time.Duration
+	diskThreshold   int // percent
+	interval        time.Duration
+	metrics         *metrics.Metrics
+	healthEnabled   bool
+	healthRetention time.Duration
+	ffprobePath     string // empty = skip repair
 }
 
 // NewCleanupManager creates a new CleanupManager with the given config.
@@ -64,17 +62,6 @@ func NewCleanupManager(db *storage.DB, store *storage.Manager, cfg config.Cleanu
 func (cm *CleanupManager) SetHealthConfig(enabled bool, retention time.Duration) {
 	cm.healthEnabled = enabled
 	cm.healthRetention = retention
-}
-
-// SetTranscodeOrphanCleanup registers a function to clean up orphaned transcoded files.
-// The function is called once per cleanup cycle (typically daily).
-func (cm *CleanupManager) SetTranscodeOrphanCleanup(fn func(ctx context.Context) error) {
-	cm.transcodeOrphanFn = fn
-}
-
-// SetTranscodeHistoryRetention sets the retention period for completed transcode task history.
-func (cm *CleanupManager) SetTranscodeHistoryRetention(retention time.Duration) {
-	cm.transcodeHistoryRetention = retention
 }
 
 // SetFFprobePath sets the path to the ffprobe binary for zero-duration recording repair.
@@ -111,12 +98,6 @@ func (cm *CleanupManager) RunOnce(ctx context.Context) error {
 		logger.Error("disk-threshold cleanup error", "error", err)
 	}
 	cm.healthRetentionCleanup(ctx)
-	if cm.transcodeOrphanFn != nil {
-		if err := cm.transcodeOrphanFn(ctx); err != nil {
-			logger.Error("transcode orphan cleanup error", "error", err)
-		}
-	}
-	cm.transcodeHistoryCleanup(ctx)
 	if cm.metrics != nil {
 		if count, err := cm.db.CountRecordings(ctx); err == nil {
 			cm.metrics.RecordingCount.Set(float64(count))
@@ -305,21 +286,6 @@ func (cm *CleanupManager) healthRetentionCleanup(ctx context.Context) {
 	}
 	if deleted > 0 {
 		logger.Info("health events cleaned up", "deleted", deleted)
-	}
-}
-
-// transcodeHistoryCleanup deletes expired transcode task history older than the retention period.
-func (cm *CleanupManager) transcodeHistoryCleanup(ctx context.Context) {
-	if cm.transcodeHistoryRetention <= 0 {
-		return
-	}
-	deleted, err := cm.db.DeleteCompletedTasks(ctx, cm.transcodeHistoryRetention)
-	if err != nil {
-		logger.Warn("transcode history cleanup failed", "error", err)
-		return
-	}
-	if deleted > 0 {
-		logger.Info("transcode history cleaned up", "deleted", deleted)
 	}
 }
 
