@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lalmax-pro/lalmax-nvr/internal/flv"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/middleware"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
@@ -122,7 +121,7 @@ func TestWHEP_AuthRequired(t *testing.T) {
 	defer db.Close()
 
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$dummyhashdummyhashdummyhashdum" }}, "")
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, "", nil, nil)
 
 	r := h.Routes()
 	req := httptest.NewRequest("POST", "/api/cameras/test-cam/stream/webrtc", strings.NewReader("v=0"))
@@ -139,7 +138,7 @@ func TestWHEP_Create_NoWebRTCManager(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/test-cam/stream/webrtc",
 		strings.NewReader("v=0"), "admin", "pass")
@@ -153,7 +152,7 @@ func TestWHEP_Delete_NoMediaEngine(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/cameras/test-cam/stream/webrtc/nonexistent-session",
 		nil, "admin", "pass")
@@ -168,7 +167,7 @@ func TestWHEP_CameraNotFound(t *testing.T) {
 	defer db.Close()
 
 	engine := &stubMediaEngine{stream: nil}
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/cameras/nonexistent/stream/webrtc",
@@ -187,7 +186,7 @@ func TestWHEP_InvalidContentType(t *testing.T) {
 	seedCameraWithEncoding(t, db, "cam1", "h264")
 
 	engine := &stubMediaEngine{stream: nil}
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	req := httptest.NewRequest("POST", "/api/cameras/cam1/stream/webrtc", strings.NewReader("v=0"))
@@ -208,7 +207,7 @@ func TestFLV_AuthRequired(t *testing.T) {
 	defer db.Close()
 
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$dummyhashdummyhashdummyhashdum" }}, "")
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, "", nil, nil)
 
 	r := h.Routes()
 	req := httptest.NewRequest("GET", "/api/cameras/test-cam/stream.flv", nil)
@@ -224,43 +223,24 @@ func TestFLV_NoManager(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/test-cam/stream.flv", nil, "admin", "pass")
 
 	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
-func TestFLV_CameraNotFound(t *testing.T) {
+func TestFLV_NoMediaEngine(t *testing.T) {
 	t.Helper()
 	t.Parallel()
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	flvMgr := flv.NewManager()
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
-	h.SetFLVManager(flvMgr)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/nonexistent/stream.flv", nil, "admin", "pass")
 
-	require.Equal(t, http.StatusNotFound, rr.Code)
-}
-
-func TestFLV_StreamNotActive(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	db, store := setupTestDB(t)
-	defer db.Close()
-
-	seedCameraWithEncoding(t, db, "cam1", "h264")
-
-	flvMgr := flv.NewManager()
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
-	h.SetFLVManager(flvMgr)
-
-	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam1/stream.flv", nil, "admin", "pass")
-
-	require.Equal(t, http.StatusNotFound, rr.Code)
+	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
 // --- Per-camera protocols endpoint tests ---
@@ -272,7 +252,7 @@ func TestCameraProtocols_AuthRequired(t *testing.T) {
 	defer db.Close()
 
 	authMW, _ := middleware.NewAuthMiddleware(middleware.AuthProvider{GetUsername: func() string { return "admin" }, GetHash: func() string { return "a$dummyhashdummyhashdummyhashdum" }}, "")
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, "", nil, nil)
 
 	r := h.Routes()
 	req := httptest.NewRequest("GET", "/api/cameras/test-cam/protocols", nil)
@@ -288,7 +268,7 @@ func TestCameraProtocols_CameraNotFound(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/nonexistent/protocols", nil, "admin", "pass")
 
@@ -308,7 +288,7 @@ func TestCameraProtocols_H264Camera(t *testing.T) {
 	reg.Register(&stubStreamHandler{name: "webrtc", codecs: []model.Format{model.FormatH264}})
 	reg.Register(&stubStreamHandler{name: "flv", codecs: []model.Format{model.FormatH264, model.FormatH265}})
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetStreamRegistry(reg)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam1/protocols", nil, "admin", "pass")
@@ -337,7 +317,7 @@ func TestCameraProtocols_H265Camera(t *testing.T) {
 	reg.Register(&stubStreamHandler{name: "webrtc", codecs: []model.Format{model.FormatH264}})
 	reg.Register(&stubStreamHandler{name: "flv", codecs: []model.Format{model.FormatH264, model.FormatH265}})
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetStreamRegistry(reg)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam2/protocols", nil, "admin", "pass")
@@ -365,7 +345,7 @@ func TestCameraProtocols_MJPEGCamera(t *testing.T) {
 	reg.Register(&HLSStreamHandler{})
 	reg.Register(&stubStreamHandler{name: "webrtc", codecs: []model.Format{model.FormatH264}})
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetStreamRegistry(reg)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam3/protocols", nil, "admin", "pass")
@@ -387,7 +367,7 @@ func TestCameraProtocols_NoRegistry(t *testing.T) {
 
 	seedCameraWithEncoding(t, db, "cam1", "h264")
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	// No stream registry set
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam1/protocols", nil, "admin", "pass")
@@ -413,7 +393,7 @@ func TestCameraProtocols_UsesStreamEncoding(t *testing.T) {
 	reg := NewStreamRegistry()
 	reg.Register(&HLSStreamHandler{})
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetStreamRegistry(reg)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/cam1/protocols", nil, "admin", "pass")
@@ -441,7 +421,7 @@ func TestCameraProtocols_WithMediaEnginePlayURLsAndStatus(t *testing.T) {
 	reg.Register(&stubStreamHandler{name: "ws-flv", codecs: []model.Format{model.FormatH264, model.FormatH265}})
 	reg.Register(&WSStreamHandler{})
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetStreamRegistry(reg)
 	h.SetWSManager(&stubWSManager{})
 	h.SetMediaEngine(&stubMediaEngine{
@@ -526,7 +506,7 @@ func TestCameraProtocols_WithMediaEngineStatusError(t *testing.T) {
 	reg := NewStreamRegistry()
 	reg.Register(&HLSStreamHandler{})
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetStreamRegistry(reg)
 	h.SetMediaEngine(&stubMediaEngine{
 		getErr: errors.New("lalmax returned HTTP 404"),
@@ -561,7 +541,7 @@ func TestHLS_UsesMediaEngineProxy(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(&stubMediaEngine{
 		playURLs: map[string]string{
 			"hls": upstream.URL + "/live/hls/cam1/index.m3u8",
@@ -588,7 +568,7 @@ func TestHLS_Segment_UsesMediaEngineProxy(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(&stubMediaEngine{
 		playURLs: map[string]string{
 			"hls": upstream.URL + "/live/hls/cam1/index.m3u8",
@@ -621,7 +601,7 @@ func TestLLHLS_FMP4Resource_UsesMediaEngineProxyWithoutQuery(t *testing.T) {
 	}))
 	defer llhlsUpstream.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(&stubMediaEngine{
 		playURLs: map[string]string{
 			"hls":    hlsUpstream.URL + "/hls/cam1.m3u8",
@@ -655,7 +635,7 @@ func TestLLHLS_SubPlaylist_UsesMediaEngineProxyWithoutQuery(t *testing.T) {
 	}))
 	defer llhlsUpstream.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(&stubMediaEngine{
 		playURLs: map[string]string{
 			"hls":    hlsUpstream.URL + "/hls/cam1.m3u8",
@@ -683,7 +663,7 @@ func TestFLV_UsesMediaEngineProxy(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(&stubMediaEngine{
 		playURLs: map[string]string{
 			"flv": upstream.URL + "/live/cam1.flv",
@@ -725,7 +705,7 @@ func TestWHEP_UsesMediaEngineProxy(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(&stubMediaEngine{
 		playURLs: map[string]string{
 			"webrtc": upstream.URL + "/webrtc/whep?streamid=cam1",
@@ -782,7 +762,7 @@ func TestWHEP_UsesMediaEngineProxy_ForExternalStream(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(&stubMediaEngine{
 		stream: &media.StreamInfo{
 			StreamID: "test110",
@@ -827,12 +807,9 @@ func TestRoutes_WHEPEndpointsRegistered(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	flvMgr := flv.NewManager()
-
 	seedCameraWithEncoding(t, db, "test", "h264")
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
-	h.SetFLVManager(flvMgr)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 
 	r := h.Routes()
 	// Verify WHEP POST route responds (not 404)
@@ -850,14 +827,12 @@ func TestRoutes_FLVEndpointRegistered(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	flvMgr := flv.NewManager()
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
-	h.SetFLVManager(flvMgr)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/test/stream.flv", nil, "admin", "pass")
 
-	// Camera not found (404), not route not found
-	require.Equal(t, http.StatusNotFound, rr.Code)
+	// Without media engine, returns 503
+	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
 }
 
 func TestRoutes_CameraProtocolsEndpointRegistered(t *testing.T) {
@@ -866,28 +841,12 @@ func TestRoutes_CameraProtocolsEndpointRegistered(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/cameras/nonexistent/protocols", nil, "admin", "pass")
 
 	// Camera not found (404), not route not found
 	require.Equal(t, http.StatusNotFound, rr.Code)
-}
-
-// --- SetFLVManager tests ---
-
-func TestSetFLVManager(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	db, store := setupTestDB(t)
-	defer db.Close()
-
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
-	require.Nil(t, h.flvMgr)
-
-	mgr := flv.NewManager()
-	h.SetFLVManager(mgr)
-	require.Equal(t, mgr, h.flvMgr)
 }
 
 func TestListStreams_ReturnsManagedAndExternalStreams(t *testing.T) {
@@ -945,7 +904,7 @@ func TestListStreams_ReturnsManagedAndExternalStreams(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/streams", nil, "admin", "pass")
@@ -989,7 +948,7 @@ func TestListStreams_SearchAndPagination(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/streams?q=lobby&managed=true&limit=1&offset=0", nil, "admin", "pass")
@@ -1015,7 +974,7 @@ func TestListStreams_IncludesIdleEnabledCamera(t *testing.T) {
 
 	engine := &stubMediaEngine{streams: nil}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/streams", nil, "admin", "pass")
@@ -1045,7 +1004,7 @@ func TestListStreams_ActiveStreamsFirst(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/streams", nil, "admin", "pass")
@@ -1080,7 +1039,7 @@ func TestListStreams_IncludesRecentHistory(t *testing.T) {
 
 	engine := &stubMediaEngine{streams: nil}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/streams", nil, "admin", "pass")
@@ -1107,7 +1066,7 @@ func TestGetStream_IdleEnabledCamera(t *testing.T) {
 
 	engine := &stubMediaEngine{stream: nil}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/streams/cam1", nil, "admin", "pass")
@@ -1127,7 +1086,7 @@ func TestListStreams_RequiresMediaEngine(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/streams", nil, "admin", "pass")
 	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
@@ -1184,7 +1143,7 @@ func TestGetStream_ReturnsStreamDetails(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/streams/cam1", nil, "admin", "pass")
@@ -1227,7 +1186,7 @@ func TestGetStream_ExternalStream(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/streams/obs-stream-1", nil, "admin", "pass")
@@ -1269,7 +1228,7 @@ func TestGetStream_BoundStream(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/streams/obs-stream-1", nil, "admin", "pass")
@@ -1308,7 +1267,7 @@ func TestGetStream_PromotedPushStream(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/streams/obs-stream-1", nil, "admin", "pass")
@@ -1347,7 +1306,7 @@ func TestGetStream_GB28181IdlePlaying(t *testing.T) {
 
 	engine := &stubMediaEngine{stream: nil}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 	h.SetGB28181Server(&stubGB28181StreamStatus{
 		playing: map[string]bool{streamID: true},
@@ -1375,7 +1334,7 @@ func TestGetStream_NotFound(t *testing.T) {
 		stream: nil,
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/streams/nonexistent", nil, "admin", "pass")
@@ -1389,7 +1348,7 @@ func TestGetStream_RequiresMediaEngine(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/streams/cam1", nil, "admin", "pass")
 	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
@@ -1406,7 +1365,7 @@ func TestGetStream_MediaEngineError(t *testing.T) {
 		getErr: errors.New("connection timeout"),
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/streams/cam1", nil, "admin", "pass")
@@ -1436,7 +1395,7 @@ func TestBindCamera_Success(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	body := `{"camera_id": "cam1"}`
@@ -1464,7 +1423,7 @@ func TestBindCamera_StreamNotFound(t *testing.T) {
 		stream: nil,
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	body := `{"camera_id": "cam1"}`
@@ -1487,7 +1446,7 @@ func TestBindCamera_CameraNotFound(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	body := `{"camera_id": "nonexistent"}`
@@ -1510,7 +1469,7 @@ func TestBindCamera_MissingCameraID(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	body := `{}`
@@ -1526,7 +1485,7 @@ func TestBindCamera_RequiresMediaEngine(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 
 	body := `{"camera_id": "cam1"}`
 	rr := doRequest(t, h.Routes(), "POST", "/api/streams/obs-stream-1/bind-camera",
@@ -1550,7 +1509,7 @@ func TestUnbindCamera_Success(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	bindBody := `{"camera_id": "cam1"}`
@@ -1582,7 +1541,7 @@ func TestUnbindCamera_NotFound(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/streams/obs-stream-1/unbind-camera",
@@ -1597,7 +1556,7 @@ func TestUnbindCamera_RequiresMediaEngine(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/streams/obs-stream-1/unbind-camera",
 		nil, "admin", "pass")
@@ -1625,7 +1584,7 @@ func TestPromoteStream_Success(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	body := `{"name": "OBS Stream 1", "description": "Test stream", "location": "Room 1"}`
@@ -1664,7 +1623,7 @@ func TestPromoteStream_StreamNotFound(t *testing.T) {
 		stream: nil,
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	body := `{"name": "Test Stream"}`
@@ -1696,7 +1655,7 @@ func TestPromoteStream_AlreadyMapped(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	body := `{"name": "Camera 1"}`
@@ -1719,7 +1678,7 @@ func TestPromoteStream_MissingName(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	body := `{}`
@@ -1735,7 +1694,7 @@ func TestPromoteStream_RequiresMediaEngine(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 
 	body := `{"name": "Test Stream"}`
 	rr := doRequest(t, h.Routes(), "POST", "/api/streams/obs-stream-1/promote",
@@ -1764,7 +1723,7 @@ func TestPromoteStream_SRTStream(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	body := `{"name": "SRT Stream 1"}`
@@ -1796,7 +1755,7 @@ func TestPromoteStream_WHIPCustomizeSession(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	body := `{"name": "WHIP Stream 1"}`
@@ -1837,7 +1796,7 @@ func TestDeleteStream_Success(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/streams/obs-stream-1", nil, "admin", "pass")
@@ -1860,7 +1819,7 @@ func TestDeleteStream_StreamNotFound(t *testing.T) {
 		stream: nil,
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/streams/nonexistent", nil, "admin", "pass")
@@ -1879,7 +1838,7 @@ func TestDeleteStream_OfflineManagedCamera(t *testing.T) {
 
 	engine := &stubMediaEngine{stream: nil}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/streams/codex-test", nil, "admin", "pass")
@@ -1920,7 +1879,7 @@ func TestDeleteStream_OfflineHistoryOnly(t *testing.T) {
 
 	engine := &stubMediaEngine{stream: nil}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/streams/obs-room-1", nil, "admin", "pass")
@@ -1939,7 +1898,7 @@ func TestDeleteStream_RequiresMediaEngine(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/streams/obs-stream-1", nil, "admin", "pass")
 	require.Equal(t, http.StatusServiceUnavailable, rr.Code)
@@ -1960,7 +1919,7 @@ func TestDeleteStream_NoPublisher(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "DELETE", "/api/streams/obs-stream-1", nil, "admin", "pass")
@@ -1991,7 +1950,7 @@ func TestKickPublisher_Success(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/streams/obs-stream-1/kick-publisher", nil, "admin", "pass")
@@ -2015,7 +1974,7 @@ func TestKickPublisher_StreamNotFound(t *testing.T) {
 		stream: nil,
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/streams/nonexistent/kick-publisher", nil, "admin", "pass")
@@ -2037,7 +1996,7 @@ func TestKickPublisher_NoPublisher(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetMediaEngine(engine)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/streams/obs-stream-1/kick-publisher", nil, "admin", "pass")
@@ -2051,7 +2010,7 @@ func TestKickPublisher_RequiresMediaEngine(t *testing.T) {
 	db, store := setupTestDB(t)
 	defer db.Close()
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 
 	rr := doRequest(t, h.Routes(), "POST", "/api/streams/obs-stream-1/kick-publisher", nil, "admin", "pass")
 	require.Equal(t, http.StatusServiceUnavailable, rr.Code)

@@ -122,8 +122,7 @@ func TestRegistryGather(t *testing.T) {
 	m.CleanupDeleted.WithLabelValues("retention").Inc()
 	m.StorageTotalBytes.Set(2048)
 	m.RecordingCount.Set(3)
-m.CameraErrors.WithLabelValues("cam1", "timeout").Inc()
-	m.HLSFramesDropped.WithLabelValues("cam1").Inc()
+	m.CameraErrors.WithLabelValues("cam1", "timeout").Inc()
 
 	families, err := m.Registry.Gather()
 	require.NoError(t, err)
@@ -144,28 +143,6 @@ m.CameraErrors.WithLabelValues("cam1", "timeout").Inc()
 	require.True(t, names["nvr_storage_total_bytes"])
 	require.True(t, names["nvr_recording_count"])
 	require.True(t, names["nvr_camera_errors_total"])
-	require.True(t, names["nvr_hls_frames_dropped_total"])
-}
-
-func TestHLSFramesDroppedCounter(t *testing.T) {
-	t.Helper()
-	t.Parallel()
-	m := NewMetrics()
-	require.NotNil(t, m.HLSFramesDropped)
-
-	m.HLSFramesDropped.WithLabelValues("cam1").Inc()
-	m.HLSFramesDropped.WithLabelValues("cam1").Add(5)
-	m.HLSFramesDropped.WithLabelValues("cam2").Inc()
-
-	families, err := m.Registry.Gather()
-	require.NoError(t, err)
-	for _, f := range families {
-		if f.GetName() == "nvr_hls_frames_dropped_total" {
-			require.Len(t, f.GetMetric(), 2) // cam1 and cam2
-			return
-		}
-	}
-	t.Fatal("expected nvr_hls_frames_dropped_total metric family")
 }
 
 func TestNewStreamingMetrics(t *testing.T) {
@@ -175,11 +152,6 @@ func TestNewStreamingMetrics(t *testing.T) {
 	require.NotNil(t, m.WebRTCActivePeers)
 	require.NotNil(t, m.WebRTCFramesSent)
 	require.NotNil(t, m.WebRTCFramesDropped)
-	require.NotNil(t, m.FLVActiveStreams)
-	require.NotNil(t, m.FLVFramesSent)
-	require.NotNil(t, m.FLVFramesDropped)
-	require.NotNil(t, m.FLVGOPCacheHits)
-	require.NotNil(t, m.FLVGOPCacheMisses)
 }
 
 func TestNewMetricsRegistersStreamingMetrics(t *testing.T) {
@@ -187,15 +159,9 @@ func TestNewMetricsRegistersStreamingMetrics(t *testing.T) {
 	t.Parallel()
 	m := NewMetrics()
 
-	// Touch all streaming metrics to ensure they appear in registry
 	m.WebRTCActivePeers.WithLabelValues("cam1").Set(1)
 	m.WebRTCFramesSent.WithLabelValues("cam1").Inc()
 	m.WebRTCFramesDropped.WithLabelValues("cam1").Inc()
-	m.FLVActiveStreams.WithLabelValues("cam1").Set(1)
-	m.FLVFramesSent.WithLabelValues("cam1").Inc()
-	m.FLVFramesDropped.WithLabelValues("cam1").Inc()
-	m.FLVGOPCacheHits.WithLabelValues("cam1").Inc()
-	m.FLVGOPCacheMisses.WithLabelValues("cam1").Inc()
 
 	families, err := m.Registry.Gather()
 	require.NoError(t, err)
@@ -206,11 +172,6 @@ func TestNewMetricsRegistersStreamingMetrics(t *testing.T) {
 	require.True(t, names["nvr_webrtc_active_peers"])
 	require.True(t, names["nvr_webrtc_frames_sent_total"])
 	require.True(t, names["nvr_webrtc_frames_dropped_total"])
-	require.True(t, names["nvr_flv_active_streams"])
-	require.True(t, names["nvr_flv_frames_sent_total"])
-	require.True(t, names["nvr_flv_frames_dropped_total"])
-	require.True(t, names["nvr_flv_gop_cache_hits_total"])
-	require.True(t, names["nvr_flv_gop_cache_misses_total"])
 }
 
 func TestStreamMetrics_Registration(t *testing.T) {

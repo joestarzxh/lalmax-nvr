@@ -187,7 +187,7 @@ trigger_recording("front-door", "stop")
 
 ```bash
 # 查看系统日志
-journalctl -u lalmax-nvr -f | grep mqtt
+docker compose logs -f lalmax-nvr | grep mqtt
 
 # Docker 日志
 docker logs -f lalmax-nvr | grep mqtt
@@ -322,7 +322,7 @@ mqtt:
 
 1. 检查日志中的处理错误：
    ```bash
-   journalctl -u lalmax-nvr -f | grep mqtt
+   docker compose logs -f lalmax-nvr | grep mqtt
    ```
 
 2. 验证主题匹配：

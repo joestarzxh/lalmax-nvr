@@ -1,11 +1,9 @@
 package api
 
 import (
-	"context"
 	"net/http"
 	"testing"
 
-	"github.com/lalmax-pro/lalmax-nvr/internal/hls"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/stretchr/testify/require"
 )
@@ -115,36 +113,23 @@ func TestStreamRegistry_Empty(t *testing.T) {
 	require.Empty(t, protocols)
 }
 
-func TestStreamRegistry_StreamLimits(t *testing.T) {
+func TestStreamRegistry_MultipleHandlers(t *testing.T) {
 	t.Parallel()
-	// Test that the HLS stream limit (max 4) is enforced via LRU eviction.
-	// When capacity is reached, the least recently used stream is evicted
-	// and the new stream is accepted (instead of rejecting with an error).
-	hlsMgr := hls.NewManager(context.Background(), t.TempDir())
-	defer hlsMgr.StopAll()
+	reg := NewStreamRegistry()
+	reg.Register(&HLSStreamHandler{})
+	reg.Register(&FLVStreamHandler{})
 
-	// Start 4 streams to fill the limit
-	for i := 0; i < 4; i++ {
-		err := hlsMgr.StartStream(
-			string(rune('a'+i)),
-			[]byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88},
-			[]byte{0x68, 0xce, 0x38, 0x80},
-			0,
-		)
-		require.NoError(t, err)
-	}
+	// Both HLS and FLV support H.264
+	handlers := reg.HandlersForCodec(model.FormatH264)
+	require.Len(t, handlers, 2)
 
-	// 5th stream should succeed via LRU eviction of 'a' (oldest)
-	err := hlsMgr.StartStream(
-		"overflow",
-		[]byte{0x67, 0x42, 0xc0, 0x0a, 0xd9, 0x00, 0xa0, 0x47, 0xfe, 0x88},
-		[]byte{0x68, 0xce, 0x38, 0x80},
-		0,
-	)
-	require.NoError(t, err)
+	// Only HLS supports H.265 (FLV does too in this implementation)
+	handlers = reg.HandlersForCodec(model.FormatH265)
+	require.Len(t, handlers, 2)
 
-	// Verify stream count is still 4 (not 5) — LRU eviction kept it at capacity
-	require.Equal(t, 4, hlsMgr.GetActiveStreamCount(), "maxStreams should be enforced via LRU")
+	// MJPEG has no handlers
+	handlers = reg.HandlersForCodec(model.FormatMJPEG)
+	require.Empty(t, handlers)
 }
 
 // --- GET /api/protocols endpoint tests (per-camera) ---
@@ -171,7 +156,7 @@ func TestProtocolsEndpoint_RegistryIntegration(t *testing.T) {
 		codecs:  []model.Format{model.FormatH264, model.FormatH265},
 	})
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.SetStreamRegistry(reg)
 
 	rr := doRequest(t, h.Routes(), "GET", "/api/protocols", nil, "", "")

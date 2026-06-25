@@ -67,7 +67,6 @@ type StorageConfig struct {
 }
 
 type MediaConfig struct {
-	Enabled          bool   `yaml:"enabled"`
 	Mode             string `yaml:"mode"`
 	LalmaxHTTPAddr   string `yaml:"lalmax_http_addr"`
 	LalmaxPublicURL  string `yaml:"lalmax_public_url"`
@@ -84,29 +83,29 @@ type MediaConfig struct {
 }
 
 type CameraConfig struct {
-	ID                   string                   `yaml:"id"`
-	Name                 string                   `yaml:"name"`
-	Protocol             string                   `yaml:"protocol"`                 // rtsp_h264, rtsp_mjpeg, http_jpeg
-	Encoding             string                   `yaml:"encoding"`                 // h264, h265, mjpeg, jpeg (independent of protocol)
-	RTSPTransport        string                   `yaml:"rtsp_transport,omitempty"` // tcp or udp; default tcp
-	URL                  string                   `yaml:"url"`
-	Username             string                   `yaml:"username"`
-	Password             string                   `yaml:"password"`
-	ONVIFEndpoint        string                   `yaml:"onvif_endpoint"`
-	ProfileToken         string                   `yaml:"profile_token"`
-	StreamEncoding       string                   `yaml:"stream_encoding"` // H264 or H265, for ONVIF cameras. Empty = auto-detect.
-	Enabled              bool                     `yaml:"enabled"`
-	SubStreamURL         string                   `yaml:"sub_stream_url"`
-	SnapshotURL          string                   `yaml:"snapshot_url"`
-	SampleInterval       int                      `yaml:"sample_interval"`
-	HLSMaxFPS            int                      `yaml:"hls_max_fps"`
-	Merge                *MergeConfig             `yaml:"merge"`
-	Timelapse            *CameraTimelapseConfig   `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
-	AudioEnabled         bool                     `yaml:"audio_enabled"`
-	SourceType           string                   `yaml:"source_type,omitempty" json:"source_type,omitempty"`
-	HealthOverrides      HealthOverrides          `yaml:"health_overrides,omitempty"`
-	FrameWatchdogTimeout string                   `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
-	PullRetryNum         int                      `yaml:"pull_retry_num,omitempty"`         // -1=forever, 0=never, >0=limited (default -1 for pull cameras)
+	ID                   string                 `yaml:"id"`
+	Name                 string                 `yaml:"name"`
+	Protocol             string                 `yaml:"protocol"`                 // rtsp_h264, rtsp_mjpeg, http_jpeg
+	Encoding             string                 `yaml:"encoding"`                 // h264, h265, mjpeg, jpeg (independent of protocol)
+	RTSPTransport        string                 `yaml:"rtsp_transport,omitempty"` // tcp or udp; default tcp
+	URL                  string                 `yaml:"url"`
+	Username             string                 `yaml:"username"`
+	Password             string                 `yaml:"password"`
+	ONVIFEndpoint        string                 `yaml:"onvif_endpoint"`
+	ProfileToken         string                 `yaml:"profile_token"`
+	StreamEncoding       string                 `yaml:"stream_encoding"` // H264 or H265, for ONVIF cameras. Empty = auto-detect.
+	Enabled              bool                   `yaml:"enabled"`
+	SubStreamURL         string                 `yaml:"sub_stream_url"`
+	SnapshotURL          string                 `yaml:"snapshot_url"`
+	SampleInterval       int                    `yaml:"sample_interval"`
+	HLSMaxFPS            int                    `yaml:"hls_max_fps"`
+	Merge                *MergeConfig           `yaml:"merge"`
+	Timelapse            *CameraTimelapseConfig `yaml:"timelapse,omitempty" json:"timelapse,omitempty"`
+	AudioEnabled         bool                   `yaml:"audio_enabled"`
+	SourceType           string                 `yaml:"source_type,omitempty" json:"source_type,omitempty"`
+	HealthOverrides      HealthOverrides        `yaml:"health_overrides,omitempty"`
+	FrameWatchdogTimeout string                 `yaml:"frame_watchdog_timeout,omitempty"` // default "30s" (per-camera frame watchdog)
+	PullRetryNum         int                    `yaml:"pull_retry_num,omitempty"`         // -1=forever, 0=never, >0=limited (default -1 for pull cameras)
 
 	// Xiaomi-specific camera fields (only used when protocol is "xiaomi")
 	DID    string `yaml:"did,omitempty"`    // Xiaomi Device ID
@@ -304,13 +303,14 @@ type RTMPConfig struct {
 
 // GB28181Config configures the GB28181 SIP signaling server.
 type GB28181Config struct {
-	Enabled   *bool  `yaml:"enabled"`
-	Host      string `yaml:"host"`       // SIP listen host (empty = auto-detect from media_ip)
-	Port      int    `yaml:"port"`       // SIP listen port (default 5060)
-	ID        string `yaml:"id"`         // 20-digit platform SIP ID
-	Password  string `yaml:"password"`   // Global device registration password
-	MediaIP   string `yaml:"media_ip"`   // IP address for SDP media reception
-	MediaPort int    `yaml:"media_port"` // RTP media port (0=auto/multi-port, >0=single port mode)
+	Enabled         *bool  `yaml:"enabled"`
+	Host            string `yaml:"host"`             // SIP listen host (empty = auto-detect from media_ip)
+	Port            int    `yaml:"port"`             // SIP listen port (default 5060)
+	ID              string `yaml:"id"`               // 20-digit platform SIP ID
+	Password        string `yaml:"password"`         // Global device registration password
+	MediaIP         string `yaml:"media_ip"`         // IP address for SDP media reception
+	MediaPort       int    `yaml:"media_port"`       // RTP media port (0=auto/multi-port, >0=single port mode)
+	StandardVersion string `yaml:"standard_version"` // GB28181 standard version: 2016 or 2022
 }
 
 // HealthConfig configures the camera health monitoring system.
@@ -516,14 +516,7 @@ func Validate(cfg *Config) error {
 		if c.URL != "" {
 			parsed, err := url.Parse(c.URL)
 			if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-				// Auto-fix: try prepending rtsp:// if it looks like host:port
-				if !strings.Contains(c.URL, "://") && strings.Contains(c.URL, ":") {
-					c.URL = "rtsp://" + c.URL
-					parsed, err = url.Parse(c.URL)
-				}
-				if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-					return fmt.Errorf("camera[%d].url has invalid format: %s", i, c.URL)
-				}
+				return fmt.Errorf("camera[%d].url has invalid format: %s", i, c.URL)
 			}
 		}
 		if (c.Protocol == "onvif" || c.Protocol == string(model.ProtoONVIF)) && strings.TrimSpace(c.ONVIFEndpoint) == "" && strings.TrimSpace(c.URL) == "" {
@@ -811,10 +804,6 @@ func (cfg *Config) ApplyDefaults() {
 	if strings.TrimSpace(cfg.Storage.SegmentDuration) == "" {
 		cfg.Storage.SegmentDuration = "30s"
 	}
-	// Media 鈥?lalmax enabled by default
-	if !cfg.Media.Enabled {
-		cfg.Media.Enabled = true
-	}
 	if strings.TrimSpace(cfg.Media.Mode) == "" {
 		cfg.Media.Mode = "embedded"
 	}
@@ -1034,6 +1023,9 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.GB28181.Password == "" {
 		cfg.GB28181.Password = "12345678"
+	}
+	if cfg.GB28181.StandardVersion == "" {
+		cfg.GB28181.StandardVersion = "2016"
 	}
 
 	// Health defaults

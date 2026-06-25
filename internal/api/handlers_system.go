@@ -33,10 +33,10 @@ const metricsHistoryCap = 2880 // 24h at 30s intervals
 
 // sysMetricsHistory is a fixed-capacity ring buffer of SystemMetricSample.
 type sysMetricsHistory struct {
-	mu       sync.RWMutex
-	samples  [metricsHistoryCap]model.SystemMetricSample
-	head     int  // next write position
-	count    int  // number of valid entries (≤ cap)
+	mu           sync.RWMutex
+	samples      [metricsHistoryCap]model.SystemMetricSample
+	head         int // next write position
+	count        int // number of valid entries (≤ cap)
 	prevCPUTotal uint64
 	prevCPUIdle  uint64
 	prevNetSent  uint64
@@ -824,7 +824,6 @@ func (h *Handler) handleUpdateStreamingSettings(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
-
 func (h *Handler) handleGetAISettings(w http.ResponseWriter, r *http.Request) {
 	if h.config == nil {
 		writeError(w, http.StatusInternalServerError, "config not available")
@@ -1191,13 +1190,14 @@ func (h *Handler) handleGetGB28181Settings(w http.ResponseWriter, r *http.Reques
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled":    enabled,
-		"host":       h.config.GB28181.Host,
-		"port":       h.config.GB28181.Port,
-		"id":         id,
-		"password":   password,
-		"media_ip":   h.config.GB28181.MediaIP,
-		"media_port": h.config.GB28181.MediaPort,
+		"enabled":          enabled,
+		"host":             h.config.GB28181.Host,
+		"port":             h.config.GB28181.Port,
+		"id":               id,
+		"password":         password,
+		"media_ip":         h.config.GB28181.MediaIP,
+		"media_port":       h.config.GB28181.MediaPort,
+		"standard_version": h.config.GB28181.StandardVersion,
 	})
 }
 
@@ -1208,13 +1208,14 @@ func (h *Handler) handleUpdateGB28181Settings(w http.ResponseWriter, r *http.Req
 	}
 
 	var body struct {
-		Enabled   *bool   `json:"enabled"`
-		Host      *string `json:"host"`
-		Port      *int    `json:"port"`
-		ID        *string `json:"id"`
-		Password  *string `json:"password"`
-		MediaIP   *string `json:"media_ip"`
-		MediaPort *int    `json:"media_port"`
+		Enabled         *bool   `json:"enabled"`
+		Host            *string `json:"host"`
+		Port            *int    `json:"port"`
+		ID              *string `json:"id"`
+		Password        *string `json:"password"`
+		MediaIP         *string `json:"media_ip"`
+		MediaPort       *int    `json:"media_port"`
+		StandardVersion *string `json:"standard_version"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -1258,6 +1259,10 @@ func (h *Handler) handleUpdateGB28181Settings(w http.ResponseWriter, r *http.Req
 		needRestart = true
 		h.config.GB28181.MediaPort = *body.MediaPort
 	}
+	if body.StandardVersion != nil && *body.StandardVersion != h.config.GB28181.StandardVersion {
+		needRestart = true
+		h.config.GB28181.StandardVersion = *body.StandardVersion
+	}
 
 	// Persist config to disk (with conflict detection)
 	if !h.saveConfig(w) {
@@ -1268,13 +1273,14 @@ func (h *Handler) handleUpdateGB28181Settings(w http.ResponseWriter, r *http.Req
 	if needRestart && h.gb28181Restarter != nil {
 		enabled := h.config.GB28181.Enabled != nil && *h.config.GB28181.Enabled
 		gbCfg := &config.GB28181Config{
-			Enabled:   &enabled,
-			Host:      h.config.GB28181.Host,
-			Port:      h.config.GB28181.Port,
-			ID:        h.config.GB28181.ID,
-			Password:  h.config.GB28181.Password,
-			MediaIP:   h.config.GB28181.MediaIP,
-			MediaPort: h.config.GB28181.MediaPort,
+			Enabled:         &enabled,
+			Host:            h.config.GB28181.Host,
+			Port:            h.config.GB28181.Port,
+			ID:              h.config.GB28181.ID,
+			Password:        h.config.GB28181.Password,
+			MediaIP:         h.config.GB28181.MediaIP,
+			MediaPort:       h.config.GB28181.MediaPort,
+			StandardVersion: h.config.GB28181.StandardVersion,
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()

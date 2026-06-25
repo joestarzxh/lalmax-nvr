@@ -6,108 +6,56 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
-	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/gb28181"
 	"github.com/lalmax-pro/lalmax-nvr/internal/media"
-	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 )
 
-// GB28181Handler provides HTTP API endpoints for GB28181 management.
-type GB28181Handler struct {
-	svr         *gb28181.Server
-	svrProvider func() *gb28181.Server
-	camMgr      *camera.CameraManager
-	db          *storage.DB
-	mediaEngine media.Engine
-}
-
-// NewGB28181Handler creates a new GB28181Handler.
-func NewGB28181Handler(svr *gb28181.Server, camMgr *camera.CameraManager, db *storage.DB, mediaEngine media.Engine) *GB28181Handler {
-	return &GB28181Handler{
-		svr:         svr,
-		camMgr:      camMgr,
-		db:          db,
-		mediaEngine: mediaEngine,
-	}
-}
-
-// NewDynamicGB28181Handler creates a handler that resolves the current server
-// for every request. This is required because GB28181 can be enabled, disabled,
-// or restarted from the settings page after the HTTP router has been built.
-func NewDynamicGB28181Handler(provider func() *gb28181.Server, camMgr *camera.CameraManager, db *storage.DB, mediaEngine media.Engine) *GB28181Handler {
-	return &GB28181Handler{
-		svrProvider: provider,
-		camMgr:      camMgr,
-		db:          db,
-		mediaEngine: mediaEngine,
-	}
-}
-
-func (h *GB28181Handler) server() *gb28181.Server {
-	if h.svrProvider != nil {
-		return h.svrProvider()
-	}
-	return h.svr
-}
-
-// ListDevices returns all registered GB28181 devices.
-func (h *GB28181Handler) ListDevices(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"devices": []interface{}{},
-		})
+// handleGB28181ListDevices returns all registered GB28181 devices.
+func (h *Handler) handleGB28181ListDevices(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"devices": []any{}})
 		return
 	}
-	devices := h.server().ListDevices()
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"devices": devices,
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"devices": h.gb28181Server.ListDevices()})
 }
 
-// PlayRequest is the request body for the play endpoint.
-type PlayRequest struct {
-	DeviceID  string `json:"device_id"`
-	ChannelID string `json:"channel_id"`
-	StreamID  string `json:"stream_id,omitempty"` // optional internal stream ID
-}
-
-// Play starts a GB28181 play session.
-func (h *GB28181Handler) Play(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) handleGB28181Play(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
-	var req PlayRequest
+	var req struct {
+		DeviceID  string `json:"device_id"`
+		ChannelID string `json:"channel_id"`
+		StreamID  string `json:"stream_id,omitempty"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
 	if req.DeviceID == "" || req.ChannelID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		writeError(w, http.StatusBadRequest, "device_id and channel_id are required")
 		return
 	}
-
 	streamID := req.StreamID
 	if streamID == "" {
 		streamID = gb28181.StreamID(req.DeviceID, req.ChannelID)
 	}
-
-	ssrc, err := h.server().Play(&gb28181.PlayInput{
+	ssrc, err := h.gb28181Server.Play(&gb28181.PlayInput{
 		DeviceID:   req.DeviceID,
 		ChannelID:  req.ChannelID,
-		StreamMode: 0, // Default to UDP
+		StreamMode: 0,
 		InternalID: streamID,
 	})
 	if err != nil {
-		slog.Error("GB28181 play failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	if err := h.ensureGB28181Camera(r.Context(), req.DeviceID, req.ChannelID, streamID); err != nil {
 		slog.Warn("GB28181 play succeeded but camera registration failed",
 			"device_id", req.DeviceID,
@@ -116,24 +64,18 @@ func (h *GB28181Handler) Play(w http.ResponseWriter, r *http.Request) {
 			"error", err,
 		)
 	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"ssrc":      ssrc,
-		"stream_id": streamID,
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"ssrc": ssrc, "stream_id": streamID})
 }
 
-func (h *GB28181Handler) ensureGB28181Camera(ctx context.Context, deviceID, channelID, streamID string) error {
+func (h *Handler) ensureGB28181Camera(ctx context.Context, deviceID, channelID, streamID string) error {
 	if h.db == nil {
 		return fmt.Errorf("database unavailable")
 	}
-
 	if h.camMgr != nil {
 		if cam := h.camMgr.GetCameraConfig(streamID); cam != nil && cam.Enabled {
 			return nil
 		}
 	}
-
 	existing, err := h.db.GetCamera(ctx, streamID)
 	if err != nil {
 		return err
@@ -142,7 +84,6 @@ func (h *GB28181Handler) ensureGB28181Camera(ctx context.Context, deviceID, chan
 		return nil
 	}
 
-	name := fmt.Sprintf("GB28181 %s", channelID)
 	cameraURL := ""
 	if h.mediaEngine != nil {
 		playURL, err := h.mediaEngine.BuildPlayURL(ctx, media.PlayURLRequest{
@@ -157,189 +98,110 @@ func (h *GB28181Handler) ensureGB28181Camera(ctx context.Context, deviceID, chan
 	if cameraURL == "" {
 		cameraURL = fmt.Sprintf("rtsp://127.0.0.1:5544/live/%s", streamID)
 	}
-
 	if existing != nil && existing.Archived {
 		if err := h.db.UnarchiveCameraDB(ctx, streamID); err != nil {
 			return err
 		}
 	}
-
-	// Only persist to DB for stream-management mapping. Do not add to CameraManager
-	// config — GB28181 devices are managed via the GB28181 device API, not the
-	// ONVIF/RTSP camera list.
-	return h.db.UpsertCamera(ctx, streamID, name, "gb28181", "h264", cameraURL, "", "", true, "", "", "", "")
+	return h.db.UpsertCamera(ctx, streamID, fmt.Sprintf("GB28181 %s", channelID), "gb28181", "h264", cameraURL, "", "", true, "", "", "")
 }
 
-// StopPlayRequest is the request body for the stop play endpoint.
-type StopPlayRequest struct {
-	DeviceID  string `json:"device_id"`
-	ChannelID string `json:"channel_id"`
-}
-
-// StopPlay stops a GB28181 play session.
-func (h *GB28181Handler) StopPlay(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) handleGB28181StopPlay(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
-	var req StopPlayRequest
+	var req struct {
+		DeviceID  string `json:"device_id"`
+		ChannelID string `json:"channel_id"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
 	if req.DeviceID == "" || req.ChannelID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		writeError(w, http.StatusBadRequest, "device_id and channel_id are required")
 		return
 	}
-
-	if err := h.server().StopPlay(&gb28181.StopPlayInput{
-		DeviceID:  req.DeviceID,
-		ChannelID: req.ChannelID,
-	}); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if err := h.gb28181Server.StopPlay(&gb28181.StopPlayInput{DeviceID: req.DeviceID, ChannelID: req.ChannelID}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// PTZRequest is the request body for the PTZ control endpoint.
-type PTZRequest struct {
-	DeviceID  string  `json:"device_id"`
-	ChannelID string  `json:"channel_id"`
-	Direction string  `json:"direction"` // up, down, left, right, upleft, upright, downleft, downright, zoomin, zoomout, stop
-	Speed     float64 `json:"speed"`     // 0.0-1.0
-}
-
-// PTZControl sends a PTZ control command.
-func (h *GB28181Handler) PTZControl(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) handleGB28181RecordInfo(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
-	var req PTZRequest
+	var req struct {
+		DeviceID  string `json:"device_id"`
+		ChannelID string `json:"channel_id"`
+		StartTime string `json:"start_time"`
+		EndTime   string `json:"end_time"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
 	if req.DeviceID == "" || req.ChannelID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		writeError(w, http.StatusBadRequest, "device_id and channel_id are required")
 		return
 	}
-
-	var ptzCmd string
-	if req.Direction == "stop" {
-		ptzCmd = gb28181.BuildStop()
-	} else {
-		if req.Speed <= 0 {
-			req.Speed = 0.5
-		}
-		ptzCmd = gb28181.BuildContinuousMove(req.Direction, req.Speed)
-	}
-
-	if ptzCmd == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid direction"})
-		return
-	}
-
-	if err := h.server().PTZControl(req.DeviceID, req.ChannelID, ptzCmd); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-// RecordInfoRequest is the request body for the record info endpoint.
-type RecordInfoRequest struct {
-	DeviceID  string `json:"device_id"`
-	ChannelID string `json:"channel_id"`
-	StartTime string `json:"start_time"` // RFC3339 or "2006-01-02T15:04:05"
-	EndTime   string `json:"end_time"`   // RFC3339 or "2006-01-02T15:04:05"
-}
-
-// RecordInfo queries a device for its recording list.
-func (h *GB28181Handler) RecordInfo(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
-		return
-	}
-	var req RecordInfoRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
-	}
-
-	if req.DeviceID == "" || req.ChannelID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
-		return
-	}
-
 	startTime, err := parseTime(req.StartTime)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid start_time format"})
+		writeError(w, http.StatusBadRequest, "invalid start_time")
 		return
 	}
 	endTime, err := parseTime(req.EndTime)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid end_time format"})
+		writeError(w, http.StatusBadRequest, "invalid end_time")
 		return
 	}
-
-	records, err := h.server().QueryRecordInfo(req.DeviceID, req.ChannelID, startTime, endTime)
+	records, err := h.gb28181Server.QueryRecordInfo(req.DeviceID, req.ChannelID, startTime, endTime)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	writeJSON(w, http.StatusOK, records)
 }
 
-// PlaybackRequest is the request body for the playback endpoint.
-type PlaybackRequest struct {
-	DeviceID  string `json:"device_id"`
-	ChannelID string `json:"channel_id"`
-	StreamID  string `json:"stream_id,omitempty"`
-	StartTime string `json:"start_time"` // RFC3339 or "2006-01-02T15:04:05"
-	EndTime   string `json:"end_time"`   // RFC3339 or "2006-01-02T15:04:05"
-}
-
-// Playback starts a historical video playback session.
-func (h *GB28181Handler) Playback(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) handleGB28181Playback(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
-	var req PlaybackRequest
+	var req struct {
+		DeviceID  string `json:"device_id"`
+		ChannelID string `json:"channel_id"`
+		StreamID  string `json:"stream_id,omitempty"`
+		StartTime string `json:"start_time"`
+		EndTime   string `json:"end_time"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
 	if req.DeviceID == "" || req.ChannelID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		writeError(w, http.StatusBadRequest, "device_id and channel_id are required")
 		return
 	}
-
 	startTime, err := parseTime(req.StartTime)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid start_time format"})
+		writeError(w, http.StatusBadRequest, "invalid start_time")
 		return
 	}
 	endTime, err := parseTime(req.EndTime)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid end_time format"})
+		writeError(w, http.StatusBadRequest, "invalid end_time")
 		return
 	}
-
 	streamID := req.StreamID
 	if streamID == "" {
 		streamID = gb28181.StreamID(req.DeviceID, req.ChannelID) + "_pb"
 	}
-
-	ssrc, err := h.server().Playback(&gb28181.PlaybackInput{
+	ssrc, err := h.gb28181Server.Playback(&gb28181.PlaybackInput{
 		DeviceID:   req.DeviceID,
 		ChannelID:  req.ChannelID,
 		StreamMode: 0,
@@ -348,25 +210,42 @@ func (h *GB28181Handler) Playback(w http.ResponseWriter, r *http.Request) {
 		EndTime:    endTime,
 	})
 	if err != nil {
-		slog.Error("GB28181 playback failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	// Build play URLs for all supported protocols
-	playURLs := buildGB28181PlayURLs(r.Context(), h.mediaEngine, streamID, "rtp")
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"ssrc":      ssrc,
 		"stream_id": streamID,
-		"urls":      playURLs,
+		"urls":      h.buildGB28181PlayURLs(r.Context(), streamID, "rtp"),
 	})
 }
 
-// PlaySpeed changes the playback speed.
-func (h *GB28181Handler) PlaySpeed(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) buildGB28181PlayURLs(ctx context.Context, streamID, appName string) []map[string]string {
+	if h.mediaEngine == nil {
+		return nil
+	}
+	protocols := []string{"ws-flv", "flv", "hls", "ll-hls", "webrtc", "fmp4", "rtmp", "rtsp"}
+	urls := make([]map[string]string, 0, len(protocols))
+	for _, protocol := range protocols {
+		playURL, err := h.mediaEngine.BuildPlayURL(ctx, media.PlayURLRequest{
+			StreamID: streamID,
+			AppName:  appName,
+			Protocol: protocol,
+		})
+		if err != nil || playURL == nil || playURL.URL == "" {
+			continue
+		}
+		urls = append(urls, map[string]string{
+			"protocol": protocol,
+			"url":      playURL.URL,
+		})
+	}
+	return urls
+}
+
+func (h *Handler) handleGB28181PlaySpeed(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
 	var req struct {
@@ -375,37 +254,27 @@ func (h *GB28181Handler) PlaySpeed(w http.ResponseWriter, r *http.Request) {
 		Speed     float32 `json:"speed"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
 	if req.DeviceID == "" || req.ChannelID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		writeError(w, http.StatusBadRequest, "device_id and channel_id are required")
 		return
 	}
-
 	if req.Speed != 0.5 && req.Speed != 1 && req.Speed != 2 && req.Speed != 4 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "speed must be 0.5, 1, 2, or 4"})
+		writeError(w, http.StatusBadRequest, "speed must be 0.5, 1, 2, or 4")
 		return
 	}
-
-	if err := h.server().PlaySpeed(&gb28181.PlaySpeedInput{
-		DeviceID:  req.DeviceID,
-		ChannelID: req.ChannelID,
-		Speed:     req.Speed,
-	}); err != nil {
-		slog.Error("GB28181 play speed failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if err := h.gb28181Server.PlaySpeed(&gb28181.PlaySpeedInput{DeviceID: req.DeviceID, ChannelID: req.ChannelID, Speed: req.Speed}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// PlaySeek seeks to a position in playback.
-func (h *GB28181Handler) PlaySeek(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) handleGB28181PlaySeek(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
 	var req struct {
@@ -414,32 +283,31 @@ func (h *GB28181Handler) PlaySeek(w http.ResponseWriter, r *http.Request) {
 		SeekTime  int64  `json:"seek_time"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
 	if req.DeviceID == "" || req.ChannelID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		writeError(w, http.StatusBadRequest, "device_id and channel_id are required")
 		return
 	}
-
-	if err := h.server().PlaySeek(&gb28181.PlaySeekInput{
-		DeviceID:  req.DeviceID,
-		ChannelID: req.ChannelID,
-		SeekTime:  req.SeekTime,
-	}); err != nil {
-		slog.Error("GB28181 play seek failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if err := h.gb28181Server.PlaySeek(&gb28181.PlaySeekInput{DeviceID: req.DeviceID, ChannelID: req.ChannelID, SeekTime: req.SeekTime}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// PlayPause pauses playback.
-func (h *GB28181Handler) PlayPause(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) handleGB28181PlayPause(w http.ResponseWriter, r *http.Request) {
+	h.handleGB28181PlayPauseState(w, r, false)
+}
+
+func (h *Handler) handleGB28181PlayResume(w http.ResponseWriter, r *http.Request) {
+	h.handleGB28181PlayPauseState(w, r, true)
+}
+
+func (h *Handler) handleGB28181PlayPauseState(w http.ResponseWriter, r *http.Request, resume bool) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
 	var req struct {
@@ -447,77 +315,112 @@ func (h *GB28181Handler) PlayPause(w http.ResponseWriter, r *http.Request) {
 		ChannelID string `json:"channel_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
 	if req.DeviceID == "" || req.ChannelID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		writeError(w, http.StatusBadRequest, "device_id and channel_id are required")
 		return
 	}
-
-	if err := h.server().PlayPause(&gb28181.PlayPauseInput{
-		DeviceID:  req.DeviceID,
-		ChannelID: req.ChannelID,
-	}); err != nil {
-		slog.Error("GB28181 play pause failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	in := &gb28181.PlayPauseInput{DeviceID: req.DeviceID, ChannelID: req.ChannelID}
+	var err error
+	if resume {
+		err = h.gb28181Server.PlayResume(in)
+	} else {
+		err = h.gb28181Server.PlayPause(in)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// PlayResume resumes playback.
-func (h *GB28181Handler) PlayResume(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
-		return
+func (h *Handler) gb28181DeviceVersion(ctx context.Context, deviceID string) gb28181.GBVersion {
+	if h.db != nil {
+		if row, err := h.db.GetGB28181Device(ctx, deviceID); err == nil && row != nil {
+			if version := gb28181.NormalizeGBVersion(row.GBVersion); version != gb28181.GBVersionUnknown {
+				return version
+			}
+		}
 	}
-	var req struct {
-		DeviceID  string `json:"device_id"`
-		ChannelID string `json:"channel_id"`
+	if h.config != nil {
+		if version := gb28181.NormalizeGBVersion(h.config.GB28181.StandardVersion); version != gb28181.GBVersionUnknown {
+			return version
+		}
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
-	}
-
-	if req.DeviceID == "" || req.ChannelID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
-		return
-	}
-
-	if err := h.server().PlayResume(&gb28181.PlayPauseInput{
-		DeviceID:  req.DeviceID,
-		ChannelID: req.ChannelID,
-	}); err != nil {
-		slog.Error("GB28181 play resume failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	return gb28181.GBVersion2016
 }
 
-// ==================== Platform API ====================
+func buildGB28181PTZCommand(direction string, speed float64) string {
+	if direction == "stop" {
+		return gb28181.BuildStop()
+	}
+	return gb28181.BuildContinuousMove(direction, speed)
+}
 
-// ListPlatforms returns all upstream platforms.
-func (h *GB28181Handler) ListPlatforms(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"platforms": []interface{}{}})
+func (h *Handler) sendGB28181PTZControl(ctx context.Context, deviceID, channelID, direction string, speed float64) error {
+	if h.gb28181Server == nil {
+		return fmt.Errorf("GB28181 server not available")
+	}
+	switch h.gb28181DeviceVersion(ctx, deviceID) {
+	case gb28181.GBVersion2022:
+		return h.sendGB28181PTZControl2022(deviceID, channelID, direction, speed)
+	default:
+		return h.sendGB28181PTZControl2016(deviceID, channelID, direction, speed)
+	}
+}
+
+func (h *Handler) sendGB28181PTZControl2016(deviceID, channelID, direction string, speed float64) error {
+	ptzCmd := buildGB28181PTZCommand(direction, speed)
+	if ptzCmd == "" {
+		return fmt.Errorf("invalid direction")
+	}
+	return h.gb28181Server.PTZControl(deviceID, channelID, ptzCmd)
+}
+
+func (h *Handler) sendGB28181PTZControl2022(deviceID, channelID, direction string, speed float64) error {
+	ptzCmd := buildGB28181PTZCommand(direction, speed)
+	if ptzCmd == "" {
+		return fmt.Errorf("invalid direction")
+	}
+	return h.gb28181Server.PTZControl(deviceID, channelID, ptzCmd)
+}
+
+func (h *Handler) sendGB28181RecordControl(ctx context.Context, deviceID, channelID, command string) error {
+	if h.gb28181Server == nil {
+		return fmt.Errorf("GB28181 server not available")
+	}
+	switch h.gb28181DeviceVersion(ctx, deviceID) {
+	case gb28181.GBVersion2022:
+		return h.sendGB28181RecordControl2022(deviceID, channelID, command)
+	default:
+		return h.sendGB28181RecordControl2016(deviceID, channelID, command)
+	}
+}
+
+func (h *Handler) sendGB28181RecordControl2016(deviceID, channelID, command string) error {
+	return h.gb28181Server.RecordControl(deviceID, channelID, command)
+}
+
+func (h *Handler) sendGB28181RecordControl2022(deviceID, channelID, command string) error {
+	return h.gb28181Server.RecordControl(deviceID, channelID, command)
+}
+
+func (h *Handler) handleGB28181ListPlatforms(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"platforms": []any{}})
 		return
 	}
-	pm := h.server().GetPlatforms()
+	pm := h.gb28181Server.GetPlatforms()
 	if pm == nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"platforms": []interface{}{}})
+		writeJSON(w, http.StatusOK, map[string]any{"platforms": []any{}})
 		return
 	}
-
 	platforms := pm.ListPlatforms()
-	result := make([]map[string]interface{}, 0, len(platforms))
+	result := make([]map[string]any, 0, len(platforms))
 	for _, p := range platforms {
-		result = append(result, map[string]interface{}{
+		result = append(result, map[string]any{
 			"id":           p.Config.ID,
 			"name":         p.Config.Name,
 			"enable":       p.Config.Enable,
@@ -530,55 +433,49 @@ func (h *GB28181Handler) ListPlatforms(w http.ResponseWriter, r *http.Request) {
 			"transport":    p.Config.Transport,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"platforms": result})
+	writeJSON(w, http.StatusOK, map[string]any{"platforms": result})
 }
 
-// AddPlatformRequest is the request body for adding a platform.
-type AddPlatformRequest struct {
-	Name            string `json:"name"`
-	Enable          bool   `json:"enable"`
-	ServerGBID      string `json:"server_gb_id"`
-	ServerGBDomain  string `json:"server_gb_domain"`
-	ServerIP        string `json:"server_ip"`
-	ServerPort      int    `json:"server_port"`
-	DeviceGBID      string `json:"device_gb_id"`
-	DeviceGBDomain  string `json:"device_gb_domain"`
-	DeviceIP        string `json:"device_ip"`
-	DevicePort      int    `json:"device_port"`
-	Username        string `json:"username"`
-	Password        string `json:"password"`
-	Transport       string `json:"transport"`
-	CharacterSet    string `json:"character_set"`
-	Expires         int    `json:"expires"`
-	KeepTimeout     int    `json:"keep_timeout"`
-	MaxTimeoutCount int    `json:"max_timeout_count"`
-}
-
-// AddPlatform adds a new upstream platform.
-func (h *GB28181Handler) AddPlatform(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) handleGB28181AddPlatform(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
-	var req AddPlatformRequest
+	var req struct {
+		Name            string `json:"name"`
+		Enable          bool   `json:"enable"`
+		ServerGBID      string `json:"server_gb_id"`
+		ServerGBDomain  string `json:"server_gb_domain"`
+		ServerIP        string `json:"server_ip"`
+		ServerPort      int    `json:"server_port"`
+		DeviceGBID      string `json:"device_gb_id"`
+		DeviceGBDomain  string `json:"device_gb_domain"`
+		DeviceIP        string `json:"device_ip"`
+		DevicePort      int    `json:"device_port"`
+		Username        string `json:"username"`
+		Password        string `json:"password"`
+		Transport       string `json:"transport"`
+		CharacterSet    string `json:"character_set"`
+		Expires         int    `json:"expires"`
+		KeepTimeout     int    `json:"keep_timeout"`
+		MaxTimeoutCount int    `json:"max_timeout_count"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
 	if req.ServerGBID == "" || req.ServerIP == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "server_gb_id and server_ip are required"})
+		writeError(w, http.StatusBadRequest, "server_gb_id and server_ip are required")
 		return
 	}
-
 	if req.DeviceGBID == "" {
-		req.DeviceGBID = h.server().GetConfig().ID
+		req.DeviceGBID = h.gb28181Server.GetConfig().ID
 	}
 	if req.DeviceIP == "" {
-		req.DeviceIP = h.server().GetConfig().MediaIP
+		req.DeviceIP = h.gb28181Server.GetConfig().MediaIP
 	}
 	if req.DevicePort == 0 {
-		req.DevicePort = h.server().GetConfig().Port
+		req.DevicePort = h.gb28181Server.GetConfig().Port
 	}
 	if req.Expires == 0 {
 		req.Expires = 3600
@@ -592,13 +489,11 @@ func (h *GB28181Handler) AddPlatform(w http.ResponseWriter, r *http.Request) {
 	if req.Transport == "" {
 		req.Transport = "UDP"
 	}
-
-	pm := h.server().GetPlatforms()
+	pm := h.gb28181Server.GetPlatforms()
 	if pm == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "platform manager not initialized"})
+		writeError(w, http.StatusInternalServerError, "platform manager not initialized")
 		return
 	}
-
 	cfg := &gb28181.PlatformConfig{
 		Name:            req.Name,
 		Enable:          req.Enable,
@@ -618,48 +513,38 @@ func (h *GB28181Handler) AddPlatform(w http.ResponseWriter, r *http.Request) {
 		KeepTimeout:     req.KeepTimeout,
 		MaxTimeoutCount: req.MaxTimeoutCount,
 	}
-
 	if err := pm.AddPlatform(cfg); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{"id": cfg.ID, "status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]any{"id": cfg.ID, "status": "ok"})
 }
 
-// DeletePlatform deletes an upstream platform.
-func (h *GB28181Handler) DeletePlatform(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) handleGB28181DeletePlatform(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
-	idStr := r.URL.Query().Get("id")
-	var id int64
-	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-
-	pm := h.server().GetPlatforms()
+	pm := h.gb28181Server.GetPlatforms()
 	if pm == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "platform manager not initialized"})
+		writeError(w, http.StatusInternalServerError, "platform manager not initialized")
 		return
 	}
-
 	if err := pm.RemovePlatform(id); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// ==================== Broadcast API ====================
-
-// StartBroadcast starts a voice broadcast to a device channel.
-func (h *GB28181Handler) StartBroadcast(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) handleGB28181StartBroadcast(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
 	var req struct {
@@ -667,33 +552,29 @@ func (h *GB28181Handler) StartBroadcast(w http.ResponseWriter, r *http.Request) 
 		ChannelID string `json:"channel_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
-	bm := h.server().GetBroadcastManager()
+	bm := h.gb28181Server.GetBroadcastManager()
 	if bm == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "broadcast manager not initialized"})
+		writeError(w, http.StatusInternalServerError, "broadcast manager not initialized")
 		return
 	}
-
-	bs, err := bm.StartBroadcast(req.DeviceID, req.ChannelID, h.server().GetDeviceStore())
+	bs, err := bm.StartBroadcast(req.DeviceID, req.ChannelID, h.gb28181Server.GetDeviceStore())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": bs.DeviceID + "_" + bs.ChannelID,
 		"port":       bs.RTPPort,
 		"ssrc":       bs.SSRC,
 	})
 }
 
-// StopBroadcast stops a voice broadcast.
-func (h *GB28181Handler) StopBroadcast(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) handleGB28181StopBroadcast(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
 	var req struct {
@@ -701,114 +582,74 @@ func (h *GB28181Handler) StopBroadcast(w http.ResponseWriter, r *http.Request) {
 		ChannelID string `json:"channel_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
-	bm := h.server().GetBroadcastManager()
+	bm := h.gb28181Server.GetBroadcastManager()
 	if bm == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "broadcast manager not initialized"})
+		writeError(w, http.StatusInternalServerError, "broadcast manager not initialized")
 		return
 	}
-
 	if err := bm.StopBroadcast(req.DeviceID, req.ChannelID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// ==================== Platform Events API ====================
-
-// ListPlatformEvents returns platform events history.
-func (h *GB28181Handler) ListPlatformEvents(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleGB28181ListPlatformEvents(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"events": []interface{}{},
-			"total":  0,
-		})
+		writeJSON(w, http.StatusOK, map[string]any{"events": []any{}, "total": 0})
 		return
 	}
-
 	var platformID int64
-	fmt.Sscanf(r.URL.Query().Get("platform_id"), "%d", &platformID)
+	if raw := r.URL.Query().Get("platform_id"); raw != "" {
+		platformID, _ = strconv.ParseInt(raw, 10, 64)
+	}
 	eventType := r.URL.Query().Get("event_type")
-	limit := 50
-	offset := 0
-	fmt.Sscanf(r.URL.Query().Get("limit"), "%d", &limit)
-	fmt.Sscanf(r.URL.Query().Get("offset"), "%d", &offset)
-
+	limit := queryInt(r, "limit", 50)
+	offset := queryInt(r, "offset", 0)
 	events, total, err := h.db.ListPlatformEvents(r.Context(), platformID, eventType, limit, offset)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"events": events,
-		"total":  total,
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"events": events, "total": total})
 }
 
-// GetPlatformStatus returns the current status of all platforms.
-func (h *GB28181Handler) GetPlatformStatus(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleGB28181GetPlatformStatus(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"platforms": []interface{}{},
-		})
+		writeJSON(w, http.StatusOK, map[string]any{"platforms": []any{}})
 		return
 	}
-
 	statuses, err := h.db.GetPlatformStatus(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"platforms": statuses,
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"platforms": statuses})
 }
 
-// ==================== Alarm API ====================
-
-// ListAlarms returns alarm records.
-func (h *GB28181Handler) ListAlarms(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleGB28181ListAlarms(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"alarms": []interface{}{},
-			"total":  0,
-		})
+		writeJSON(w, http.StatusOK, map[string]any{"alarms": []any{}, "total": 0})
 		return
 	}
-	deviceID := r.URL.Query().Get("device_id")
-	limit := 50
-	offset := 0
-	fmt.Sscanf(r.URL.Query().Get("limit"), "%d", &limit)
-	fmt.Sscanf(r.URL.Query().Get("offset"), "%d", &offset)
-
-	alarms, total, err := h.db.ListAlarms(r.Context(), deviceID, limit, offset)
+	alarms, total, err := h.db.ListAlarms(r.Context(), r.URL.Query().Get("device_id"), queryInt(r, "limit", 50), queryInt(r, "offset", 0))
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if alarms == nil {
-		alarms = []storage.AlarmRow{}
+		writeJSON(w, http.StatusOK, map[string]any{"alarms": []any{}, "total": total})
+		return
 	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"alarms": alarms,
-		"total":  total,
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"alarms": alarms, "total": total})
 }
 
-// ==================== Download API ====================
-
-// StartDownload starts a recording download from a device.
-func (h *GB28181Handler) StartDownload(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) handleGB28181StartDownload(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
 	var req struct {
@@ -818,44 +659,35 @@ func (h *GB28181Handler) StartDownload(w http.ResponseWriter, r *http.Request) {
 		EndTime   string `json:"end_time"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
 	startTime, err := parseTime(req.StartTime)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid start_time format"})
+		writeError(w, http.StatusBadRequest, "invalid start_time")
 		return
 	}
 	endTime, err := parseTime(req.EndTime)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid end_time format"})
+		writeError(w, http.StatusBadRequest, "invalid end_time")
 		return
 	}
-
-	dm := h.server().GetDownloadManager()
+	dm := h.gb28181Server.GetDownloadManager()
 	if dm == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "download manager not initialized"})
+		writeError(w, http.StatusInternalServerError, "download manager not initialized")
 		return
 	}
-
-	ds, err := dm.StartDownload(req.DeviceID, req.ChannelID, startTime, endTime, h.server().GetDeviceStore())
+	ds, err := dm.StartDownload(req.DeviceID, req.ChannelID, startTime, endTime, h.gb28181Server.GetDeviceStore())
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"download_id": ds.ID,
-		"file_path":   ds.FilePath,
-		"status":      ds.Status,
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"download_id": ds.ID, "file_path": ds.FilePath, "status": ds.Status})
 }
 
-// StopDownload stops a recording download.
-func (h *GB28181Handler) StopDownload(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) handleGB28181StopDownload(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
 	var req struct {
@@ -864,65 +696,49 @@ func (h *GB28181Handler) StopDownload(w http.ResponseWriter, r *http.Request) {
 		DownloadID int64  `json:"download_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
-	dm := h.server().GetDownloadManager()
+	dm := h.gb28181Server.GetDownloadManager()
 	if dm == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "download manager not initialized"})
+		writeError(w, http.StatusInternalServerError, "download manager not initialized")
 		return
 	}
-
 	if err := dm.StopDownload(req.DeviceID, req.ChannelID, req.DownloadID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// BatchDownloadRequest is the request body for batch downloading.
-type BatchDownloadRequest struct {
-	DeviceID  string `json:"device_id"`
-	ChannelID string `json:"channel_id"`
-	Segments  []struct {
-		StartTime string `json:"start_time"`
-		EndTime   string `json:"end_time"`
-	} `json:"segments"`
-}
-
-// BatchDownload starts multiple recording downloads from a device.
-func (h *GB28181Handler) BatchDownload(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) handleGB28181BatchDownload(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
-	var req BatchDownloadRequest
+	var req struct {
+		DeviceID  string `json:"device_id"`
+		ChannelID string `json:"channel_id"`
+		Segments  []struct {
+			StartTime string `json:"start_time"`
+			EndTime   string `json:"end_time"`
+		} `json:"segments"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
-	if req.DeviceID == "" || req.ChannelID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+	if req.DeviceID == "" || req.ChannelID == "" || len(req.Segments) == 0 {
+		writeError(w, http.StatusBadRequest, "device_id, channel_id and segments are required")
 		return
 	}
-
-	if len(req.Segments) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "segments is required"})
-		return
-	}
-
-	dm := h.server().GetDownloadManager()
+	dm := h.gb28181Server.GetDownloadManager()
 	if dm == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "download manager not initialized"})
+		writeError(w, http.StatusInternalServerError, "download manager not initialized")
 		return
 	}
-
-	var results []map[string]interface{}
-	var errors []string
-
+	results := make([]map[string]any, 0, len(req.Segments))
+	errors := make([]string, 0)
 	for i, seg := range req.Segments {
 		startTime, err := parseTime(seg.StartTime)
 		if err != nil {
@@ -934,14 +750,12 @@ func (h *GB28181Handler) BatchDownload(w http.ResponseWriter, r *http.Request) {
 			errors = append(errors, fmt.Sprintf("segment %d: invalid end_time", i))
 			continue
 		}
-
-		ds, err := dm.StartDownload(req.DeviceID, req.ChannelID, startTime, endTime, h.server().GetDeviceStore())
+		ds, err := dm.StartDownload(req.DeviceID, req.ChannelID, startTime, endTime, h.gb28181Server.GetDeviceStore())
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("segment %d: %v", i, err))
 			continue
 		}
-
-		results = append(results, map[string]interface{}{
+		results = append(results, map[string]any{
 			"download_id": ds.ID,
 			"file_path":   ds.FilePath,
 			"status":      ds.Status,
@@ -949,187 +763,142 @@ func (h *GB28181Handler) BatchDownload(w http.ResponseWriter, r *http.Request) {
 			"end_time":    seg.EndTime,
 		})
 	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"downloads": results,
-		"errors":    errors,
-		"total":     len(results),
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"downloads": results, "errors": errors, "total": len(results)})
 }
 
-// ListDownloads returns download records.
-func (h *GB28181Handler) ListDownloads(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleGB28181ListDownloads(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"downloads": []interface{}{},
-			"total":     0,
-		})
+		writeJSON(w, http.StatusOK, map[string]any{"downloads": []any{}, "total": 0})
 		return
 	}
-	deviceID := r.URL.Query().Get("device_id")
-	channelID := r.URL.Query().Get("channel_id")
-	limit := 50
-	offset := 0
-	fmt.Sscanf(r.URL.Query().Get("limit"), "%d", &limit)
-	fmt.Sscanf(r.URL.Query().Get("offset"), "%d", &offset)
-
-	downloads, total, err := h.db.ListDownloads(r.Context(), deviceID, channelID, limit, offset)
+	downloads, total, err := h.db.ListDownloads(
+		r.Context(),
+		r.URL.Query().Get("device_id"),
+		r.URL.Query().Get("channel_id"),
+		queryInt(r, "limit", 50),
+		queryInt(r, "offset", 0),
+	)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if downloads == nil {
-		downloads = []storage.DownloadRecordRow{}
+		writeJSON(w, http.StatusOK, map[string]any{"downloads": []any{}, "total": total})
+		return
 	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"downloads": downloads,
-		"total":     total,
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"downloads": downloads, "total": total})
 }
 
-// ==================== Talk WebSocket API ====================
-
-// HandleTalkWS handles WebSocket connections for voice talk/intercom.
-func (h *GB28181Handler) HandleTalkWS(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) handleGB28181TalkWS(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
-
 	deviceID := r.URL.Query().Get("device_id")
 	channelID := r.URL.Query().Get("channel_id")
-	transportStr := r.URL.Query().Get("transport")
-
 	if deviceID == "" || channelID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		writeError(w, http.StatusBadRequest, "device_id and channel_id are required")
 		return
 	}
-
-	// 解析传输模式
 	transportMode := gb28181.TransportUDP
-	switch transportStr {
+	switch r.URL.Query().Get("transport") {
 	case "1":
 		transportMode = gb28181.TransportTCPPassive
 	case "2":
 		transportMode = gb28181.TransportTCPActive
 	}
-
-	// 获取 TalkManager
-	tm := h.server().GetTalkManager()
+	tm := h.gb28181Server.GetTalkManager()
 	if tm == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "talk manager not initialized"})
+		writeError(w, http.StatusInternalServerError, "talk manager not initialized")
 		return
 	}
-
-	// 检查会话是否已存在
 	session, exists := tm.GetSession(deviceID, channelID)
 	if !exists {
-		// 启动新的对讲会话
 		var err error
-		session, err = tm.StartTalk(deviceID, channelID, transportMode, h.server().GetDeviceStore())
+		session, err = tm.StartTalk(deviceID, channelID, transportMode, h.gb28181Server.GetDeviceStore())
 		if err != nil {
-			slog.Error("Failed to start talk", "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	}
-
-	// 升级为 WebSocket
-	upgrader := websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool {
-			return true
-		},
-	}
-
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		slog.Error("WebSocket upgrade failed", "error", err)
 		_ = tm.StopTalk(deviceID, channelID)
 		return
 	}
 	defer conn.Close()
-	defer func() {
-		if err := tm.StopTalk(deviceID, channelID); err != nil {
-			slog.Warn("Failed to stop talk session", "device_id", deviceID, "channel_id", channelID, "error", err)
-		}
-	}()
-
-	slog.Info("Talk WebSocket connected", "device_id", deviceID, "channel_id", channelID, "transport", transportMode)
-
-	// 发送状态消息
-	statusMsg := map[string]interface{}{
+	defer func() { _ = tm.StopTalk(deviceID, channelID) }()
+	if err := conn.WriteJSON(map[string]any{
 		"status":     "connected",
 		"session_id": deviceID + "_" + channelID,
 		"port":       session.RTPPort,
 		"transport":  transportMode,
-	}
-	if err := conn.WriteJSON(statusMsg); err != nil {
-		slog.Error("Failed to send status message", "error", err)
+	}); err != nil {
 		return
 	}
-
-	// 等待会话就绪
 	select {
 	case <-session.ReadyCh:
-		// 会话就绪
 	case <-time.After(30 * time.Second):
-		slog.Error("Talk session timeout", "device_id", deviceID)
-		conn.WriteJSON(map[string]string{"error": "session timeout"})
+		_ = conn.WriteJSON(map[string]string{"error": "session timeout"})
 		return
 	}
-
-	// 读取音频数据并发送
 	for {
 		messageType, message, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				slog.Error("WebSocket read error", "error", err)
+				slog.Error("GB28181 talk websocket read error", "error", err)
 			}
 			break
 		}
-
 		if messageType == websocket.BinaryMessage {
 			if err := session.SendAudioData(message); err != nil {
-				slog.Error("Failed to send audio data", "error", err)
+				slog.Error("failed to send GB28181 talk audio data", "error", err)
 			}
 		}
 	}
-
-	slog.Info("Talk WebSocket disconnected", "device_id", deviceID, "channel_id", channelID)
 }
 
-// ==================== WHIP Talk API ====================
-
-// StartTalkWhipRequest is the request body for starting a WHIP talk session.
-type StartTalkWhipRequest struct {
-	StreamName string `json:"stream_name"`
-	DeviceID   string `json:"device_id"`
-	ChannelID  string `json:"channel_id"`
-	Transport  string `json:"transport,omitempty"` // 0=UDP, 1=TCP passive, 2=TCP active
+func (h *Handler) handleGB28181StartTalkWhip(w http.ResponseWriter, r *http.Request) {
+	h.handleGB28181TalkWhipState(w, r, true)
 }
 
-// HandleStartTalkWhip starts a GB28181 talk session for WHIP streaming.
-// The frontend should first establish a WHIP connection to the media server,
-// then call this API to start the GB28181 talk session.
-func (h *GB28181Handler) HandleStartTalkWhip(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
+func (h *Handler) handleGB28181StopTalkWhip(w http.ResponseWriter, r *http.Request) {
+	h.handleGB28181TalkWhipState(w, r, false)
+}
+
+func (h *Handler) handleGB28181TalkWhipState(w http.ResponseWriter, r *http.Request, start bool) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
 		return
 	}
-
-	var req StartTalkWhipRequest
+	var req struct {
+		StreamName string `json:"stream_name"`
+		DeviceID   string `json:"device_id"`
+		ChannelID  string `json:"channel_id"`
+		Transport  string `json:"transport,omitempty"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
 	if req.DeviceID == "" || req.ChannelID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
+		writeError(w, http.StatusBadRequest, "device_id and channel_id are required")
 		return
 	}
-
-	// 解析传输模式
+	tm := h.gb28181Server.GetTalkManager()
+	if tm == nil {
+		writeError(w, http.StatusInternalServerError, "talk manager not initialized")
+		return
+	}
+	if !start {
+		if err := tm.StopTalk(req.DeviceID, req.ChannelID); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
+		return
+	}
 	transportMode := gb28181.TransportUDP
 	switch req.Transport {
 	case "1":
@@ -1137,34 +906,16 @@ func (h *GB28181Handler) HandleStartTalkWhip(w http.ResponseWriter, r *http.Requ
 	case "2":
 		transportMode = gb28181.TransportTCPActive
 	}
-
-	// 获取 TalkManager
-	tm := h.server().GetTalkManager()
-	if tm == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "talk manager not initialized"})
-		return
-	}
-
-	// 检查会话是否已存在
 	session, exists := tm.GetSession(req.DeviceID, req.ChannelID)
 	if !exists {
-		// 启动新的对讲会话
 		var err error
-		session, err = tm.StartTalk(req.DeviceID, req.ChannelID, transportMode, h.server().GetDeviceStore())
+		session, err = tm.StartTalk(req.DeviceID, req.ChannelID, transportMode, h.gb28181Server.GetDeviceStore())
 		if err != nil {
-			slog.Error("Failed to start WHIP talk", "error", err, "device_id", req.DeviceID, "channel_id", req.ChannelID)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	}
-
-	slog.Info("WHIP talk session started",
-		"device_id", req.DeviceID,
-		"channel_id", req.ChannelID,
-		"stream_name", req.StreamName,
-		"port", session.RTPPort)
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"status":      "started",
 		"session_id":  req.DeviceID + "_" + req.ChannelID,
 		"port":        session.RTPPort,
@@ -1173,90 +924,539 @@ func (h *GB28181Handler) HandleStartTalkWhip(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// HandleStopTalkWhip stops a GB28181 talk session for WHIP streaming.
-func (h *GB28181Handler) HandleStopTalkWhip(w http.ResponseWriter, r *http.Request) {
-	if h.server() == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "GB28181 not enabled"})
-		return
+func queryInt(r *http.Request, key string, fallback int) int {
+	raw := r.URL.Query().Get(key)
+	if raw == "" {
+		return fallback
 	}
-
-	var req StartTalkWhipRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
 	}
-
-	if req.DeviceID == "" || req.ChannelID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id and channel_id are required"})
-		return
-	}
-
-	// 获取 TalkManager
-	tm := h.server().GetTalkManager()
-	if tm == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "talk manager not initialized"})
-		return
-	}
-
-	// 停止对讲会话
-	if err := tm.StopTalk(req.DeviceID, req.ChannelID); err != nil {
-		slog.Warn("Failed to stop WHIP talk", "error", err, "device_id", req.DeviceID, "channel_id", req.ChannelID)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	slog.Info("WHIP talk session stopped", "device_id", req.DeviceID, "channel_id", req.ChannelID)
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status": "stopped",
-	})
+	return value
 }
 
-// buildGB28181PlayURLs builds play URLs for all supported protocols.
-func buildGB28181PlayURLs(ctx context.Context, engine media.Engine, streamID, appName string) []map[string]string {
-	if engine == nil {
-		return nil
+// handleGB28181PTZControl 处理PTZ控制请求
+func (h *Handler) handleGB28181PTZControl(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
 	}
-	protocols := []string{"ws-flv", "flv", "hls", "ll-hls", "webrtc", "fmp4", "rtmp", "rtsp"}
-	urls := make([]map[string]string, 0, len(protocols))
-	for _, protocol := range protocols {
-		playURL, err := engine.BuildPlayURL(ctx, media.PlayURLRequest{
-			StreamID: streamID,
-			AppName:  appName,
-			Protocol: protocol,
-		})
-		if err != nil || playURL == nil || playURL.URL == "" {
-			continue
-		}
-		urls = append(urls, map[string]string{
-			"protocol": protocol,
-			"url":      playURL.URL,
-		})
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+
+	if deviceID == "" || channelID == "" {
+		writeError(w, http.StatusBadRequest, "deviceID and channelID are required")
+		return
 	}
-	return urls
+
+	var body struct {
+		Direction string  `json:"direction"`
+		Speed     float64 `json:"speed"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := h.sendGB28181PTZControl(r.Context(), deviceID, channelID, body.Direction, body.Speed); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// parseTime parses time strings in various formats and converts to local time.
-func parseTime(s string) (time.Time, error) {
-	// Try RFC3339 first (handles Z suffix for UTC)
-	t, err := time.Parse(time.RFC3339, s)
-	if err == nil {
-		return t.In(time.Local), nil
+// handleGB28181PTZPositionControl 处理PTZ精准位置控制请求
+func (h *Handler) handleGB28181PTZPositionControl(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
 	}
-	// Try RFC3339 without Z - treat as local time
-	t, err = time.ParseInLocation("2006-01-02T15:04:05", s, time.Local)
-	if err == nil {
-		return t, nil
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+
+	if deviceID == "" || channelID == "" {
+		writeError(w, http.StatusBadRequest, "deviceID and channelID are required")
+		return
 	}
-	// Try with milliseconds
-	t, err = time.ParseInLocation("2006-01-02T15:04:05.000", s, time.Local)
-	if err == nil {
-		return t, nil
+
+	var body struct {
+		HorizontalAngle float64 `json:"horizontal_angle"`
+		VerticalAngle   float64 `json:"vertical_angle"`
+		ZoomLevel       float64 `json:"zoom_level"`
 	}
-	// Try RFC3339 with milliseconds and Z
-	t, err = time.Parse("2006-01-02T15:04:05.000Z", s)
-	if err == nil {
-		return t.In(time.Local), nil
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
 	}
-	return time.Time{}, fmt.Errorf("cannot parse time: %s", s)
+
+	if err := h.gb28181Server.PTZPositionControl(deviceID, channelID, body.HorizontalAngle, body.VerticalAngle, body.ZoomLevel); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGB28181PTZQueryPosition 处理PTZ位置查询请求
+func (h *Handler) handleGB28181PTZQueryPosition(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
+	}
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+
+	if deviceID == "" || channelID == "" {
+		writeError(w, http.StatusBadRequest, "deviceID and channelID are required")
+		return
+	}
+
+	if err := h.gb28181Server.QueryPTZPosition(deviceID, channelID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGB28181PresetSet 处理设置预置位请求
+func (h *Handler) handleGB28181PresetSet(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
+	}
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+	presetIDStr := chi.URLParam(r, "presetID")
+
+	if deviceID == "" || channelID == "" || presetIDStr == "" {
+		writeError(w, http.StatusBadRequest, "deviceID, channelID and presetID are required")
+		return
+	}
+
+	presetID, err := strconv.Atoi(presetIDStr)
+	if err != nil || presetID < 1 || presetID > 255 {
+		writeError(w, http.StatusBadRequest, "presetID must be between 1 and 255")
+		return
+	}
+
+	if err := h.gb28181Server.SetPreset(deviceID, channelID, presetID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGB28181PresetCall 处理调用预置位请求
+func (h *Handler) handleGB28181PresetCall(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
+	}
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+	presetIDStr := chi.URLParam(r, "presetID")
+
+	if deviceID == "" || channelID == "" || presetIDStr == "" {
+		writeError(w, http.StatusBadRequest, "deviceID, channelID and presetID are required")
+		return
+	}
+
+	presetID, err := strconv.Atoi(presetIDStr)
+	if err != nil || presetID < 1 || presetID > 255 {
+		writeError(w, http.StatusBadRequest, "presetID must be between 1 and 255")
+		return
+	}
+
+	if err := h.gb28181Server.CallPreset(deviceID, channelID, presetID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGB28181PresetDelete 处理删除预置位请求
+func (h *Handler) handleGB28181PresetDelete(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
+	}
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+	presetIDStr := chi.URLParam(r, "presetID")
+
+	if deviceID == "" || channelID == "" || presetIDStr == "" {
+		writeError(w, http.StatusBadRequest, "deviceID, channelID and presetID are required")
+		return
+	}
+
+	presetID, err := strconv.Atoi(presetIDStr)
+	if err != nil || presetID < 1 || presetID > 255 {
+		writeError(w, http.StatusBadRequest, "presetID must be between 1 and 255")
+		return
+	}
+
+	if err := h.gb28181Server.DeletePreset(deviceID, channelID, presetID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGB28181CruiseAddPoint 处理加入巡航点请求
+func (h *Handler) handleGB28181CruiseAddPoint(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
+	}
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+
+	if deviceID == "" || channelID == "" {
+		writeError(w, http.StatusBadRequest, "deviceID and channelID are required")
+		return
+	}
+
+	var body struct {
+		CruiseID int `json:"cruise_id"`
+		PresetID int `json:"preset_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if body.CruiseID < 0 || body.CruiseID > 255 {
+		writeError(w, http.StatusBadRequest, "cruise_id must be between 0 and 255")
+		return
+	}
+	if body.PresetID < 1 || body.PresetID > 255 {
+		writeError(w, http.StatusBadRequest, "preset_id must be between 1 and 255")
+		return
+	}
+
+	if err := h.gb28181Server.CruiseAddPoint(deviceID, channelID, body.CruiseID, body.PresetID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGB28181CruiseDeletePoint 处理删除巡航点请求
+func (h *Handler) handleGB28181CruiseDeletePoint(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
+	}
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+
+	if deviceID == "" || channelID == "" {
+		writeError(w, http.StatusBadRequest, "deviceID and channelID are required")
+		return
+	}
+
+	var body struct {
+		CruiseID int `json:"cruise_id"`
+		PresetID int `json:"preset_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if body.CruiseID < 0 || body.CruiseID > 255 {
+		writeError(w, http.StatusBadRequest, "cruise_id must be between 0 and 255")
+		return
+	}
+	if body.PresetID < 0 || body.PresetID > 255 {
+		writeError(w, http.StatusBadRequest, "preset_id must be between 0 and 255")
+		return
+	}
+
+	if err := h.gb28181Server.CruiseDeletePoint(deviceID, channelID, body.CruiseID, body.PresetID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGB28181CruiseStart 处理开始巡航请求
+func (h *Handler) handleGB28181CruiseStart(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
+	}
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+	cruiseIDStr := chi.URLParam(r, "cruiseID")
+
+	if deviceID == "" || channelID == "" || cruiseIDStr == "" {
+		writeError(w, http.StatusBadRequest, "deviceID, channelID and cruiseID are required")
+		return
+	}
+
+	cruiseID, err := strconv.Atoi(cruiseIDStr)
+	if err != nil || cruiseID < 0 || cruiseID > 255 {
+		writeError(w, http.StatusBadRequest, "cruiseID must be between 0 and 255")
+		return
+	}
+
+	if err := h.gb28181Server.CruiseStart(deviceID, channelID, cruiseID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGB28181CruiseStop 处理停止巡航请求
+func (h *Handler) handleGB28181CruiseStop(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
+	}
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+	cruiseIDStr := chi.URLParam(r, "cruiseID")
+
+	if deviceID == "" || channelID == "" || cruiseIDStr == "" {
+		writeError(w, http.StatusBadRequest, "deviceID, channelID and cruiseID are required")
+		return
+	}
+
+	cruiseID, err := strconv.Atoi(cruiseIDStr)
+	if err != nil || cruiseID < 0 || cruiseID > 255 {
+		writeError(w, http.StatusBadRequest, "cruiseID must be between 0 and 255")
+		return
+	}
+
+	if err := h.gb28181Server.CruiseStop(deviceID, channelID, cruiseID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGB28181Snapshot 处理图像抓拍请求
+func (h *Handler) handleGB28181Snapshot(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
+	}
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+
+	if deviceID == "" || channelID == "" {
+		writeError(w, http.StatusBadRequest, "deviceID and channelID are required")
+		return
+	}
+
+	if err := h.gb28181Server.Snapshot(deviceID, channelID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGB28181DeviceReset 处理设备复位请求
+func (h *Handler) handleGB28181DeviceReset(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
+	}
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+
+	if deviceID == "" || channelID == "" {
+		writeError(w, http.StatusBadRequest, "deviceID and channelID are required")
+		return
+	}
+
+	if err := h.gb28181Server.DeviceReset(deviceID, channelID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGB28181RecordControl 处理录像控制请求
+func (h *Handler) handleGB28181RecordControl(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
+	}
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+
+	if deviceID == "" || channelID == "" {
+		writeError(w, http.StatusBadRequest, "deviceID and channelID are required")
+		return
+	}
+
+	var body struct {
+		Command string `json:"command"` // "record" or "stop"
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if body.Command != "record" && body.Command != "stop" {
+		writeError(w, http.StatusBadRequest, "command must be 'record' or 'stop'")
+		return
+	}
+
+	if err := h.sendGB28181RecordControl(r.Context(), deviceID, channelID, body.Command); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGB28181HomePosition 处理看守位设置请求
+func (h *Handler) handleGB28181HomePosition(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
+	}
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+
+	if deviceID == "" || channelID == "" {
+		writeError(w, http.StatusBadRequest, "deviceID and channelID are required")
+		return
+	}
+
+	var body struct {
+		Enabled     int `json:"enabled"`      // 0=禁用, 1=启用
+		ResetTime   int `json:"reset_time"`   // 自动归位时间(秒)
+		PresetIndex int `json:"preset_index"` // 预置位编号(1-255)
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if body.Enabled != 0 && body.Enabled != 1 {
+		writeError(w, http.StatusBadRequest, "enabled must be 0 or 1")
+		return
+	}
+	if body.PresetIndex < 1 || body.PresetIndex > 255 {
+		writeError(w, http.StatusBadRequest, "preset_index must be between 1 and 255")
+		return
+	}
+
+	if err := h.gb28181Server.SetHomePosition(deviceID, channelID, body.Enabled, body.ResetTime, body.PresetIndex); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGB28181DeviceInfoQuery 处理设备信息查询请求
+func (h *Handler) handleGB28181DeviceInfoQuery(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
+	}
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+
+	if deviceID == "" || channelID == "" {
+		writeError(w, http.StatusBadRequest, "deviceID and channelID are required")
+		return
+	}
+
+	if err := h.gb28181Server.DeviceInfoQuery(deviceID, channelID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGB28181DeviceStatusQuery 处理设备状态查询请求
+func (h *Handler) handleGB28181DeviceStatusQuery(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
+	}
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+
+	if deviceID == "" || channelID == "" {
+		writeError(w, http.StatusBadRequest, "deviceID and channelID are required")
+		return
+	}
+
+	if err := h.gb28181Server.DeviceStatusQuery(deviceID, channelID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGB28181DeviceConfigQuery 处理设备配置查询请求
+func (h *Handler) handleGB28181DeviceConfigQuery(w http.ResponseWriter, r *http.Request) {
+	if h.gb28181Server == nil {
+		writeError(w, http.StatusServiceUnavailable, "GB28181 server not available")
+		return
+	}
+
+	deviceID := chi.URLParam(r, "deviceID")
+	channelID := chi.URLParam(r, "channelID")
+
+	if deviceID == "" || channelID == "" {
+		writeError(w, http.StatusBadRequest, "deviceID and channelID are required")
+		return
+	}
+
+	if err := h.gb28181Server.DeviceConfigQuery(deviceID, channelID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// buildPTZCommand 构建PTZ命令
+func buildPTZCommand(direction string, speed float64) string {
+	// 使用gb28181包中的BuildContinuousMove函数
+	return buildGB28181PTZCommand(direction, speed)
 }

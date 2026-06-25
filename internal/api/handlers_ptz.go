@@ -1,11 +1,9 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -51,7 +49,7 @@ func (h *Handler) handlePTZMove(w http.ResponseWriter, r *http.Request) {
 	case "onvif":
 		h.handleONVIFPTZMove(w, r, cameraID, req.Mode, req.Pan, req.Tilt, req.Zoom)
 	default:
-		writeError(w, http.StatusBadRequest, "PTZ control is not available for this camera protocol")
+		writeError(w, http.StatusBadRequest, "PTZ control is only available for ONVIF or GB28181 cameras")
 	}
 }
 
@@ -74,7 +72,7 @@ func (h *Handler) handlePTZStop(w http.ResponseWriter, r *http.Request) {
 	case "onvif":
 		h.handleONVIFPTZStop(w, r, cameraID)
 	default:
-		writeError(w, http.StatusBadRequest, "PTZ control is not available for this camera protocol")
+		writeError(w, http.StatusBadRequest, "PTZ control is only available for ONVIF or GB28181 cameras")
 	}
 }
 
@@ -182,14 +180,16 @@ func (h *Handler) handlePTZStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if camera.Protocol != "onvif" {
+	switch camera.Protocol {
+	case "onvif":
+		h.handleONVIFPTZStatus(w, r, cameraID)
+	case "gb28181":
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"moving": false,
 		})
-		return
+	default:
+		writeError(w, http.StatusBadRequest, "PTZ control is only available for ONVIF or GB28181 cameras")
 	}
-
-	h.handleONVIFPTZStatus(w, r, cameraID)
 }
 
 // --- Helper functions ---
@@ -255,16 +255,12 @@ func (h *Handler) handleGB28181PTZMove(w http.ResponseWriter, r *http.Request, c
 		}
 	}
 
-	gbHandler := NewGB28181Handler(h.gb28181Server, h.camMgr, h.db, h.mediaEngine)
-	ptzReq := PTZRequest{
-		DeviceID:  deviceID,
-		ChannelID: channelID,
-		Direction: direction,
-		Speed:     speed,
+	if err := h.sendGB28181PTZControl(r.Context(), deviceID, channelID, direction, speed); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	body, _ := json.Marshal(ptzReq)
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	gbHandler.PTZControl(w, r)
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (h *Handler) handleGB28181PTZStop(w http.ResponseWriter, r *http.Request, cameraID string) {
@@ -280,16 +276,12 @@ func (h *Handler) handleGB28181PTZStop(w http.ResponseWriter, r *http.Request, c
 	}
 	deviceID, channelID := parts[0], parts[1]
 
-	gbHandler := NewGB28181Handler(h.gb28181Server, h.camMgr, h.db, h.mediaEngine)
-	ptzReq := PTZRequest{
-		DeviceID:  deviceID,
-		ChannelID: channelID,
-		Direction: "stop",
-		Speed:     0,
+	if err := h.sendGB28181PTZControl(r.Context(), deviceID, channelID, "stop", 0); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	body, _ := json.Marshal(ptzReq)
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	gbHandler.PTZControl(w, r)
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // --- ONVIF PTZ handlers ---

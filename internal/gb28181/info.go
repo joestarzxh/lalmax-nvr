@@ -5,6 +5,15 @@ import (
 	"log/slog"
 )
 
+// GBVersion GB28181标准版本
+type GBVersion string
+
+const (
+	GBVersion2016    GBVersion = "2016"
+	GBVersion2022    GBVersion = "2022"
+	GBVersionUnknown GBVersion = "unknown"
+)
+
 type MessageDeviceInfoResponse struct {
 	CmdType      string `xml:"CmdType"`
 	SN           int    `xml:"SN"`
@@ -23,13 +32,26 @@ func (g *GB28181API) handleDeviceInfoResponse(deviceID string, body []byte) {
 		return
 	}
 
+	version := g.configuredGBVersion()
+
 	slog.Info("device info received",
 		"device_id", deviceID,
 		"manufacturer", msg.Manufacturer,
 		"model", msg.Model,
 		"firmware", msg.Firmware,
 		"name", msg.DeviceName,
+		"gb_version", version,
 	)
+
+	// 更新设备信息
+	if dev, ok := g.store.Load(deviceID); ok {
+		dev.Manufacturer = msg.Manufacturer
+		dev.Model = msg.Model
+		dev.Firmware = msg.Firmware
+		if dev.GBVersion == GBVersionUnknown || dev.GBVersion == "" {
+			dev.GBVersion = version
+		}
+	}
 
 	// Persist device info to database
 	if err := g.store.SaveDeviceInfo(deviceID, msg.Manufacturer, msg.Model, msg.Firmware); err != nil {

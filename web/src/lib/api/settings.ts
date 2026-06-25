@@ -177,6 +177,8 @@ export interface GB28181Config {
   id: string;
   password: string;
   media_ip: string;
+  media_port?: number;
+  standard_version: '2016' | '2022';
 }
 
 export async function getGB28181Settings(signal?: AbortSignal): Promise<GB28181Config> {

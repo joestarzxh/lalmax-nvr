@@ -299,19 +299,11 @@ lalmax 内置的 RTMP/SRT 服务器无法连接到 NVR 的摄像头/录像管线
 - 从 `else` 块（mediaEngine==nil）移到 `if` 块（mediaEngine!=nil）
 - handler 需要 mediaEngine 才能工作，注册逻辑必须匹配
 
-**RTMP 接线（`internal/rtmp/server.go` + `cmd/lalmax-nvr/main.go`）：**
-- 为 `rtmp.Server` 添加 `SetCallbacks` 方法，支持构造后注入回调
-- 在 `main.go` `Start()` 中接线：
-  - `StreamKeyResolver`：反向查找 `cfg.RTMP.StreamKeys`
-  - `CameraHubProvider`：通过 `camMgr.GetRecorder()` 获取 recorder 的 StreamHub
-- 修复前：RTMP 服务器在第一个连接时会 panic（nil 回调）
-- 修复后：RTMP publish → 流密钥解析 → hub 投递 → 录像
-
-**SRT 接线（`cmd/lalmax-nvr/main.go`）：**
-- 在 `Start()` 前注册现有摄像头 hub 到 SRT listener
-- 遍历启用的摄像头，获取 recorder，提取 StreamHub
-- 修复前：SRT 创建的 hub 与 recorder 脱节
-- 修复后：SRT publish → hub 投递 → 通过现有摄像头管线录像
+**RTMP/SRT ingest 接线（`internal/media/ingest.go` + `cmd/lalmax-nvr/main.go`）：**
+- 实际 RTMP/SRT 接入由 lalmax/lal 负责。
+- `internal/media.IngestHandler` 订阅 lalmax 的 publish/stop 事件，并把 stream name 映射到 camera ID。
+- RTMP stream key 仍通过反向表支持 `camera_id -> stream_key` 配置。
+- SRT 直接把 stream name 映射为 camera ID。
 
 ## 建议关注的文件
 

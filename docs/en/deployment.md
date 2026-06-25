@@ -4,29 +4,6 @@ This guide covers installing, configuring, and maintaining lalmax-nvr in product
 
 ## Installation Methods
 
-### One-Click Install Script (Recommended)
-
-The install script downloads the latest release binary, creates the `nvr` system user, initializes the config, and installs the systemd service — all in one step.
-
-```bash
-# Install latest version
-curl -fsSL https://raw.githubusercontent.com/lalmax-pro/lalmax-nvr/main/install.sh | sudo bash
-```
-
-Install a specific version:
-
-```bash
-sudo ./install.sh --version v0.2.0
-```
-
-Uninstall (preserves recordings in `/var/lib/lalmax-nvr`):
-
-```bash
-sudo ./install.sh --uninstall
-```
-
-The installer will prompt for an admin password if no config file exists. After installation, the Web UI is available at `http://<host-ip>:9090`.
-
 ### Docker
 
 #### Prerequisites
@@ -40,6 +17,7 @@ The installer will prompt for an admin password if no config file exists. After 
 
 #### Quick Start
 
+```bash
 # Option A: Just run — auto-initialization (recommended)
 docker run -d \
   --name lalmax-nvr \
@@ -60,6 +38,7 @@ docker run -d \
 # Option C: With docker-compose.yml
 mkdir -p data
 docker compose up -d
+```
 
 > **First-time setup**: When started without a config file, lalmax-nvr auto-generates a default configuration and runs in **setup mode** — all API endpoints are accessible without authentication. Set a password via the Web UI Settings page or the `NVR_PASSWORD` environment variable. Once a password is set, authentication is enforced.
 
@@ -68,6 +47,7 @@ docker compose up -d
 - **Auto-initialization**: If no config file exists at `/data/lalmax-nvr.yaml`, one is generated automatically with sensible defaults. No manual setup required.
 - **Initial password**: Set via `NVR_PASSWORD` environment variable. If not set, the app starts in setup mode (no auth) — set a password through the Web UI Settings page.
 - **Data directory**: `storage.root_dir` is automatically set to `/data` inside Docker containers via the `NVR_DATA_DIR` environment variable.
+
 #### docker-compose.yml Reference
 
 Full configuration with annotated fields:
@@ -126,11 +106,8 @@ If you need custom builds or want the latest source code:
 # Multi-stage build (compiles frontend + backend inside container, requires network)
 docker build -t lalmax-nvr .
 
-# Cross-compile ARM64 (on host, no QEMU needed)
-make docker-build-arm64
-
-# Build both architectures
-make docker-build-all
+# Cross-compile ARM64 binary on the host
+GOOS=linux GOARCH=arm64 ./scripts/unix/build.sh
 ```
 
 After building locally, replace the `image:` field in `docker-compose.yml` with your local tag.
@@ -328,30 +305,25 @@ Solutions:
 
 ### Manual Installation
 
-If you prefer full control or the install script doesn't cover your use case:
+If you prefer full control without Docker:
 
 ```bash
 # 1. Download binary from GitHub Releases
 #    https://github.com/lalmax-pro/lalmax-nvr/releases
-sudo cp lalmax-nvr /usr/local/bin/lalmax-nvr
-sudo chmod +x /usr/local/bin/lalmax-nvr
+chmod +x lalmax-nvr
 
-# 2. Create system user and data directory
-sudo useradd -r -s /bin/false -d /var/lib/lalmax-nvr nvr
-sudo mkdir -p /var/lib/lalmax-nvr
-sudo chown -R nvr:nvr /var/lib/lalmax-nvr
+# 2. Create a data directory
+mkdir -p ./data
 
 # 3. Initialize config (prompts for admin password)
-sudo -u nvr /usr/local/bin/lalmax-nvr init \
+./lalmax-nvr init \
     --password <your-password> \
-    --data-dir /var/lib/lalmax-nvr \
-    --config /var/lib/lalmax-nvr/lalmax-nvr.yaml \
+    --data-dir ./data \
+    --config ./data/lalmax-nvr.yaml \
     --listen ":9090"
 
-# 4. Install systemd service
-sudo cp deploy/lalmax-nvr.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now lalmax-nvr
+# 4. Start in the foreground
+./lalmax-nvr -config ./data/lalmax-nvr.yaml
 ```
 
 ### Building from Source
@@ -361,45 +333,13 @@ git clone https://github.com/lalmax-pro/lalmax-nvr.git
 cd lalmax-nvr
 
 # Build for current architecture
-make build
+./scripts/unix/build.sh
 
 # Cross-compile for ARM64 (e.g., Raspberry Pi)
-make cross
+GOOS=linux GOARCH=arm64 ./scripts/unix/build.sh
 
 # Run tests
-make test
-
-# Lint
-make lint
-```
-
-To deploy a cross-compiled binary directly to a Raspberry Pi:
-
-```bash
-make deploy RPi_HOST=user@your-rpi-host
-make deploy-check RPi_HOST=user@your-rpi-host
-make rollback RPi_HOST=user@your-rpi-host
-```
-
-## Systemd Service
-
-The service file is maintained in [`deploy/lalmax-nvr.service`](../../deploy/lalmax-nvr.service). Key details:
-
-- **Binary**: `/usr/local/bin/lalmax-nvr`
-- **Config**: `/var/lib/lalmax-nvr/lalmax-nvr.yaml`
-- **Working directory**: `/var/lib/lalmax-nvr`
-- **Runs as**: `nvr` user
-- **Security**: `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=strict`, `ProtectHome`
-- **Memory limit**: `MemoryMax=512M` (commented out by default; uncomment for RPi 3B)
-
-Common commands:
-
-```bash
-sudo systemctl start lalmax-nvr
-sudo systemctl stop lalmax-nvr
-sudo systemctl restart lalmax-nvr
-sudo systemctl status lalmax-nvr
-sudo journalctl -u lalmax-nvr -f   # follow logs
+go test ./...
 ```
 
 ## Reverse Proxy
@@ -458,33 +398,32 @@ server {
 The Raspberry Pi 3B has 905MB RAM. For stable operation:
 
 - **Segment duration**: Use 30s (`segment_duration: "30s"`). Longer durations hold more frames in RAM (e.g., 120s = 60-80MB per segment).
-- **Memory limit**: Uncomment `MemoryMax=512M` in `deploy/lalmax-nvr.service` to prevent OOM kills.
+- **Memory limit**: If using Docker, set a container memory limit such as `512m`; otherwise use your process supervisor's memory limit.
 - **Storage**: Use an external USB disk (ext4) for recordings. The SD card will wear out quickly with continuous writes.
 - **Cameras**: Limit to 2-3 concurrent H.264/H.265 streams depending on resolution and bitrate.
 
 ## Updating
 
-### Using install.sh (Recommended)
+### Docker Update
 
 ```bash
-sudo ./install.sh --version v0.2.0
+docker compose pull
+docker compose up -d
 ```
 
-The script stops the service, replaces the binary, and restarts automatically. Config and recordings are preserved.
-
-### Manual Update
+### Binary Update
 
 ```bash
-sudo systemctl stop lalmax-nvr
-sudo cp lalmax-nvr /usr/local/bin/lalmax-nvr
-sudo chmod +x /usr/local/bin/lalmax-nvr
-sudo systemctl start lalmax-nvr
+# Stop the running process, replace the binary, then start it again
+cp lalmax-nvr /path/to/current/lalmax-nvr
+chmod +x /path/to/current/lalmax-nvr
+/path/to/current/lalmax-nvr -config ./data/lalmax-nvr.yaml
 ```
 
 Always back up your config before updating:
 
 ```bash
-sudo cp /var/lib/lalmax-nvr/lalmax-nvr.yaml /var/lib/lalmax-nvr/lalmax-nvr.yaml.backup
+cp ./data/lalmax-nvr.yaml ./data/lalmax-nvr.yaml.backup
 ```
 
 ## Monitoring
@@ -492,23 +431,22 @@ sudo cp /var/lib/lalmax-nvr/lalmax-nvr.yaml /var/lib/lalmax-nvr/lalmax-nvr.yaml.
 ### Logs
 
 ```bash
-sudo journalctl -u lalmax-nvr -n 100    # last 100 lines
-sudo journalctl -u lalmax-nvr -f        # follow
-sudo journalctl -u lalmax-nvr --since "1 hour ago"
+docker compose logs --tail 100 lalmax-nvr
+docker compose logs -f lalmax-nvr
 ```
 
 ### Health Check
 
 ```bash
-sudo systemctl is-active lalmax-nvr
 curl -f http://localhost:9090/api/health
+./lalmax-nvr health
 ```
 
 ### Disk Usage
 
 ```bash
-df -h /var/lib/lalmax-nvr
-du -sh /var/lib/lalmax-nvr/recordings
+df -h ./data
+du -sh ./data/recordings
 ```
 
 ### Prometheus Metrics
@@ -521,12 +459,11 @@ curl http://localhost:9090/metrics
 
 ## Troubleshooting
 
-### Service won't start
+### App won't start
 
 ```bash
-sudo journalctl -u lalmax-nvr -n 50
 # Verify config syntax
-sudo -u nvr /usr/local/bin/lalmax-nvr -config /var/lib/lalmax-nvr/lalmax-nvr.yaml
+./lalmax-nvr -config ./data/lalmax-nvr.yaml
 ```
 
 ### Camera connection failures
@@ -549,10 +486,9 @@ sudo lsof -i :2121
 ### Permission errors
 
 ```bash
-ls -la /var/lib/lalmax-nvr/
-sudo -u nvr ls /var/lib/lalmax-nvr/
+ls -la ./data/
 ```
 
 ### High memory usage
 
-Reduce `segment_duration` to 30s. On RPi 3B, uncomment `MemoryMax=512M` in the service file.
+Reduce `segment_duration` to 30s. On RPi 3B, prefer Docker or another supervisor with a 512MB memory limit.

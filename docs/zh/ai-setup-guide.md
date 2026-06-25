@@ -160,34 +160,13 @@ source ~/yolo-env/bin/activate
 pip install ultralytics fastapi uvicorn pillow numpy opencv-python-headless
 ```
 
-#### 设置 Systemd 服务
+#### 运行服务
 
-创建 `/etc/systemd/system/yolo-service.service`：
-
-```ini
-[Unit]
-Description=YOLO Detection Service
-After=network.target
-
-[Service]
-Type=simple
-User=your_username
-WorkingDirectory=/path/to/lalmax-nvr/docker/yolo-service
-Environment=PATH=/home/your_username/yolo-env/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/your_username/yolo-env/bin/python main.py
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-启用并启动服务：
+进入服务目录并以前台方式启动 YOLO 服务：
 
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable yolo-service
-sudo systemctl start yolo-service
+cd /path/to/lalmax-nvr/docker/yolo-service
+~/yolo-env/bin/python main.py
 ```
 
 ### Windows 系统

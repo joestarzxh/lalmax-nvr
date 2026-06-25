@@ -112,25 +112,13 @@ paths:
 
 This is simpler but only works on devices with a compatible CSI camera.
 
-### Systemd Service
+### Run the CSI Pipeline
 
-Create `/etc/systemd/system/rpicam-stream.service`:
+Start the CSI camera pipeline in the foreground:
 
-```ini
-[Unit]
-Description=CSI Camera Streaming Pipeline
-Wants=mediamtx.service
-After=mediamtx.service
-
-[Service]
-Type=simple
-User=nvr
-ExecStart=/bin/bash -c 'rpicam-vid -n --codec h264 --width 1280 --height 720 --framerate 15 -t 0 -o - | ffmpeg -fflags +genpts -i pipe:0 -c:v copy -f mpegts -flush_packets 0 "udp://127.0.0.1:8555?pkt_size=188"'
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
+```bash
+rpicam-vid -n --codec h264 --width 1280 --height 720 --framerate 15 -t 0 -o - | \
+  ffmpeg -fflags +genpts -i pipe:0 -c:v copy -f mpegts -flush_packets 0 "udp://127.0.0.1:8555?pkt_size=188"
 ```
 
 ## Multi-Camera Configuration
@@ -256,8 +244,8 @@ This error appears when using the UDP pipeline (rpicam-vid → ffmpeg → UDP). 
 
 ### Stream Not Available
 
-1. Check MediaMTX is running: `systemctl status mediamtx`
-2. Check logs: `journalctl -u mediamtx -f`
+1. Check MediaMTX is running: `docker compose ps mediamtx` or check the terminal where the binary is running
+2. Check logs: `docker compose logs -f mediamtx` or the binary's terminal output
 3. Verify camera is accessible: `ffplay rtsp://camera-ip:554/stream`
 4. Test MediaMTX path: `ffplay rtsp://localhost:8554/cam_name`
 

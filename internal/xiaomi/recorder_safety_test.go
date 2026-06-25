@@ -207,7 +207,8 @@ func TestForwardHLSSetsSPSPPSOnH264IDR(t *testing.T) {
 	var mu sync.Mutex
 	var receivedAU [][]byte
 	var receivedPTS int64
-	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+	r.Hub = model.NewStreamHub()
+	_ = r.Hub.Subscribe("hls", func(pts int64, au [][]byte) {
 		mu.Lock()
 		receivedPTS = pts
 		receivedAU = au
@@ -239,7 +240,8 @@ func TestForwardHLSSetsVPS_SPS_PPSOnH265IDR(t *testing.T) {
 
 	var mu sync.Mutex
 	var receivedAU [][]byte
-	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+	r.Hub = model.NewStreamHub()
+	_ = r.Hub.Subscribe("hls", func(pts int64, au [][]byte) {
 		mu.Lock()
 		receivedAU = au
 		mu.Unlock()
@@ -269,7 +271,8 @@ func TestForwardHLSH264NonIDRNoPrefix(t *testing.T) {
 
 	var mu sync.Mutex
 	var receivedAU [][]byte
-	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+	r.Hub = model.NewStreamHub()
+	_ = r.Hub.Subscribe("hls", func(pts int64, au [][]byte) {
 		mu.Lock()
 		receivedAU = au
 		mu.Unlock()
@@ -528,9 +531,9 @@ func TestRecorderDoubleStartFails(t *testing.T) {
 	require.Contains(t, err.Error(), "already running")
 }
 
-// --- SetOnHLSFrame concurrency ---
+// --- forwardHLS concurrency ---
 
-func TestSetOnHLSFrameConcurrent(t *testing.T) {
+func TestForwardHLSConcurrent(t *testing.T) {
 	t.Helper()
 	r := makeTestRecorder(t)
 	r.codec = model.FormatH264
@@ -540,8 +543,8 @@ func TestSetOnHLSFrameConcurrent(t *testing.T) {
 	var calls atomic.Int32
 	done := make(chan struct{})
 
-	// Set callback
-	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+	r.Hub = model.NewStreamHub()
+	_ = r.Hub.Subscribe("hls", func(pts int64, au [][]byte) {
 		calls.Add(1)
 	})
 

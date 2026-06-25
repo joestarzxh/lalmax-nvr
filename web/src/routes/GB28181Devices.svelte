@@ -239,6 +239,9 @@
                   <span class="px-2 py-1 text-xs rounded-full {device.is_online ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}">
                     {device.is_online ? '在线' : '离线'}
                   </span>
+                  <span class="px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-800">
+                    GB {device.gb_version || '2016'}
+                  </span>
                   <Info class="w-4 h-4 th-text-tertiary" />
                 </div>
               </div>
@@ -252,6 +255,10 @@
                   <div>
                     <p class="text-xs th-text-tertiary">设备ID</p>
                     <p class="text-sm font-mono th-text-primary">{device.device_id}</p>
+                  </div>
+                  <div>
+                    <p class="text-xs th-text-tertiary">协议版本</p>
+                    <p class="text-sm th-text-primary">GB/T 28181-{device.gb_version || '2016'}</p>
                   </div>
                   {#if device.manufacturer}
                     <div>

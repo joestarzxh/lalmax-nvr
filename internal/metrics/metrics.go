@@ -18,21 +18,10 @@ type Metrics struct {
 	StorageTotalBytes              prometheus.Gauge
 	RecordingCount                 prometheus.Gauge
 	CameraErrors                   *prometheus.CounterVec   // labels: camera_id, error_type
-	HLSFramesDropped               *prometheus.CounterVec   // labels: camera_id
-	HLSWriteErrors                 *prometheus.CounterVec   // labels: camera_id
-	HLSMuxerRestarts               *prometheus.CounterVec   // labels: camera_id
-	HLSActiveStreams               *prometheus.GaugeVec     // labels: camera_id
-	HLSSegmentSizeBytes            *prometheus.HistogramVec // labels: camera_id
-	HLSIdleEvictions               *prometheus.CounterVec   // labels: camera_id
 	WebRTCActivePeers              *prometheus.GaugeVec     // labels: camera_id
 	WebRTCFramesSent               *prometheus.CounterVec   // labels: camera_id
 	WebRTCFramesDropped            *prometheus.CounterVec   // labels: camera_id
 	WebRTCConnectionStateChanges   *prometheus.CounterVec   // labels: camera_id, state
-	FLVActiveStreams               *prometheus.GaugeVec     // labels: camera_id
-	FLVFramesSent                  *prometheus.CounterVec   // labels: camera_id
-	FLVFramesDropped               *prometheus.CounterVec   // labels: camera_id
-	FLVGOPCacheHits                *prometheus.CounterVec   // labels: camera_id
-	FLVGOPCacheMisses              *prometheus.CounterVec   // labels: camera_id
 	XiaomiDisconnects              *prometheus.CounterVec   // labels: camera_id, reason
 	XiaomiReconnects               *prometheus.CounterVec   // labels: camera_id
 	RemoteLogSentTotal             prometheus.Counter
@@ -114,32 +103,6 @@ func NewMetrics() *Metrics {
 		Name: "nvr_camera_errors_total",
 		Help: "Total camera errors, partitioned by camera and error type.",
 	}, []string{"camera_id", "error_type"})
-	hlsFramesDropped := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "nvr_hls_frames_dropped_total",
-		Help: "Total HLS frames dropped due to buffer full, partitioned by camera.",
-	}, []string{"camera_id"})
-	hlsWriteErrors := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "nvr_hls_write_errors_total",
-		Help: "Total HLS muxer write errors, partitioned by camera.",
-	}, []string{"camera_id"})
-	hlsMuxerRestarts := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "nvr_hls_muxer_restarts_total",
-		Help: "Total HLS muxer restarts due to write errors, partitioned by camera.",
-	}, []string{"camera_id"})
-	hlsActiveStreams := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "nvr_hls_active_streams",
-		Help: "Number of currently active HLS streams, partitioned by camera.",
-	}, []string{"camera_id"})
-	hlsSegmentSizeBytes := prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "nvr_hls_segment_size_bytes",
-		Help:    "Size of HLS segments in bytes, partitioned by camera.",
-		Buckets: []float64{64 * 1024, 128 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024, 8 * 1024 * 1024, 16 * 1024 * 1024},
-	}, []string{"camera_id"})
-	hlsIdleEvictions := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "nvr_hls_idle_evictions_total",
-		Help: "Total HLS streams evicted due to idle timeout, partitioned by camera.",
-	}, []string{"camera_id"})
-
 	webrtcActivePeers := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "nvr_webrtc_active_peers",
 		Help: "Active WebRTC PeerConnections, partitioned by camera.",
@@ -157,27 +120,6 @@ func NewMetrics() *Metrics {
 		Name: "nvr_webrtc_connection_state_changes_total",
 		Help: "Total WebRTC connection state changes, partitioned by camera and state.",
 	}, []string{"camera_id", "state"})
-	flvActiveStreams := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "nvr_flv_active_streams",
-		Help: "Active FLV streams, partitioned by camera.",
-	}, []string{"camera_id"})
-	flvFramesSent := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "nvr_flv_frames_sent_total",
-		Help: "Total FLV frames sent, partitioned by camera.",
-	}, []string{"camera_id"})
-	flvFramesDropped := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "nvr_flv_frames_dropped_total",
-		Help: "Total FLV frames dropped due to buffer full, partitioned by camera.",
-	}, []string{"camera_id"})
-	flvGOPCacheHits := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "nvr_flv_gop_cache_hits_total",
-		Help: "Total FLV GOP cache hits, partitioned by camera.",
-	}, []string{"camera_id"})
-
-	flvGOPCacheMisses := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "nvr_flv_gop_cache_misses_total",
-		Help: "Total FLV GOP cache misses (new viewer with no cached GOP), partitioned by camera.",
-	}, []string{"camera_id"})
 
 	xiaomiDisconnects := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "nvr_xiaomi_disconnects_total",
@@ -275,21 +217,10 @@ func NewMetrics() *Metrics {
 		storageTotalBytes,
 		recordingCount,
 		cameraErrors,
-		hlsFramesDropped,
-		hlsWriteErrors,
-		hlsMuxerRestarts,
-		hlsActiveStreams,
-		hlsSegmentSizeBytes,
-		hlsIdleEvictions,
 		webrtcActivePeers,
 		webrtcFramesSent,
 		webrtcFramesDropped,
 		webrtcConnectionStateChanges,
-		flvActiveStreams,
-		flvFramesSent,
-		flvFramesDropped,
-		flvGOPCacheHits,
-		flvGOPCacheMisses,
 		xiaomiDisconnects,
 		xiaomiReconnects,
 		remoteLogSentTotal,
@@ -321,21 +252,10 @@ func NewMetrics() *Metrics {
 		StorageTotalBytes:              storageTotalBytes,
 		RecordingCount:                 recordingCount,
 		CameraErrors:                   cameraErrors,
-		HLSFramesDropped:               hlsFramesDropped,
-		HLSWriteErrors:                 hlsWriteErrors,
-		HLSMuxerRestarts:               hlsMuxerRestarts,
-		HLSActiveStreams:               hlsActiveStreams,
-		HLSSegmentSizeBytes:            hlsSegmentSizeBytes,
-		HLSIdleEvictions:               hlsIdleEvictions,
 		WebRTCActivePeers:              webrtcActivePeers,
 		WebRTCFramesSent:               webrtcFramesSent,
 		WebRTCFramesDropped:            webrtcFramesDropped,
 		WebRTCConnectionStateChanges:   webrtcConnectionStateChanges,
-		FLVActiveStreams:               flvActiveStreams,
-		FLVFramesSent:                  flvFramesSent,
-		FLVFramesDropped:               flvFramesDropped,
-		FLVGOPCacheHits:                flvGOPCacheHits,
-		FLVGOPCacheMisses:              flvGOPCacheMisses,
 		XiaomiDisconnects:              xiaomiDisconnects,
 		XiaomiReconnects:               xiaomiReconnects,
 		RemoteLogSentTotal:             remoteLogSentTotal,

@@ -38,8 +38,6 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/mqtt"
 	"github.com/lalmax-pro/lalmax-nvr/internal/recorder"
-	"github.com/lalmax-pro/lalmax-nvr/internal/rtmp"
-	"github.com/lalmax-pro/lalmax-nvr/internal/srt"
 	"github.com/lalmax-pro/lalmax-nvr/internal/storage"
 	"github.com/lalmax-pro/lalmax-nvr/internal/streamhistory"
 	ui "github.com/lalmax-pro/lalmax-nvr/internal/ui"
@@ -367,11 +365,11 @@ type App struct {
 	recSched     *recorder.RecordingScheduler
 
 	// Optional network services (nil when disabled)
-	mqttClient   *mqtt.Client
-	ftpServer    *ftp.Server
-	rtmpIngest   *rtmp.IngestHandler
-	srtIngest    *srt.IngestHandler
-	gb28181Svr   *gb28181.Server
+	mqttClient *mqtt.Client
+	ftpServer  *ftp.Server
+	rtmpIngest *media.IngestHandler
+	srtIngest  *media.IngestHandler
+	gb28181Svr *gb28181.Server
 
 	// Stream management
 	banMgr     *ban.Manager
@@ -538,59 +536,59 @@ func NewApp(cfg *config.Config, configPath string) (*App, error) {
 
 	// Step 7: media runtime
 	a.media = media.NewRuntime(cfg, a.metrics)
-	if cfg.Media.Enabled {
-		// Create ban manager before media engine (provides IAuthentication)
-		a.banMgr = ban.NewManager(db)
 
-		// Create media engine with ban manager's auth for proactive rejection
-		engine, err := newMediaEngine(cfg, lalmaxserver.WithAuthentication(a.banMgr))
-		if err != nil {
-			db.Close()
-			return nil, fmt.Errorf("media engine: %w", err)
+	// Create ban manager before media engine (provides IAuthentication)
+	a.banMgr = ban.NewManager(db)
+
+	// Create media engine with ban manager's auth for proactive rejection
+	engine, err := newMediaEngine(cfg, lalmaxserver.WithAuthentication(a.banMgr))
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("media engine: %w", err)
+	}
+	a.mediaEngine = engine
+	a.camMgr.SetMediaEngine(engine)
+
+	// Set kick function on ban manager (deferred to break circular dependency)
+	a.banMgr.SetKickFunc(func(ctx context.Context, sessionID string) error {
+		return engine.KickSession(ctx, sessionID)
+	})
+
+	// Create stream history manager
+	a.historyMgr = streamhistory.NewManager(db, engine)
+	if emb, ok := engine.(*media.EmbeddedLalmax); ok {
+		if _, err := a.historyMgr.RegisterAsHookPlugin(emb.Server()); err != nil {
+			slog.Warn("failed to register history hook plugin", "error", err)
 		}
-		a.mediaEngine = engine
-		a.camMgr.SetMediaEngine(engine)
+	}
 
-		// Set kick function on ban manager (deferred to break circular dependency)
-		a.banMgr.SetKickFunc(func(ctx context.Context, sessionID string) error {
-			return engine.KickSession(ctx, sessionID)
-		})
-
-		// Create stream history manager
-		a.historyMgr = streamhistory.NewManager(db, engine)
-		if emb, ok := engine.(*media.EmbeddedLalmax); ok {
-			if _, err := a.historyMgr.RegisterAsHookPlugin(emb.Server()); err != nil {
-				slog.Warn("failed to register history hook plugin", "error", err)
+	// Step 7.5: GB28181 SIP server (optional)
+	if cfg.GB28181.Enabled != nil && *cfg.GB28181.Enabled {
+		// Skip GB28181 if ID is not configured
+		if cfg.GB28181.ID == "" {
+			slog.Warn("GB28181 enabled but id is empty, skipping. Set gb28181.id in config to enable")
+		} else {
+			gbCfg := &gb28181.Config{
+				Enabled:         true,
+				Host:            cfg.GB28181.Host,
+				Port:            cfg.GB28181.Port,
+				ID:              cfg.GB28181.ID,
+				Password:        cfg.GB28181.Password,
+				MediaIP:         cfg.GB28181.MediaIP,
+				MediaPort:       cfg.GB28181.MediaPort,
+				StandardVersion: cfg.GB28181.StandardVersion,
 			}
-		}
-
-		// Step 7.5: GB28181 SIP server (optional)
-		if cfg.GB28181.Enabled != nil && *cfg.GB28181.Enabled {
-			// Skip GB28181 if ID is not configured
-			if cfg.GB28181.ID == "" {
-				slog.Warn("GB28181 enabled but id is empty, skipping. Set gb28181.id in config to enable")
+			if err := gbCfg.Validate(); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("gb28181 config: %w", err)
+			}
+			gbCfg.ApplyDefaults()
+			gbSvr, _ := gb28181.NewServer(gbCfg, engine, db)
+			a.gb28181Svr = gbSvr
+			if cfg.GB28181.MediaPort > 0 {
+				slog.Info("GB28181 SIP server started (single port mode)", "port", cfg.GB28181.Port, "media_port", cfg.GB28181.MediaPort, "id", cfg.GB28181.ID)
 			} else {
-				gbCfg := &gb28181.Config{
-					Enabled:   true,
-					Host:      cfg.GB28181.Host,
-					Port:      cfg.GB28181.Port,
-					ID:        cfg.GB28181.ID,
-					Password:  cfg.GB28181.Password,
-					MediaIP:   cfg.GB28181.MediaIP,
-					MediaPort: cfg.GB28181.MediaPort,
-				}
-				if err := gbCfg.Validate(); err != nil {
-					db.Close()
-					return nil, fmt.Errorf("gb28181 config: %w", err)
-				}
-				gbCfg.ApplyDefaults()
-				gbSvr, _ := gb28181.NewServer(gbCfg, engine, db)
-				a.gb28181Svr = gbSvr
-				if cfg.GB28181.MediaPort > 0 {
-					slog.Info("GB28181 SIP server started (single port mode)", "port", cfg.GB28181.Port, "media_port", cfg.GB28181.MediaPort, "id", cfg.GB28181.ID)
-				} else {
-					slog.Info("GB28181 SIP server started (multi port mode)", "port", cfg.GB28181.Port, "id", cfg.GB28181.ID)
-				}
+				slog.Info("GB28181 SIP server started (multi port mode)", "port", cfg.GB28181.Port, "id", cfg.GB28181.ID)
 			}
 		}
 	}
@@ -663,13 +661,14 @@ func (a *App) RestartGB28181(ctx context.Context, cfg *config.GB28181Config) err
 
 	// Convert config
 	gbCfg := &gb28181.Config{
-		Enabled:   enabled,
-		Host:      cfg.Host,
-		Port:      cfg.Port,
-		ID:        cfg.ID,
-		Password:  cfg.Password,
-		MediaIP:   cfg.MediaIP,
-		MediaPort: cfg.MediaPort,
+		Enabled:         enabled,
+		Host:            cfg.Host,
+		Port:            cfg.Port,
+		ID:              cfg.ID,
+		Password:        cfg.Password,
+		MediaIP:         cfg.MediaIP,
+		MediaPort:       cfg.MediaPort,
+		StandardVersion: cfg.StandardVersion,
 	}
 	if err := gbCfg.Validate(); err != nil {
 		return fmt.Errorf("gb28181 config: %w", err)
@@ -693,7 +692,7 @@ func (a *App) buildRouter() http.Handler {
 	cfg := a.cfg
 
 	cloudProxy := api.NewLocalXiaomiAuth(cfg)
-	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.media.HLS(), a.configPath, a.mergeMgr, cloudProxy)
+	handler := api.NewHandler(a.db, a.store, a.authMW, cfg, a.camMgr, a.configPath, a.mergeMgr, cloudProxy)
 	handler.SetMultiUserAuthMW(a.multiUserMW)
 
 	// Wire streaming managers
@@ -703,7 +702,6 @@ func (a *App) buildRouter() http.Handler {
 		handler.SetGB28181ServerInstance(a.gb28181Svr)
 	}
 	handler.SetGB28181Restarter(a)
-	handler.SetFLVManager(a.media.FLV())
 	handler.SetWSManager(a.media.WS())
 	handler.SetHealthManager(a.healthMgr)
 	handler.SetStabilityProvider(a.healthMgr)
@@ -762,20 +760,10 @@ func (a *App) buildRouter() http.Handler {
 		})
 		// HTTP fMP4 stream handler is available when media engine is enabled
 		reg.Register(&api.FMP4StreamHandler{})
-	} else if cfg.IsHLSEnabled() {
-		reg.Register(&api.HLSStreamHandler{Mgr: a.media.HLS()})
-		reg.Register(&api.LLHLSStreamHandler{
-			HLSStreamHandler:  api.HLSStreamHandler{Mgr: a.media.HLS()},
-			LowLatencyEnabled: cfg.HLS.LowLatency,
-		})
-		if a.media.FLV() != nil {
-			reg.Register(&api.FLVStreamHandler{})
-		}
 	}
 	// WebSocket stream handler is always available
 	reg.Register(&api.WSStreamHandler{})
 	handler.SetStreamRegistry(reg)
-
 
 	// WebDAV
 	var davHandler http.Handler
@@ -823,47 +811,6 @@ func (a *App) buildRouter() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(a.authMW)
 		uploadHandler.RegisterRoutes(r)
-	})
-
-	// GB28181 API routes (authenticated)
-	// Always register routes, handler will return empty data if GB28181 is not enabled
-	gbHandler := api.NewDynamicGB28181Handler(func() *gb28181.Server {
-		return a.gb28181Svr
-	}, a.camMgr, a.db, a.mediaEngine)
-	r.Group(func(r chi.Router) {
-		r.Use(a.authMW)
-		// Core GB28181
-		r.Get("/api/gb28181/devices", gbHandler.ListDevices)
-		r.Post("/api/gb28181/play", gbHandler.Play)
-		r.Post("/api/gb28181/stop", gbHandler.StopPlay)
-		r.Post("/api/gb28181/ptz", gbHandler.PTZControl)
-		r.Post("/api/gb28181/record_info", gbHandler.RecordInfo)
-		r.Post("/api/gb28181/playback", gbHandler.Playback)
-		r.Post("/api/gb28181/playback/speed", gbHandler.PlaySpeed)
-		r.Post("/api/gb28181/playback/seek", gbHandler.PlaySeek)
-		r.Post("/api/gb28181/playback/pause", gbHandler.PlayPause)
-		r.Post("/api/gb28181/playback/resume", gbHandler.PlayResume)
-		// Platform cascading
-		r.Get("/api/gb28181/platforms", gbHandler.ListPlatforms)
-		r.Post("/api/gb28181/platforms", gbHandler.AddPlatform)
-		r.Delete("/api/gb28181/platforms", gbHandler.DeletePlatform)
-		// Broadcast/Talk
-		r.Post("/api/gb28181/broadcast/start", gbHandler.StartBroadcast)
-		r.Post("/api/gb28181/broadcast/stop", gbHandler.StopBroadcast)
-		r.Get("/api/gb28181/talk/ws", gbHandler.HandleTalkWS)
-		// WHIP Talk
-		r.Post("/api/gb28181/talk/start", gbHandler.HandleStartTalkWhip)
-		r.Post("/api/gb28181/talk/stop", gbHandler.HandleStopTalkWhip)
-		// Alarm
-		r.Get("/api/gb28181/alarms", gbHandler.ListAlarms)
-		// Platform Events (Cascade History)
-		r.Get("/api/gb28181/platform/events", gbHandler.ListPlatformEvents)
-		r.Get("/api/gb28181/platform/status", gbHandler.GetPlatformStatus)
-		// Download
-		r.Post("/api/gb28181/download/start", gbHandler.StartDownload)
-		r.Post("/api/gb28181/download/batch", gbHandler.BatchDownload)
-		r.Post("/api/gb28181/download/stop", gbHandler.StopDownload)
-		r.Get("/api/gb28181/downloads", gbHandler.ListDownloads)
 	})
 
 	// Static UI — serve from embedded filesystem
@@ -963,7 +910,7 @@ func (a *App) Start() error {
 
 		// Wire RTMP ingest via lalmax
 		if a.cfg.RTMP.Enabled != nil && *a.cfg.RTMP.Enabled {
-			keyToCamera := rtmp.BuildReverseMap(a.cfg.RTMP.StreamKeys)
+			keyToCamera := media.BuildReverseMap(a.cfg.RTMP.StreamKeys)
 			resolver := func(streamName string) (string, bool) {
 				if camID, ok := keyToCamera[streamName]; ok {
 					return camID, true
@@ -976,7 +923,7 @@ func (a *App) Start() error {
 				return "", false
 			}
 
-			a.rtmpIngest = rtmp.NewIngestHandler(a.mediaEngine, resolver, nil, nil)
+			a.rtmpIngest = media.NewRTMPIngestHandler(a.mediaEngine, resolver, nil, nil)
 			if err := a.rtmpIngest.Start(ctx); err != nil {
 				slog.Warn("rtmp ingest handler failed to start", "error", err)
 			}
@@ -993,7 +940,7 @@ func (a *App) Start() error {
 				return "", false
 			}
 
-			a.srtIngest = srt.NewIngestHandler(a.mediaEngine, srtResolver, nil, nil)
+			a.srtIngest = media.NewSRTIngestHandler(a.mediaEngine, srtResolver, nil, nil)
 			if err := a.srtIngest.Start(ctx); err != nil {
 				slog.Warn("srt ingest handler failed to start", "error", err)
 			}
@@ -1111,7 +1058,6 @@ func (a *App) Stop() error {
 			log.Info("stopping health manager")
 			a.healthMgr.Stop()
 		}
-
 
 		// 7.9. Recording scheduler
 		if a.recSched != nil {

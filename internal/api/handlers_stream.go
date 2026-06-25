@@ -1,10 +1,8 @@
 package api
 
 import (
-	"errors"
 	"log/slog"
 
-	"github.com/lalmax-pro/lalmax-nvr/internal/media"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/recorder"
 	"github.com/lalmax-pro/lalmax-nvr/internal/xiaomi"
@@ -114,11 +112,9 @@ func (r *StreamRegistry) Handler(name string) StreamHandler {
 // --- HLSStreamHandler ---
 
 // HLSStreamHandler implements StreamHandler for HLS live streaming.
-// It encapsulates the HLS-specific logic previously scattered across
-// type-switch blocks in handlers_hls.go.
-type HLSStreamHandler struct {
-	Mgr media.HLS
-}
+// HLS is proxied to the lalmax media engine; this struct exists for protocol
+// capability reporting in the StreamRegistry.
+type HLSStreamHandler struct{}
 
 // Name returns the protocol identifier for HLS.
 func (h *HLSStreamHandler) Name() string { return "hls" }
@@ -128,145 +124,12 @@ func (h *HLSStreamHandler) CanHandle(codec model.Format) bool {
 	return codec == model.FormatH264 || codec == model.FormatH265
 }
 
-// StartStream starts an HLS stream for the given camera.
-// It extracts codec parameters from the recorder and subscribes the HLS
-// manager to the recorder's StreamHub for frame delivery.
-func (h *HLSStreamHandler) StartStream(camID string, rec model.Recorder, opts StreamStartOptions) error {
-	if h.Mgr == nil {
-		return errors.New("HLS manager not available")
-	}
-
-	hub := getRecorderHub(rec)
-
-	// Determine codec and extract parameters from recorder.
-	// We use model.HLSProvider interface to get codec params (format-agnostic),
-	// or fall back to concrete type access for the unwrapped recorder.
-	if provider, ok := rec.(model.HLSProvider); ok {
-		codec, sps, pps, vps := provider.CodecParams()
-		return h.startFromProvider(camID, codec, sps, pps, vps, hub, provider, opts)
-	}
-
-	// For recorders that don't implement HLSProvider, unwrap ONVIF delegation
-	// and use concrete type access for SPS/PPS/VPS.
-	actualRec := unwrapDelegate(rec)
-
-	switch r := actualRec.(type) {
-	case *recorder.H264Recorder:
-		sps := r.SPS()
-		pps := r.PPS()
-		if sps == nil || pps == nil {
-			return errors.New("SPS/PPS not available yet, waiting for video stream")
-		}
-		if err := h.Mgr.StartStream(camID, sps, pps, opts.MaxFPS); err != nil {
-			return err
-		}
-		h.subscribeHub(camID, hub, false, opts)
-
-	case *recorder.H265Recorder:
-		vps := r.VPS()
-		sps := r.SPS()
-		pps := r.PPS()
-		if vps == nil || sps == nil || pps == nil {
-			return errors.New("VPS/SPS/PPS not available yet, waiting for video stream")
-		}
-		if err := h.Mgr.StartStreamH265(camID, vps, sps, pps, opts.MaxFPS); err != nil {
-			return err
-		}
-		h.subscribeHub(camID, hub, true, opts)
-
-	default:
-		return &model.HLSSupportedCodecError{CameraID: camID}
-	}
-
+func (h *HLSStreamHandler) StartStream(_ string, _ model.Recorder, _ StreamStartOptions) error {
 	return nil
 }
 
-// startFromProvider starts an HLS stream using the HLSProvider interface.
-func (h *HLSStreamHandler) startFromProvider(
-	camID string,
-	codec model.Format,
-	sps, pps, vps []byte,
-	hub *model.StreamHub,
-	provider model.HLSProvider,
-	opts StreamStartOptions,
-) error {
-	switch codec {
-	case model.FormatH264:
-		if sps == nil || pps == nil {
-			return errors.New("codec params not ready yet, waiting for video stream")
-		}
-		if err := h.Mgr.StartStream(camID, sps, pps, opts.MaxFPS); err != nil {
-			return err
-		}
-		// Use deprecated SetOnHLSFrame for HLSProvider backward compat
-		provider.SetOnHLSFrame(func(pts int64, au [][]byte) {
-			_ = h.Mgr.WriteH264(camID, pts, au)
-		})
-
-	case model.FormatH265:
-		if sps == nil || pps == nil {
-			return errors.New("codec params not ready yet, waiting for video stream")
-		}
-		if vps == nil {
-			return errors.New("VPS not ready yet, waiting for video stream")
-		}
-		if err := h.Mgr.StartStreamH265(camID, vps, sps, pps, opts.MaxFPS); err != nil {
-			return err
-		}
-		provider.SetOnHLSFrame(func(pts int64, au [][]byte) {
-			_ = h.Mgr.WriteH265(camID, pts, au)
-		})
-
-	default:
-		return &model.HLSSupportedCodecError{CameraID: camID}
-	}
+func (h *HLSStreamHandler) StopStream(_ string) error {
 	return nil
-}
-
-// subscribeHub handles the sub-stream URL / main stream subscription logic.
-func (h *HLSStreamHandler) subscribeHub(camID string, hub *model.StreamHub, isH265 bool, opts StreamStartOptions) {
-	if hub == nil {
-		return
-	}
-
-	// Check if sub-stream URL is configured
-	if opts.SubStreamURL != "" {
-		fallback := func() {
-			_ = subscribeHLS(hub, camID, h.Mgr, isH265)
-		}
-		if subErr := h.Mgr.StartSubStreamReader(camID, opts.SubStreamURL, isH265, fallback); subErr != nil {
-			streamLogger.Warn("failed to start HLS sub-stream reader, falling back to main stream",
-				"camera_id", camID, "error", subErr)
-			fallback()
-		}
-		// Sub-stream reader is running — do NOT subscribe hub on recorder
-	} else {
-		_ = subscribeHLS(hub, camID, h.Mgr, isH265)
-	}
-}
-
-// StopStreamWithRecorder stops the HLS stream for the given camera and unsubscribes
-// from the recorder's StreamHub.
-func (h *HLSStreamHandler) StopStreamWithRecorder(camID string, rec model.Recorder) error {
-	if h.Mgr == nil || !h.Mgr.IsActive(camID) {
-		return nil
-	}
-
-	// Unsubscribe HLS consumer from StreamHub
-	if rec != nil {
-		hub := getRecorderHub(rec)
-		if hub != nil {
-			hub.Unsubscribe("hls")
-		}
-	}
-
-	h.Mgr.StopStream(camID)
-	return nil
-}
-
-// StopStream implements StreamHandler.StopStream.
-func (h *HLSStreamHandler) StopStream(camID string) error {
-	return h.StopStreamWithRecorder(camID, nil)
 }
 
 var streamLogger = slog.Default().With("component", "stream-handler")
@@ -292,14 +155,14 @@ func unwrapDelegate(rec model.Recorder) model.Recorder {
 }
 
 // getCodecParams extracts codec parameters from a recorder.
-// Uses HLSProvider interface first, then falls back to concrete type access.
+// Uses CodecParamsProvider interface first, then falls back to concrete type access.
 func getCodecParams(rec model.Recorder) (codec model.Format, sps, pps, vps []byte) {
-	if provider, ok := rec.(model.HLSProvider); ok {
+	if provider, ok := rec.(model.CodecParamsProvider); ok {
 		codec, sps, pps, vps = provider.CodecParams()
 		if sps != nil && pps != nil {
 			return
 		}
-		// HLSProvider returned empty params — fall through to concrete type switch
+		// CodecParamsProvider returned empty params — fall through to concrete type switch
 	}
 
 	actualRec := unwrapDelegate(rec)
@@ -339,23 +202,6 @@ func getStreamHub(rec model.Recorder) *model.StreamHub {
 		return r.Hub
 	}
 	return nil
-}
-
-// getAudioConfig extracts audio codec and AudioSpecificConfig from a recorder.
-// Returns ("", nil) if the recorder has no audio.
-func getAudioConfig(rec model.Recorder) (audioCodec string, audioConfig []byte) {
-	actualRec := unwrapDelegate(rec)
-	switch r := actualRec.(type) {
-	case *recorder.H264Recorder:
-		if r.AudioEnabled() {
-			return r.AudioCodec(), r.AudioMuxerConfig()
-		}
-	case *recorder.H265Recorder:
-		if r.AudioEnabled() {
-			return r.AudioCodec(), r.AudioMuxerConfig()
-		}
-	}
-	return "", nil
 }
 
 // SetStreamRegistry sets the stream registry on the handler for protocol queries.
@@ -438,35 +284,6 @@ type ConditionalHandler interface {
 	SupportedCodec(codec model.Format) bool
 	// UnavailabilityReason returns a human-readable reason why the protocol is unavailable.
 	UnavailabilityReason(codec model.Format) string
-}
-
-// --- LLHLSStreamHandler ---
-
-// LLHLSStreamHandler implements StreamHandler for Low-Latency HLS.
-// It wraps HLSStreamHandler but is registered separately in the StreamRegistry
-// so the frontend can discover LL-HLS as a distinct protocol.
-// When low-latency is disabled, it appears as unavailable with a reason.
-type LLHLSStreamHandler struct {
-	HLSStreamHandler
-	LowLatencyEnabled bool
-}
-
-func (h *LLHLSStreamHandler) Name() string { return "ll-hls" }
-
-// CanHandle returns true only when low-latency is actually enabled.
-// When disabled, the ConditionalHandler interface provides the "greyed out" UX.
-func (h *LLHLSStreamHandler) CanHandle(codec model.Format) bool {
-	return h.LowLatencyEnabled && (codec == model.FormatH264 || codec == model.FormatH265)
-}
-
-// SupportedCodec returns true for codecs that LL-HLS would support if enabled.
-func (h *LLHLSStreamHandler) SupportedCodec(codec model.Format) bool {
-	return codec == model.FormatH264 || codec == model.FormatH265
-}
-
-// UnavailabilityReason returns why LL-HLS is not available.
-func (h *LLHLSStreamHandler) UnavailabilityReason(_ model.Format) string {
-	return "Enable low-latency HLS in Settings"
 }
 
 // --- WSStreamHandler ---

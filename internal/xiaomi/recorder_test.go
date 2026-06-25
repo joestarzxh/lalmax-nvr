@@ -313,11 +313,11 @@ func TestXiaomiRecorderCodecDetectionH265(t *testing.T) {
 	require.NotNil(t, r.pps)
 }
 
-// --- HLSProvider tests ---
+// --- CodecParamsProvider tests ---
 
-func TestXiaomiRecorderHLSProviderInterface(t *testing.T) {
+func TestXiaomiRecorderCodecParamsProviderInterface(t *testing.T) {
 	t.Helper()
-	// Compile-time check already exists: var _ model.HLSProvider = (*XiaomiRecorder)(nil)
+	// Compile-time check already exists: var _ model.CodecParamsProvider = (*XiaomiRecorder)(nil)
 	// Runtime check that the interface methods work.
 	r := NewXiaomiRecorder(XiaomiRecorderConfig{
 		CameraID: "test-cam",
@@ -356,7 +356,8 @@ func TestXiaomiRecorderHLSFrameCallback(t *testing.T) {
 	var mu sync.Mutex
 	var receivedPTS int64
 	var receivedAU [][]byte
-	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+	r.Hub = model.NewStreamHub()
+	_ = r.Hub.Subscribe("hls", func(pts int64, au [][]byte) {
 		mu.Lock()
 		receivedPTS = pts
 		receivedAU = au

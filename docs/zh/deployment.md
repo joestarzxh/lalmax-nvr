@@ -4,29 +4,6 @@
 
 ## 安装方式
 
-### 一键安装脚本（推荐）
-
-安装脚本会自动下载最新版本的二进制文件、创建 `nvr` 系统用户、初始化配置并安装 systemd 服务。
-
-```bash
-# 安装最新版本
-curl -fsSL https://raw.githubusercontent.com/lalmax-pro/lalmax-nvr/main/install.sh | sudo bash
-```
-
-安装指定版本：
-
-```bash
-sudo ./install.sh --version v0.2.0
-```
-
-卸载（保留 `/var/lib/lalmax-nvr` 中的录像数据）：
-
-```bash
-sudo ./install.sh --uninstall
-```
-
-如果配置文件不存在，安装程序会提示输入管理员密码。安装完成后，Web 界面可通过 `http://<主机IP>:9090` 访问。
-
 ### Docker
 
 #### 前置条件
@@ -40,6 +17,7 @@ sudo ./install.sh --uninstall
 
 #### 快速启动
 
+```bash
 # 方式 A：直接运行 — 自动初始化（推荐）
 docker run -d \
   --name lalmax-nvr \
@@ -60,6 +38,7 @@ docker run -d \
 # 方式 C：使用 docker-compose.yml
 mkdir -p data
 docker compose up -d
+```
 
 > **首次设置**：在没有配置文件的情况下启动时，lalmax-nvr 会自动生成默认配置并以**设置模式**运行 — 所有 API 端点无需认证即可访问。通过 Web UI 设置页面或 `NVR_PASSWORD` 环境变量设置密码。一旦设置密码，将强制执行身份验证。
 
@@ -68,6 +47,7 @@ docker compose up -d
 - **自动初始化**：如果在 `/data/lalmax-nvr.yaml` 不存在配置文件，会自动生成包含合理默认值的配置。无需手动设置。
 - **初始密码**：通过 `NVR_PASSWORD` 环境变量设置。如果未设置，应用将以设置模式启动（无认证） — 通过 Web UI 设置页面设置密码。
 - **数据目录**：通过 `NVR_DATA_DIR` 环境变量，`storage.root_dir` 在 Docker 容器中自动设置为 `/data`。
+
 #### docker-compose.yml 详解
 
 完整的配置文件及各字段说明：
@@ -126,11 +106,8 @@ services:
 # 多阶段构建（在容器内编译前端和后端，需要网络拉取基础镜像）
 docker build -t lalmax-nvr .
 
-# 交叉编译 ARM64（在主机上交叉编译，不需要 QEMU）
-make docker-build-arm64
-
-# 构建所有架构
-make docker-build-all
+# 交叉编译 ARM64（在主机上交叉编译）
+GOOS=linux GOARCH=arm64 ./scripts/unix/build.sh
 ```
 
 本地构建后，将 `docker-compose.yml` 中的 `image:` 替换为本地标签。
@@ -328,30 +305,25 @@ ONVIF 自动发现使用 WS-Discovery 协议（UDP 组播至 `239.255.255.250:37
 
 ### 手动安装
 
-如果你需要完全控制安装过程，或者安装脚本不适用于你的场景：
+如果你需要完全控制安装过程且不使用 Docker：
 
 ```bash
 # 1. 从 GitHub Releases 下载二进制文件
 #    https://github.com/lalmax-pro/lalmax-nvr/releases
-sudo cp lalmax-nvr /usr/local/bin/lalmax-nvr
-sudo chmod +x /usr/local/bin/lalmax-nvr
+chmod +x lalmax-nvr
 
-# 2. 创建系统用户和数据目录
-sudo useradd -r -s /bin/false -d /var/lib/lalmax-nvr nvr
-sudo mkdir -p /var/lib/lalmax-nvr
-sudo chown -R nvr:nvr /var/lib/lalmax-nvr
+# 2. 创建数据目录
+mkdir -p ./data
 
 # 3. 初始化配置（提示输入管理员密码）
-sudo -u nvr /usr/local/bin/lalmax-nvr init \
+./lalmax-nvr init \
     --password <your-password> \
-    --data-dir /var/lib/lalmax-nvr \
-    --config /var/lib/lalmax-nvr/lalmax-nvr.yaml \
+    --data-dir ./data \
+    --config ./data/lalmax-nvr.yaml \
     --listen ":9090"
 
-# 4. 安装 systemd 服务
-sudo cp deploy/lalmax-nvr.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now lalmax-nvr
+# 4. 前台启动
+./lalmax-nvr -config ./data/lalmax-nvr.yaml
 ```
 
 ### 从源码编译
@@ -361,45 +333,13 @@ git clone https://github.com/lalmax-pro/lalmax-nvr.git
 cd lalmax-nvr
 
 # 编译当前架构版本
-make build
+./scripts/unix/build.sh
 
 # 交叉编译 ARM64 版本（如树莓派）
-make cross
+GOOS=linux GOARCH=arm64 ./scripts/unix/build.sh
 
 # 运行测试
-make test
-
-# 代码检查
-make lint
-```
-
-直接将交叉编译的二进制文件部署到树莓派：
-
-```bash
-make deploy RPi_HOST=user@your-rpi-host
-make deploy-check RPi_HOST=user@your-rpi-host
-make rollback RPi_HOST=user@your-rpi-host
-```
-
-## Systemd 服务
-
-服务文件维护在 [`deploy/lalmax-nvr.service`](../../deploy/lalmax-nvr.service) 中。关键配置：
-
-- **二进制文件**：`/usr/local/bin/lalmax-nvr`
-- **配置文件**：`/var/lib/lalmax-nvr/lalmax-nvr.yaml`
-- **工作目录**：`/var/lib/lalmax-nvr`
-- **运行用户**：`nvr`
-- **安全加固**：`NoNewPrivileges`、`PrivateTmp`、`ProtectSystem=strict`、`ProtectHome`
-- **内存限制**：`MemoryMax=512M`（默认注释掉；树莓派 3B 建议取消注释）
-
-常用命令：
-
-```bash
-sudo systemctl start lalmax-nvr
-sudo systemctl stop lalmax-nvr
-sudo systemctl restart lalmax-nvr
-sudo systemctl status lalmax-nvr
-sudo journalctl -u lalmax-nvr -f   # 跟踪日志
+go test ./...
 ```
 
 ## 反向代理
@@ -458,33 +398,32 @@ server {
 树莓派 3B 仅有 905MB 内存。为保证稳定运行：
 
 - **片段时长**：使用 30 秒（`segment_duration: "30s"`）。更长的片段会在内存中缓存更多帧（如 120 秒片段占用 60-80MB）。
-- **内存限制**：在 `deploy/lalmax-nvr.service` 中取消注释 `MemoryMax=512M`，防止 OOM。
+- **内存限制**：如果使用 Docker，设置 `512m` 之类的容器内存限制；否则使用你的进程管理器限制内存。
 - **存储**：使用外接 USB 硬盘（ext4）存储录像。SD 卡在持续写入场景下会快速磨损。
 - **摄像头数量**：建议同时录制不超过 2-3 路 H.264/H.265 流，具体取决于分辨率和码率。
 
 ## 更新
 
-### 使用安装脚本（推荐）
+### Docker 更新
 
 ```bash
-sudo ./install.sh --version v0.2.0
+docker compose pull
+docker compose up -d
 ```
 
-脚本会自动停止服务、替换二进制文件并重启。配置和录像数据不受影响。
-
-### 手动更新
+### 二进制更新
 
 ```bash
-sudo systemctl stop lalmax-nvr
-sudo cp lalmax-nvr /usr/local/bin/lalmax-nvr
-sudo chmod +x /usr/local/bin/lalmax-nvr
-sudo systemctl start lalmax-nvr
+# 停止正在运行的进程，替换二进制文件，然后重新启动
+cp lalmax-nvr /path/to/current/lalmax-nvr
+chmod +x /path/to/current/lalmax-nvr
+/path/to/current/lalmax-nvr -config ./data/lalmax-nvr.yaml
 ```
 
 更新前务必备份配置：
 
 ```bash
-sudo cp /var/lib/lalmax-nvr/lalmax-nvr.yaml /var/lib/lalmax-nvr/lalmax-nvr.yaml.backup
+cp ./data/lalmax-nvr.yaml ./data/lalmax-nvr.yaml.backup
 ```
 
 ## 监控
@@ -492,23 +431,22 @@ sudo cp /var/lib/lalmax-nvr/lalmax-nvr.yaml /var/lib/lalmax-nvr/lalmax-nvr.yaml.
 ### 日志
 
 ```bash
-sudo journalctl -u lalmax-nvr -n 100    # 最近 100 行
-sudo journalctl -u lalmax-nvr -f        # 实时跟踪
-sudo journalctl -u lalmax-nvr --since "1 hour ago"
+docker compose logs --tail 100 lalmax-nvr
+docker compose logs -f lalmax-nvr
 ```
 
 ### 健康检查
 
 ```bash
-sudo systemctl is-active lalmax-nvr
 curl -f http://localhost:9090/api/health
+./lalmax-nvr health
 ```
 
 ### 磁盘使用
 
 ```bash
-df -h /var/lib/lalmax-nvr
-du -sh /var/lib/lalmax-nvr/recordings
+df -h ./data
+du -sh ./data/recordings
 ```
 
 ### Prometheus 指标
@@ -521,12 +459,11 @@ curl http://localhost:9090/metrics
 
 ## 故障排除
 
-### 服务无法启动
+### 应用无法启动
 
 ```bash
-sudo journalctl -u lalmax-nvr -n 50
 # 验证配置文件语法
-sudo -u nvr /usr/local/bin/lalmax-nvr -config /var/lib/lalmax-nvr/lalmax-nvr.yaml
+./lalmax-nvr -config ./data/lalmax-nvr.yaml
 ```
 
 ### 摄像头连接失败
@@ -549,10 +486,9 @@ sudo lsof -i :2121
 ### 权限错误
 
 ```bash
-ls -la /var/lib/lalmax-nvr/
-sudo -u nvr ls /var/lib/lalmax-nvr/
+ls -la ./data/
 ```
 
 ### 内存占用过高
 
-将 `segment_duration` 减小到 30 秒。在树莓派 3B 上，建议在服务文件中取消注释 `MemoryMax=512M`。
+将 `segment_duration` 减小到 30 秒。在树莓派 3B 上，建议使用 Docker 或其他进程管理器设置 512MB 内存限制。

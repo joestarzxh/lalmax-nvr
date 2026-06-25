@@ -240,13 +240,11 @@ Lalmax's built-in RTMP/SRT servers don't connect to the NVR's camera/recorder pi
 - Moved from `else` block (mediaEngine==nil) to `if` block (mediaEngine!=nil)
 - Handler requires mediaEngine to function, so registration must match
 
-**RTMP wiring (`internal/rtmp/server.go` + `cmd/lalmax-nvr/main.go`):**
-- Added `SetCallbacks` method to `rtmp.Server` for post-construction callback injection
-- Wired in `main.go` `Start()`:
-  - `StreamKeyResolver`: maps `cfg.RTMP.StreamKeys` (camera_id→stream_key) to reverse lookup
-  - `CameraHubProvider`: gets recorder's StreamHub via `camMgr.GetRecorder()`
-- Before this fix: RTMP server would panic on first connection (nil callback)
-- After: RTMP publish → stream key resolution → hub delivery → recording
+**RTMP/SRT ingest wiring (`internal/media/ingest.go` + `cmd/lalmax-nvr/main.go`):**
+- Actual RTMP/SRT ingest is handled by lalmax/lal.
+- `internal/media.IngestHandler` subscribes to lalmax publish/stop events and maps stream names to camera IDs.
+- RTMP stream keys still map `camera_id -> stream_key` through a reverse lookup.
+- SRT maps stream names directly to camera IDs.
 
 **SRT wiring (`cmd/lalmax-nvr/main.go`):**
 - Registered existing camera hubs with SRT listener before `Start()`

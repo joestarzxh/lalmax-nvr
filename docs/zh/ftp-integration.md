@@ -537,7 +537,7 @@ sudo iptables -A INPUT -p tcp --dport 2121 -j DROP
 
 ```bash
 # 查看 FTP 服务日志
-journalctl -u lalmax-nvr -f | grep ftp
+docker compose logs -f lalmax-nvr | grep ftp
 
 # Docker 容器日志
 docker logs -f lalmax-nvr | grep ftp

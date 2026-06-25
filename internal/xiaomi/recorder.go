@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
-// Xiaomi camera recorder implementing model.Recorder and model.HLSProvider interfaces.
+// Xiaomi camera recorder implementing model.Recorder and model.CodecParamsProvider interfaces.
 // Connects via MISS protocol, probes codec (H264/H265), records to MP4 segments.
 
 package xiaomi
@@ -107,7 +107,7 @@ type XiaomiRecorder struct {
 func (r *XiaomiRecorder) GetHub() *model.StreamHub { return r.Hub }
 
 var _ model.Recorder = (*XiaomiRecorder)(nil)
-var _ model.HLSProvider = (*XiaomiRecorder)(nil)
+var _ model.CodecParamsProvider = (*XiaomiRecorder)(nil)
 
 // NewXiaomiRecorder creates a new Xiaomi MISS protocol recorder.
 func NewXiaomiRecorder(cfg XiaomiRecorderConfig, store SegmentStore, opts ...*metrics.Metrics) *XiaomiRecorder {
@@ -207,21 +207,9 @@ func (r *XiaomiRecorder) setStatus(s model.RecorderStatus) {
 }
 
 // CodecParams returns the current codec parameters detected from the stream.
-// Implements model.HLSProvider.
+// Implements model.CodecParamsProvider.
 func (r *XiaomiRecorder) CodecParams() (codec model.Format, sps, pps, vps []byte) {
 	return r.codec, r.sps, r.pps, r.vps
-}
-
-// SetOnHLSFrame subscribes a callback as an HLS frame consumer via StreamHub.
-// Implements model.HLSProvider.
-// Deprecated: use Hub.Subscribe() directly instead. This method is kept for
-// backward compatibility during migration and will be removed in a future version.
-func (r *XiaomiRecorder) SetOnHLSFrame(cb func(pts int64, au [][]byte)) {
-	if r.Hub == nil {
-		r.Hub = model.NewStreamHub()
-	}
-	r.Hub.Unsubscribe("hls") // clean up stale consumer from previous session
-	_ = r.Hub.Subscribe("hls", cb)
 }
 
 // forwardHLS feeds a video NALU to HLS consumers via StreamHub.

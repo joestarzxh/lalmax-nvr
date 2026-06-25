@@ -99,6 +99,7 @@ let gb28181Port = $state(5060);
 let gb28181Id = $state('');
 let gb28181Password = $state('');
 let gb28181MediaIp = $state('');
+let gb28181StandardVersion = $state<'2016' | '2022'>('2016');
 
 // HLS config state
 let hlsEnabled = $state(false);
@@ -148,7 +149,7 @@ let isDirty = $derived(() => {
       streamingRtmpEnabled,
       streamingRtmpPort, streamingSrtEnabled, streamingSrtPort,
       srtStreams,
-      gb28181Enabled, gb28181Host, gb28181Port, gb28181Id, gb28181Password, gb28181MediaIp,
+      gb28181Enabled, gb28181Host, gb28181Port, gb28181Id, gb28181Password, gb28181MediaIp, gb28181StandardVersion,
       hlsEnabled, hlsOnDemand, hlsIdleTimeout, hlsSegmentCount, hlsLalFragmentDurationMs, hlsLalFragmentNum, hlsLalCleanupMode, hlsLalUseMemory, hlsLalmaxSegmentDuration, hlsLalmaxPartDuration,
     });
     if (current !== originalSnapshot) return true;
@@ -246,7 +247,7 @@ function getAffectedCameraCount(protocol: string): number {
       streamingRtmpEnabled,
       streamingRtmpPort, streamingSrtEnabled, streamingSrtPort,
       srtStreams,
-      gb28181Enabled, gb28181Host, gb28181Port, gb28181Id, gb28181Password, gb28181MediaIp,
+      gb28181Enabled, gb28181Host, gb28181Port, gb28181Id, gb28181Password, gb28181MediaIp, gb28181StandardVersion,
       hlsEnabled, hlsOnDemand, hlsIdleTimeout, hlsSegmentCount, hlsLalFragmentDurationMs, hlsLalFragmentNum, hlsLalCleanupMode, hlsLalUseMemory, hlsLalmaxSegmentDuration, hlsLalmaxPartDuration,
     });
     originalRetentionDays = retentionDays;
@@ -321,6 +322,7 @@ function getAffectedCameraCount(protocol: string): number {
         gb28181Id = gb28181Cfg.id ?? '';
         gb28181Password = gb28181Cfg.password ?? '';
         gb28181MediaIp = gb28181Cfg.media_ip ?? '';
+        gb28181StandardVersion = gb28181Cfg.standard_version ?? '2016';
         if (!gb28181Host || !gb28181MediaIp) {
           const defaultIP = await getDefaultGB28181IP();
           if (defaultIP) {
@@ -439,6 +441,7 @@ function getAffectedCameraCount(protocol: string): number {
         id: gb28181Id,
         password: gb28181Password,
         media_ip: gb28181MediaIp,
+        standard_version: gb28181StandardVersion,
       });
 
       // Save HLS settings
@@ -2007,6 +2010,16 @@ type="button"
                 </button>
                 <span class="text-sm th-text-secondary">{gb28181Enabled ? t('settings.gb28181.enabledState') : t('settings.gb28181.disabledState')}</span>
               </div>
+            </div>
+
+            <!-- Standard Version -->
+            <div>
+              <label for="gb28181StandardVersion" class="input-label">{t('settings.gb28181.standardVersion')}</label>
+              <select id="gb28181StandardVersion" class="input" bind:value={gb28181StandardVersion}>
+                <option value="2016">GB/T 28181-2016</option>
+                <option value="2022">GB/T 28181-2022</option>
+              </select>
+              <p class="text-xs th-text-tertiary mt-1">{t('settings.gb28181.standardVersionHint')}</p>
             </div>
 
             <!-- SIP ID -->

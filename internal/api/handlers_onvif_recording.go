@@ -9,6 +9,23 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/onvif"
 )
 
+// parseTime parses a time string in RFC3339 or common formats.
+func parseTime(s string) (time.Time, error) {
+	// Try RFC3339 first
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	// Try common format
+	if t, err := time.Parse("2006-01-02T15:04:05", s); err == nil {
+		return t, nil
+	}
+	// Try date only
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("unable to parse time: %s", s)
+}
+
 // ONVIFRecordingResponse represents the response for ONVIF recordings.
 type ONVIFRecordingResponse struct {
 	Recordings []onvif.Recording `json:"recordings"`

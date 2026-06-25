@@ -287,33 +287,8 @@ paths:
 #### 3. 启动 CSI 流水线
 
 ```bash
-# 启动 CSI 流水线
-sudo systemctl start csi-stream
-```
-
-### SystemD 服务配置
-
-```bash
-# 创建服务文件
-sudo tee /etc/systemd/system/csi-stream.service << 'EOF'
-[Unit]
-Description=CSI Camera Stream to MediaMTX
-After=network.target mediamtx.service
-
-[Service]
-Type=simple
-User=nvr
-ExecStart=/usr/local/bin/csi-stream.sh
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# 启用服务
-sudo systemctl enable csi-stream
-sudo systemctl start csi-stream
+# 前台启动 CSI 流水线
+/usr/local/bin/csi-stream.sh
 ```
 
 ## 多摄像头配置
@@ -559,8 +534,8 @@ ansible-playbook -i inventory mediamtx.yml
 # 滚动更新脚本
 cat > update-mediamtx.sh << 'EOF'
 #!/bin/bash
-# 停止服务
-sudo systemctl stop mediamtx
+# 停止正在运行的 mediamtx 进程
+pkill -f mediamtx || true
 
 # 备份配置
 sudo cp /etc/mediamtx.yml /etc/mediamtx.yml.bak
@@ -569,8 +544,8 @@ sudo cp /etc/mediamtx.yml /etc/mediamtx.yml.bak
 sudo wget -O /usr/local/bin/mediamtx https://github.com/bluenviron/mediamtx/releases/latest/download/mediamtx-linux-amd64
 sudo chmod +x /usr/local/bin/mediamtx
 
-# 启动服务
-sudo systemctl start mediamtx
+# 前台启动或交给你的进程管理器启动
+/usr/local/bin/mediamtx /etc/mediamtx.yml
 EOF
 
 chmod +x update-mediamtx.sh

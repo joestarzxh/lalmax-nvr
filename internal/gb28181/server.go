@@ -35,7 +35,7 @@ type Server struct {
 func NewServer(cfg *Config, mediaEngine media.Engine, db *storage.DB) (*Server, func()) {
 	hub := NewWSHub()
 	store := NewDeviceStore(db, hub)
-	
+
 	// Load devices from database
 	if err := store.LoadFromDB(); err != nil {
 		slog.Error("failed to load GB28181 devices from database", "error", err)
@@ -185,7 +185,7 @@ func (s *Server) startChannelMissingScan() {
 // scanMissingChannels checks for channels with high missing_count and marks them offline.
 func (s *Server) scanMissingChannels() {
 	ctx := context.Background()
-	
+
 	// 查询 missing_count >= 3 的通道
 	channels, err := s.store.GetDB().ListMissingChannels(ctx, 3)
 	if err != nil {
@@ -245,6 +245,82 @@ func (s *Server) PTZControl(deviceID, channelID, ptzCmd string) error {
 	return s.gb.PTZControl(deviceID, channelID, ptzCmd)
 }
 
+// PTZPositionControl sends a precise position control command.
+// horizontalAngle: 0-360 degrees, verticalAngle: 0-90 degrees, zoomLevel: 1-100x
+func (s *Server) PTZPositionControl(deviceID, channelID string, horizontalAngle, verticalAngle, zoomLevel float64) error {
+	return s.gb.PTZPositionControl(deviceID, channelID, horizontalAngle, verticalAngle, zoomLevel)
+}
+
+// QueryPTZPosition queries the current PTZ position.
+func (s *Server) QueryPTZPosition(deviceID, channelID string) error {
+	return s.gb.QueryPTZPosition(deviceID, channelID)
+}
+
+// SetPreset sets a preset position.
+func (s *Server) SetPreset(deviceID, channelID string, presetID int) error {
+	return s.gb.SetPreset(deviceID, channelID, presetID)
+}
+
+// CallPreset calls a preset position.
+func (s *Server) CallPreset(deviceID, channelID string, presetID int) error {
+	return s.gb.CallPreset(deviceID, channelID, presetID)
+}
+
+// DeletePreset deletes a preset position.
+func (s *Server) DeletePreset(deviceID, channelID string, presetID int) error {
+	return s.gb.DeletePreset(deviceID, channelID, presetID)
+}
+
+// CruiseAddPoint adds a point to a cruise.
+func (s *Server) CruiseAddPoint(deviceID, channelID string, cruiseID, presetID int) error {
+	return s.gb.CruiseAddPoint(deviceID, channelID, cruiseID, presetID)
+}
+
+// CruiseDeletePoint deletes a point from a cruise.
+func (s *Server) CruiseDeletePoint(deviceID, channelID string, cruiseID, presetID int) error {
+	return s.gb.CruiseDeletePoint(deviceID, channelID, cruiseID, presetID)
+}
+
+// CruiseSetSpeed sets the cruise speed.
+func (s *Server) CruiseSetSpeed(deviceID, channelID string, cruiseID, speed int) error {
+	return s.gb.CruiseSetSpeed(deviceID, channelID, cruiseID, speed)
+}
+
+// CruiseStart starts a cruise.
+func (s *Server) CruiseStart(deviceID, channelID string, cruiseID int) error {
+	return s.gb.CruiseStart(deviceID, channelID, cruiseID)
+}
+
+// CruiseStop stops a cruise.
+func (s *Server) CruiseStop(deviceID, channelID string, cruiseID int) error {
+	return s.gb.CruiseStop(deviceID, channelID, cruiseID)
+}
+
+// ScanSetLeft sets the left boundary of a scan.
+func (s *Server) ScanSetLeft(deviceID, channelID string, scanID int) error {
+	return s.gb.ScanSetLeft(deviceID, channelID, scanID)
+}
+
+// ScanSetRight sets the right boundary of a scan.
+func (s *Server) ScanSetRight(deviceID, channelID string, scanID int) error {
+	return s.gb.ScanSetRight(deviceID, channelID, scanID)
+}
+
+// ScanSetSpeed sets the scan speed.
+func (s *Server) ScanSetSpeed(deviceID, channelID string, scanID, speed int) error {
+	return s.gb.ScanSetSpeed(deviceID, channelID, scanID, speed)
+}
+
+// ScanStart starts a scan.
+func (s *Server) ScanStart(deviceID, channelID string, scanID int) error {
+	return s.gb.ScanStart(deviceID, channelID, scanID)
+}
+
+// ScanStop stops a scan.
+func (s *Server) ScanStop(deviceID, channelID string, scanID int) error {
+	return s.gb.ScanStop(deviceID, channelID, scanID)
+}
+
 // QueryRecordInfo queries a device for its recording list.
 func (s *Server) QueryRecordInfo(deviceID, channelID string, startTime, endTime time.Time) (*Records, error) {
 	return s.gb.QueryRecordInfo(deviceID, channelID, startTime, endTime)
@@ -300,7 +376,40 @@ func (s *Server) GetAlarmManager() *AlarmManager {
 	return s.alarm
 }
 
-// GetDownloadManager returns the download manager.
+// Snapshot sends a snapshot command to the device.
+func (s *Server) Snapshot(deviceID, channelID string) error {
+	return s.gb.Snapshot(deviceID, channelID)
+}
+
+// DeviceReset sends a device reset command.
+func (s *Server) DeviceReset(deviceID, channelID string) error {
+	return s.gb.DeviceReset(deviceID, channelID)
+}
+
+// RecordControl sends a record control command.
+func (s *Server) RecordControl(deviceID, channelID, recordCmd string) error {
+	return s.gb.RecordControl(deviceID, channelID, recordCmd)
+}
+
+// SetHomePosition sets the home position for a device.
+func (s *Server) SetHomePosition(deviceID, channelID string, enabled, resetTime, presetIndex int) error {
+	return s.gb.SetHomePosition(deviceID, channelID, enabled, resetTime, presetIndex)
+}
+
+// DeviceConfigQuery queries device configuration.
+func (s *Server) DeviceConfigQuery(deviceID, channelID string) error {
+	return s.gb.DeviceConfigQuery(deviceID, channelID)
+}
+
+// DeviceStatusQuery queries device status.
+func (s *Server) DeviceStatusQuery(deviceID, channelID string) error {
+	return s.gb.DeviceStatusQuery(deviceID, channelID)
+}
+
+// DeviceInfoQuery queries device information.
+func (s *Server) DeviceInfoQuery(deviceID, channelID string) error {
+	return s.gb.DeviceInfoQuery(deviceID, channelID)
+}
 func (s *Server) GetDownloadManager() *DownloadManager {
 	return s.download
 }
@@ -464,28 +573,46 @@ func (s *Server) ListDevices() []map[string]interface{} {
 		channels := make([]map[string]interface{}, 0)
 		dev.Channels.Range(func(k, v any) bool {
 			ch := v.(*Channel)
-			channels = append(channels, map[string]interface{}{
-				"channel_id":  ch.ChannelID,
-				"is_playing":  globalStreams.isPlaying(deviceID, ch.ChannelID),
-				"stream_id":   StreamID(deviceID, ch.ChannelID),
-			})
+			chInfo := map[string]interface{}{
+				"channel_id": ch.ChannelID,
+				"name":       ch.Name,
+				"is_playing": globalStreams.isPlaying(deviceID, ch.ChannelID),
+				"stream_id":  StreamID(deviceID, ch.ChannelID),
+
+				// 2016标准字段
+				"manufacturer": ch.Manufacturer,
+				"model":        ch.Model,
+				"status":       ch.Status,
+				"ptz_type":     ch.PTZType,
+				"longitude":    ch.Longitude,
+				"latitude":     ch.Latitude,
+
+				// 2022标准新增字段
+				"stream_number_list": ch.StreamNumberList,
+				"encode_type":        ch.EncodeType,
+			}
+			channels = append(channels, chInfo)
 			return true
 		})
-		
+
 		// Get device info from database
 		deviceInfo := map[string]interface{}{
-			"device_id": deviceID,
-			"is_online": dev.IsOnline,
-			"address":   dev.Address,
-			"channels":  channels,
+			"device_id":  deviceID,
+			"is_online":  dev.IsOnline,
+			"address":    dev.Address,
+			"gb_version": string(dev.GBVersion),
+			"channels":   channels,
 		}
-		
+
 		// Try to get additional info from database
 		if dbDev, err := s.store.GetDB().GetGB28181Device(context.Background(), deviceID); err == nil && dbDev != nil {
 			deviceInfo["name"] = dbDev.Name
 			deviceInfo["manufacturer"] = dbDev.Manufacturer
 			deviceInfo["model"] = dbDev.Model
 			deviceInfo["firmware"] = dbDev.Firmware
+			if dbDev.GBVersion != "" {
+				deviceInfo["gb_version"] = dbDev.GBVersion
+			}
 			if dbDev.LastKeepaliveAt != nil {
 				deviceInfo["last_keepalive_at"] = dbDev.LastKeepaliveAt
 			}
@@ -493,7 +620,7 @@ func (s *Server) ListDevices() []map[string]interface{} {
 				deviceInfo["last_register_at"] = dbDev.LastRegisterAt
 			}
 		}
-		
+
 		result = append(result, deviceInfo)
 		return true
 	})

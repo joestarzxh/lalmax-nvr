@@ -29,7 +29,6 @@ import (
 	"github.com/lalmax-pro/lalmax-nvr/internal/api"
 	"github.com/lalmax-pro/lalmax-nvr/internal/camera"
 	"github.com/lalmax-pro/lalmax-nvr/internal/config"
-	"github.com/lalmax-pro/lalmax-nvr/internal/hls"
 	"github.com/lalmax-pro/lalmax-nvr/internal/model"
 	"github.com/lalmax-pro/lalmax-nvr/internal/onvif"
 	"github.com/lalmax-pro/lalmax-nvr/internal/recorder"
@@ -84,7 +83,7 @@ func newAPI(db *storage.DB, store *storage.Manager) *api.Handler {
 
 // newAPIWithConfig creates a test API handler with a config (for settings endpoints).
 func newAPIWithConfig(db *storage.DB, store *storage.Manager, cfg *config.Config, configPath string) *api.Handler {
-	return api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, cfg, nil, nil, configPath, nil, nil)
+	return api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, cfg, nil, configPath, nil, nil)
 }
 
 // do is a convenience for making requests against the API handler.
@@ -903,53 +902,25 @@ func TestMergeSettingsNoConfig(t *testing.T) {
 // Test 15: Multi-Stream HLS (4 concurrent streams)
 // ============================================================================
 
-func TestMultiStreamHLS(t *testing.T) {
+func TestHLSStreamEndpoints(t *testing.T) {
 	db, store := setupEnv(t)
 
-	// Create HLS manager with small limits for testing
-	hlsDataDir := filepath.Join(t.TempDir(), "hls-data")
-	hlsMgr := hls.NewManagerWithOpts(context.Background(), hlsDataDir, 10, 1<<20, 7)
+	// Without a media engine, HLS endpoints return 500 "HLS not available"
+	h := api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, nil, nil, "", nil, nil)
 
-	// Create handler with HLS manager (no camMgr — HLS endpoint returns 500)
-	h := api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, nil, nil, hlsMgr, "", nil, nil)
-
-	// 1. Request HLS stream for non-existent camera → 500 (camMgr is nil)
+	// 1. Request HLS stream for non-existent camera → 500 (no media engine)
 	rr := do(t, h.Routes(), "GET", "/api/cameras/cam-1/stream/index.m3u8", nil)
-	require.Equal(t, http.StatusInternalServerError, rr.Code)
-
-	// 2. Insert H264 camera into DB
-	err := db.UpsertCamera(context.Background(), "cam-hls-1", "HLS Camera 1", "rtsp_h264", "",
-		"rtsp://192.168.1.1/stream", "", "", true, "", "", "")
-	require.NoError(t, err)
-
-	// 3. Request HLS for H264 camera with no camMgr → 500 (camMgr is nil)
-	rr = do(t, h.Routes(), "GET", "/api/cameras/cam-hls-1/stream/index.m3u8", nil)
 	require.Equal(t, http.StatusInternalServerError, rr.Code)
 	var errResp map[string]string
 	parseJSON(t, rr, &errResp)
 	require.Contains(t, errResp["error"], "HLS not available")
 
-	// 4. Insert MJPEG camera — same 500 (camMgr is nil, checked before protocol)
-	err = db.UpsertCamera(context.Background(), "cam-mjpeg", "MJPEG Camera", "rtsp_mjpeg", "",
-		"rtsp://192.168.1.2/stream", "", "", true, "", "", "")
-	require.NoError(t, err)
-	rr = do(t, h.Routes(), "GET", "/api/cameras/cam-mjpeg/stream/index.m3u8", nil)
-	require.Equal(t, http.StatusInternalServerError, rr.Code)
-
-	// 5. Stop non-existent stream → 200 (not active)
-	rr = do(t, h.Routes(), "DELETE", "/api/cameras/cam-hls-1/stream", nil)
-
-	// 5. Stop non-existent stream → 200 (not active)
+	// 2. Stop stream → 200 OK (no-op when no media engine)
 	rr = do(t, h.Routes(), "DELETE", "/api/cameras/cam-hls-1/stream", nil)
 	require.Equal(t, http.StatusOK, rr.Code)
 	var stopResp map[string]string
 	parseJSON(t, rr, &stopResp)
-	require.Equal(t, "not active", stopResp["status"])
-
-	// 6. Verify HLS manager state
-	require.Equal(t, 0, hlsMgr.GetActiveStreamCount())
-
-	hlsMgr.StopAll()
+	require.Equal(t, "ok", stopResp["status"])
 }
 
 // ============================================================================
@@ -1163,25 +1134,22 @@ func TestPTZLifecycle(t *testing.T) {
 func TestHLSWithONVIFCamera(t *testing.T) {
 	db, store := setupEnv(t)
 
-	hlsDataDir := filepath.Join(t.TempDir(), "hls-data")
-	hlsMgr := hls.NewManagerWithOpts(context.Background(), hlsDataDir, 10, 1<<20, 7)
-
-	// Create handler with HLS manager but no camMgr
-	h := api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, nil, nil, hlsMgr, "", nil, nil)
+	// Create handler without a media engine
+	h := api.NewHandler(db, store, func(next http.Handler) http.Handler { return next }, nil, nil, "", nil, nil)
 
 	// 1. Insert ONVIF camera
 	err := db.UpsertCamera(context.Background(), "cam-onvif-hls", "ONVIF HLS Camera", "onvif", "",
 		"http://192.168.1.100/onvif/device_service", "admin", "pass", true, "", "", "")
 	require.NoError(t, err)
 
-	// 2. Request HLS stream for ONVIF camera → 500 (camMgr is nil)
+	// 2. Request HLS stream → 500 (no media engine)
 	rr := do(t, h.Routes(), "GET", "/api/cameras/cam-onvif-hls/stream/index.m3u8", nil)
 	require.Equal(t, http.StatusInternalServerError, rr.Code)
 	var errResp map[string]string
 	parseJSON(t, rr, &errResp)
 	require.Contains(t, errResp["error"], "HLS not available")
 
-	// 3. With camMgr but no recorder → 400
+	// 3. ONVIF camera profiles endpoint — real ONVIF call (camera unreachable → 502)
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Storage: config.StorageConfig{
@@ -1203,16 +1171,9 @@ func TestHLSWithONVIFCamera(t *testing.T) {
 	require.NoError(t, err)
 	camMgr := camera.NewCameraManager(cfg, storeMgr, nil, "")
 
-	h2 := api.NewHandler(db, storeMgr, func(next http.Handler) http.Handler { return next }, cfg, camMgr, hlsMgr, "", nil, nil)
-	rr = do(t, h2.Routes(), "GET", "/api/cameras/cam-onvif-hls/stream/index.m3u8", nil)
-	// ONVIF camera recorder is not running → 400
-	require.Equal(t, http.StatusBadRequest, rr.Code)
-
-	// 4. ONVIF camera profiles endpoint — real ONVIF call (camera unreachable → 502)
+	h2 := api.NewHandler(db, storeMgr, func(next http.Handler) http.Handler { return next }, cfg, camMgr, "", nil, nil)
 	rr = do(t, h2.Routes(), "GET", "/api/cameras/cam-onvif-hls/onvif/profiles", nil)
 	require.Equal(t, http.StatusBadGateway, rr.Code)
-
-	hlsMgr.StopAll()
 }
 
 // ============================================================================

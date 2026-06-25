@@ -65,28 +65,14 @@ docker compose up -d
 > **重要**：卷挂载的右侧（`:data`）和 `NVR_DATA_DIR` 必须始终一致。
 > 如果容器无法启动或不断重启，请检查宿主机目录是否存在，以及配置的 UID/GID（默认 1000:1000）是否有写入权限。
 
-### 方式三：一键安装脚本
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/lalmax-pro/lalmax-nvr/main/install.sh | sudo bash
-```
-
-此脚本会自动下载二进制文件、创建系统用户（`nvr`）、生成配置、安装 systemd 服务并启动。数据目录：`/var/lib/lalmax-nvr`。
-
-卸载（保留录像数据）：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/lalmax-pro/lalmax-nvr/main/install.sh | sudo bash -s -- --uninstall
-```
-
-### 方式四：从源码编译
+### 方式三：从源码编译
 
 需要 Go 1.26+ 和 Node.js（编译前端）：
 
 ```bash
 git clone https://github.com/lalmax-pro/lalmax-nvr.git
 cd lalmax-nvr
-make build
+./scripts/unix/build.sh
 ./lalmax-nvr init --password 你的密码
 ./lalmax-nvr -config lalmax-nvr.yaml
 ```
@@ -94,7 +80,7 @@ make build
 交叉编译到 ARM64（如树莓派）：
 
 ```bash
-make cross
+GOOS=linux GOARCH=arm64 ./scripts/unix/build.sh
 ```
 
 ## 首次配置
@@ -249,12 +235,12 @@ ftp 你的服务器地址 2121
 
 - 检查配置文件语法：`cat lalmax-nvr.yaml`
 - 确认数据目录存在且可写：`ls -la /var/lib/lalmax-nvr/`
-- 查看日志：`journalctl -u lalmax-nvr -f`
+- 如果使用 Docker，运行 `docker logs lalmax-nvr` 查看日志
+- 如果直接运行二进制文件，查看启动进程所在终端或你重定向的日志文件
 
 ### 权限错误
 
-- `install.sh` 脚本创建了 `nvr` 系统用户。确保数据目录的所有者正确：
-  `sudo chown -R nvr:nvr /var/lib/lalmax-nvr/`
+- 确保配置的存储目录对运行 lalmax-nvr 的用户或容器 UID/GID 可写。
 
 ### 端口冲突
 

@@ -4,20 +4,27 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 )
 
 // Config holds GB28181 SIP signaling configuration.
 type Config struct {
-	Enabled   bool   `yaml:"enabled"`
-	Host      string `yaml:"host"`       // SIP listen host (empty = auto-detect)
-	Port      int    `yaml:"port"`       // SIP listen port (default 5060)
-	ID        string `yaml:"id"`         // 20-digit platform SIP ID
-	Password  string `yaml:"password"`   // Global device registration password
-	MediaIP   string `yaml:"media_ip"`   // IP address put in SDP for media reception
-	MediaPort int    `yaml:"media_port"` // RTP media port (0=auto/multi-port, >0=single port mode)
+	Enabled         bool   `yaml:"enabled"`
+	Host            string `yaml:"host"`             // SIP listen host (empty = auto-detect)
+	Port            int    `yaml:"port"`             // SIP listen port (default 5060)
+	ID              string `yaml:"id"`               // 20-digit platform SIP ID
+	Password        string `yaml:"password"`         // Global device registration password
+	MediaIP         string `yaml:"media_ip"`         // IP address put in SDP for media reception
+	MediaPort       int    `yaml:"media_port"`       // RTP media port (0=auto/multi-port, >0=single port mode)
+	StandardVersion string `yaml:"standard_version"` // GB28181 standard version: 2016 or 2022
 
 	// Upstream platform cascading
 	Platforms []PlatformConfig `yaml:"platforms,omitempty"`
+}
+
+// GBVersion returns the configured GB28181 standard version.
+func (c *Config) GBVersion() GBVersion {
+	return NormalizeGBVersion(c.StandardVersion)
 }
 
 // GetDomain extracts the first 10 chars of the SIP ID as the GB domain.
@@ -43,6 +50,9 @@ func (c *Config) Validate() error {
 	if c.MediaIP == "" {
 		return fmt.Errorf("gb28181.media_ip is required")
 	}
+	if version := c.GBVersion(); version == GBVersionUnknown {
+		return fmt.Errorf("gb28181.standard_version must be 2016 or 2022, got %s", c.StandardVersion)
+	}
 	mediaIP := net.ParseIP(c.MediaIP)
 	if mediaIP == nil {
 		return fmt.Errorf("gb28181.media_ip must be a valid IP address, got %s", c.MediaIP)
@@ -58,7 +68,19 @@ func (c *Config) ApplyDefaults() {
 	if c.Port == 0 {
 		c.Port = 5060
 	}
+	c.StandardVersion = string(NormalizeGBVersion(c.StandardVersion))
 	c.detectMediaIP()
+}
+
+func NormalizeGBVersion(version string) GBVersion {
+	switch strings.TrimSpace(version) {
+	case "", string(GBVersion2016), "GB/T28181-2016", "GB28181-2016":
+		return GBVersion2016
+	case string(GBVersion2022), "GB/T28181-2022", "GB28181-2022":
+		return GBVersion2022
+	default:
+		return GBVersionUnknown
+	}
 }
 
 func (c *Config) detectMediaIP() {

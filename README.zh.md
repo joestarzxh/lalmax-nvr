@@ -172,7 +172,6 @@ third/
   lalmax/              # lalmax 扩展（vendored）
 web/                   # Svelte 5 前端
 docs/                  # 文档（中文/英文）
-deploy/                # 部署配置（Caddy、Grafana 等）
 ```
 
 ## 贡献

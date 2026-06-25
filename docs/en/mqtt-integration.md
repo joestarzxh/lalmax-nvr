@@ -187,7 +187,7 @@ Check MQTT connection status and messages:
 
 ```bash
 # View system logs
-journalctl -u lalmax-nvr -f | grep mqtt
+docker compose logs -f lalmax-nvr | grep mqtt
 
 # Docker logs
 docker logs -f lalmax-nvr | grep mqtt
@@ -322,7 +322,7 @@ mqtt:
 
 1. Check logs for processing errors:
    ```bash
-   journalctl -u lalmax-nvr -f | grep mqtt
+   docker compose logs -f lalmax-nvr | grep mqtt
    ```
 
 2. Verify topic matching:

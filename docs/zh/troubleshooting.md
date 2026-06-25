@@ -113,7 +113,7 @@
 **解决方案**:
 1. 检查摄像头日志中的连接错误：
    ```bash
-   journalctl -u lalmax-nvr -f
+   docker compose logs -f lalmax-nvr
    ```
 2. 手动测试摄像头流：
    ```bash
@@ -136,7 +136,7 @@
 **解决方案**:
 1. 检查启动日志中的配置验证错误：
    ```bash
-   journalctl -u lalmax-nvr -f | grep -i "config\|error"
+   docker compose logs lalmax-nvr | grep -i "config\|error"
    ```
 2. 验证所有必需的摄像头字段是否存在：
    ```yaml
@@ -571,14 +571,9 @@ observability:
 ```
 
 #### 日志位置
-**Systemd 服务**:
-```bash
-journalctl -u lalmax-nvr -f
-```
-
 **Docker 容器**:
 ```bash
-docker logs -f lalmax-nvr-container
+docker compose logs -f lalmax-nvr
 ```
 
 **二进制文件直接运行**:
@@ -669,7 +664,7 @@ cleanup:
 
 4. **日志**（最后 50 行）:
    ```bash
-   journalctl -u lalmax-nvr --since "1 hour ago"
+   docker compose logs --tail 50 lalmax-nvr
    ```
 
 5. **重现步骤**:
@@ -685,9 +680,9 @@ cleanup:
 ## 紧急程序
 
 ### 系统无响应
-1. 停止服务：
+1. 如果使用 Docker，先停止容器：
    ```bash
-   sudo systemctl stop lalmax-nvr
+   docker compose stop lalmax-nvr
    ```
 2. 终止任何剩余进程：
    ```bash
@@ -704,7 +699,7 @@ cleanup:
    # 使用最小配置
    cp lalmax-nvr.yaml lalmax-nvr.yaml.backup
    # 编辑以仅启用基本摄像头
-   sudo systemctl start lalmax-nvr
+   docker compose start lalmax-nvr
    ```
 
 ### 配置损坏
@@ -723,7 +718,7 @@ cleanup:
      username: "admin"
      password: "临时密码"
    ```
-3. 重新启动服务并重新配置
+3. 重新启动进程或容器并重新配置
 
 ### 数据库损坏
 1. 备份数据库：
@@ -736,6 +731,6 @@ cleanup:
    ```
 3. 重新启动服务（数据库将被重新创建）：
    ```bash
-   sudo systemctl restart lalmax-nvr
+   docker compose restart lalmax-nvr
    ```
 4. 重新配置所有摄像头

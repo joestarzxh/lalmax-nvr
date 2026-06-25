@@ -14,10 +14,11 @@ import (
 
 // PlayInput contains parameters for starting a GB28181 play session.
 type PlayInput struct {
-	DeviceID   string
-	ChannelID  string
-	StreamMode int8   // 0=UDP, 1=TCP passive, 2=TCP active
-	InternalID string // internal stream ID for lalmax
+	DeviceID     string
+	ChannelID    string
+	StreamMode   int8   // 0=UDP, 1=TCP passive, 2=TCP active
+	InternalID   string // internal stream ID for lalmax
+	StreamNumber int    // 码流编号: 0=主码流, 1=子码流 (GB28181-2022)
 }
 
 // PlaybackInput contains parameters for starting a GB28181 playback (historical) session.
@@ -422,7 +423,7 @@ func (g *GB28181API) sipPlayInvite(ch *Channel, in *PlayInput, port int) (*Invit
 	ipStr := g.cfg.MediaIP
 	ssrc := g.streams.getSSRC(g.cfg.GetDomain())
 
-	body := buildPlaySDP(in.DeviceID, ch.ChannelID, ipStr, port, in.StreamMode, ssrc, false, time.Time{}, time.Time{})
+	body := buildPlaySDP(in.DeviceID, ch.ChannelID, ipStr, port, in.StreamMode, ssrc, false, time.Time{}, time.Time{}, in.StreamNumber)
 
 	dev := ch.device
 	recipient := sip.Uri{
@@ -455,7 +456,8 @@ func (g *GB28181API) sipPlaybackInvite(ch *Channel, in *PlaybackInput, port int)
 	ipStr := g.cfg.MediaIP
 	ssrc := g.streams.getSSRC(g.cfg.GetDomain())
 
-	body := buildPlaySDP(in.DeviceID, ch.ChannelID, ipStr, port, in.StreamMode, ssrc, true, in.StartTime, in.EndTime)
+	// Playback doesn't support stream number, always use 0
+	body := buildPlaySDP(in.DeviceID, ch.ChannelID, ipStr, port, in.StreamMode, ssrc, true, in.StartTime, in.EndTime, 0)
 
 	dev := ch.device
 	recipient := sip.Uri{
@@ -593,7 +595,7 @@ func (g *GB28181API) doInvite(req *sip.Request, ch *Channel) (*InviteResult, err
 	}
 }
 
-func buildPlaySDP(deviceID, channelID, ip string, port int, streamMode int8, ssrc string, playback bool, startTime, endTime time.Time) []byte {
+func buildPlaySDP(deviceID, channelID, ip string, port int, streamMode int8, ssrc string, playback bool, startTime, endTime time.Time, streamNumber int) []byte {
 	protocol := "RTP/AVP"
 	if streamMode == 1 || streamMode == 2 {
 		protocol = "TCP/RTP/AVP"
@@ -636,8 +638,14 @@ func buildPlaySDP(deviceID, channelID, ip string, port int, streamMode int8, ssr
 	// GB28181 specific: SSRC in y= line
 	lines = append(lines, fmt.Sprintf("y=%s", ssrc))
 
-	// f= line (optional media description)
-	lines = append(lines, "f=")
+	// f= line (media description with stream number for GB28181-2022)
+	// Format: f= v/编码格式/分辨率/帧率/码率类型/码率大小 a/编码格式/码率大小/采样率
+	// streamnumber: 0=主码流, 1=子码流
+	if streamNumber > 0 {
+		lines = append(lines, fmt.Sprintf("f= v/2/1///a/1///"))
+	} else {
+		lines = append(lines, "f=")
+	}
 
 	return []byte(strings.Join(lines, "\r\n") + "\r\n")
 }

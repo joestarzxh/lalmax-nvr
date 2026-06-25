@@ -56,8 +56,9 @@ func (g *GB28181API) handlerRegister(req *sip.Request, tx sip.ServerTransaction)
 	}
 
 	g.store.LoadOrStore(deviceID, &Device{
-		DeviceID: deviceID,
-		source:   source,
+		DeviceID:  deviceID,
+		source:    source,
+		GBVersion: g.configuredGBVersion(),
 	})
 
 	password := g.cfg.Password

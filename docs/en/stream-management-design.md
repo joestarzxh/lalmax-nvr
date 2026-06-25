@@ -4,10 +4,10 @@ This document defines how `RTSP/ONVIF pull`, `RTMP/SRT push`, and `lalmax/lal` r
 
 ## Problem Summary
 
-The project already routes most camera media through `lalmax`, but external ingest is still modeled inconsistently:
+The project already routes camera media through `lalmax`, but external ingest is still not fully modeled as a first-class business object:
 
 1. embedded `lalmax` already exposes built-in ingest and distribution
-2. the project still contains a separate `internal/rtmp.Server`
+2. `internal/media.IngestHandler` now only maps lalmax publish events to camera IDs
 3. most APIs and UI flows are built around `camera_id`
 4. existing `lalmax` stream groups do not map to a first-class business object
 
@@ -36,7 +36,7 @@ All actual media ingest and protocol distribution should converge into `lalmax/l
 - RTMP push
 - SRT push
 
-The project should not keep a second long-term RTMP main path.
+The project no longer keeps a second RTMP server path; only the business mapping layer remains.
 
 ### Separate device and stream concepts
 
@@ -149,24 +149,24 @@ Each stream should support:
 - promote to managed source
 - disconnect
 
-## Recommendation for internal/rtmp.Server
+## Recommendation for Media Ingest Mapping
 
 Conclusion:
 
-- **do not keep it as a long-term primary path**
-- **do not delete it immediately**
+- **keep actual ingest in lalmax/lal**
+- **keep `internal/media.IngestHandler` only as business glue**
 
 Reason:
 
-1. it still provides transitional `stream key -> camera hub` behavior
-2. it is not part of the unified `mediaEngine.ListStreams()` state surface
-3. deleting it before stream-management APIs exist would cause feature regression
+1. it provides `stream key -> camera_id` and `stream name -> camera_id` behavior
+2. it avoids duplicating RTMP/SRT protocol code in lalmax-nvr
+3. it can later be replaced by a persisted stream binding model
 
 Recommended transition:
 
 ### Stage A
 
-- stop adding new ingest features to `internal/rtmp.Server`
+- stop adding protocol-level ingest features outside lalmax/lal
 - prefer `lalmax` for all new ingest work
 
 ### Stage B
@@ -177,11 +177,11 @@ Recommended transition:
 ### Stage C
 
 - add binding and control operations
-- convert `RTMP stream key -> camera ID` from a second-server concern into a business-layer binding rule
+- convert `RTMP stream key -> camera ID` from config-only mapping into a business-layer binding rule
 
 ### Stage D
 
-- retire `internal/rtmp.Server` after `lalmax` ingest is fully surfaced and managed
+- retire the temporary event-to-camera glue once stream bindings are fully modeled
 
 ## What Not To Do
 
@@ -225,7 +225,7 @@ Reasons:
 
 ### Phase 4: Retire legacy RTMP ingress
 
-- remove `internal/rtmp.Server`
+- remove protocol-level ingest code outside lalmax/lal
 - keep `lalmax/lal` as the only ingest layer
 
 ## Recommended Immediate Next Steps
@@ -233,6 +233,6 @@ Reasons:
 1. implement `GET /api/streams`
 2. add a minimal `Streams` page
 3. add bind / promote actions
-4. retire `internal/rtmp.Server` last
+4. replace temporary event-to-camera mapping with persisted stream bindings
 
 This is the lowest-risk path with the fastest operational payoff.

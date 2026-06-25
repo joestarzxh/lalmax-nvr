@@ -2,12 +2,16 @@ import { apiRequest } from './client';
 
 export interface GB28181Channel {
   channel_id: string;
+  name?: string;
   is_playing?: boolean;
   stream_id?: string;
+  stream_number_list?: string;
+  encode_type?: string;
 }
 
 export interface GB28181Device {
   device_id: string;
+  gb_version?: '2016' | '2022' | 'unknown';
   name?: string;
   manufacturer?: string;
   model?: string;
@@ -126,6 +130,41 @@ export async function stopGB28181Stream(deviceId: string, channelId: string, sig
   return apiRequest<{ status: string }>('/gb28181/stop', {
     method: 'POST',
     body: JSON.stringify({ device_id: deviceId, channel_id: channelId }),
+    signal,
+  });
+}
+
+function gb28181ChannelPath(deviceId: string, channelId: string): string {
+  return `/gb28181/devices/${encodeURIComponent(deviceId)}/channels/${encodeURIComponent(channelId)}`;
+}
+
+export interface GB28181PTZControlRequest {
+  direction: string;
+  speed?: number;
+}
+
+export async function controlGB28181PTZ(
+  deviceId: string,
+  channelId: string,
+  req: GB28181PTZControlRequest,
+  signal?: AbortSignal,
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`${gb28181ChannelPath(deviceId, channelId)}/ptz`, {
+    method: 'POST',
+    body: JSON.stringify(req),
+    signal,
+  });
+}
+
+export async function controlGB28181Recording(
+  deviceId: string,
+  channelId: string,
+  command: 'record' | 'stop',
+  signal?: AbortSignal,
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`${gb28181ChannelPath(deviceId, channelId)}/record`, {
+    method: 'POST',
+    body: JSON.stringify({ command }),
     signal,
   });
 }

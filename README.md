@@ -172,7 +172,6 @@ third/
   lalmax/              # Vendored lalmax (lal + extensions)
 web/                   # Svelte 5 frontend
 docs/                  # Documentation (EN/ZH)
-deploy/                # Deployment configs (Caddy, Grafana, etc.)
 ```
 
 ## Contributing

@@ -57,7 +57,7 @@ func TestResolveCameraSourceType_FromBinding(t *testing.T) {
 	require.NoError(t, db.UpsertCamera(ctx, "push-cam-1", "Push Cam", "rtsp", "h264", "rtsp://127.0.0.1:5544/live/push-cam-1", "", "", true, "", "", ""))
 	require.NoError(t, db.BindStreamToCamera(ctx, "push-cam-1", "push-cam-1"))
 
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	row := &storage.CameraRow{ID: "push-cam-1", Protocol: "rtsp"}
 	h.resolveCameraSourceType(ctx, row)
 	require.Equal(t, "rtmp_push", row.SourceType)
@@ -95,7 +95,7 @@ func TestResolveCameraSourceType_PrefersStoredValue(t *testing.T) {
 	t.Helper()
 	t.Parallel()
 
-	h := NewHandler(nil, nil, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(nil, nil, noopAuthMW(), nil, nil, "", nil, nil)
 	row := &storage.CameraRow{ID: "push-cam-1", Protocol: "rtsp", SourceType: "srt_push"}
 	h.resolveCameraSourceType(context.Background(), row)
 	require.Equal(t, "srt_push", row.SourceType)

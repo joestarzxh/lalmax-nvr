@@ -402,7 +402,8 @@ func TestXiaomiRecorderHLSFrameH265IDR(t *testing.T) {
 
 	var mu sync.Mutex
 	var receivedAU [][]byte
-	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+	r.Hub = model.NewStreamHub()
+	_ = r.Hub.Subscribe("hls", func(pts int64, au [][]byte) {
 		mu.Lock()
 		receivedAU = au
 		mu.Unlock()
@@ -437,7 +438,8 @@ func TestXiaomiRecorderHLSFrameUnknownCodec(t *testing.T) {
 
 	var mu sync.Mutex
 	var receivedAU [][]byte
-	r.SetOnHLSFrame(func(pts int64, au [][]byte) {
+	r.Hub = model.NewStreamHub()
+	_ = r.Hub.Subscribe("hls", func(pts int64, au [][]byte) {
 		mu.Lock()
 		receivedAU = au
 		mu.Unlock()

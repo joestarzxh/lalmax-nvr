@@ -18,10 +18,8 @@ storage:
   root_dir: "/var/lib/lalmax-nvr"   # Change to your preferred path (e.g. /mnt/external/nvr)
   segment_duration: "30s"          # MP4 segment duration (max 30s on RPi)
 
-# Optional lal/lalmax media engine.
-# Enabled by default — set to false to fall back to built-in streaming stack.
+# lal/lalmax media engine configuration.
 media:
-  enabled: true
   mode: "embedded"                         # embedded | http
   lalmax_http_addr: "http://127.0.0.1:12090"
   lalmax_public_url: "http://127.0.0.1:12090"
@@ -154,6 +152,7 @@ webdav:
 #   password: ""                        # Global device registration password (optional)
 #   media_ip: "192.168.1.100"           # IP for SDP media reception (required, your server's IP)
 #   host: ""                            # SIP listen host (optional, auto-detect from media_ip)
+#   standard_version: "2016"             # GB28181 standard version: 2016 or 2022
 
 # HLS streaming — on-demand live view via Web Web UI
 # RPi constraint: max 4 concurrent streams

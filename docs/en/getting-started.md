@@ -66,28 +66,14 @@ To store recordings on an external drive or a different directory, edit `docker-
 > If the container fails to start or keeps restarting, check that the host directory exists and is
 > writable by the configured UID/GID (default: 1000:1000).
 
-### Option 3: One-click Install Script
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/lalmax-pro/lalmax-nvr/main/install.sh | sudo bash
-```
-
-This downloads the binary, creates a system user (`nvr`), generates config with password, installs a systemd service, and starts it automatically. Data directory: `/var/lib/lalmax-nvr`.
-
-To uninstall (preserves recordings):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/lalmax-pro/lalmax-nvr/main/install.sh | sudo bash -s -- --uninstall
-```
-
-### Option 4: Build from Source
+### Option 3: Build from Source
 
 Requires Go 1.26+ and Node.js (for frontend):
 
 ```bash
 git clone https://github.com/lalmax-pro/lalmax-nvr.git
 cd lalmax-nvr
-make build
+./scripts/unix/build.sh
 ./lalmax-nvr init --password yourpassword
 ./lalmax-nvr -config lalmax-nvr.yaml
 ```
@@ -95,7 +81,7 @@ make build
 For cross-compiling to ARM64 (e.g. Raspberry Pi):
 
 ```bash
-make cross
+GOOS=linux GOARCH=arm64 ./scripts/unix/build.sh
 ```
 
 ## First-Time Setup
@@ -250,12 +236,12 @@ ftp your-server 2121
 
 - Check config file syntax: `cat lalmax-nvr.yaml`
 - Verify the data directory exists and is writable: `ls -la /var/lib/lalmax-nvr/`
-- Check logs: `journalctl -u lalmax-nvr -f`
+- If using Docker, check logs with `docker logs lalmax-nvr`
+- If running the binary directly, check the terminal or log file used to start the process
 
 ### Permission errors
 
-- The `install.sh` script creates a `nvr` system user. Make sure the data directory is owned by it:
-  `sudo chown -R nvr:nvr /var/lib/lalmax-nvr/`
+- Make sure the configured storage directory is writable by the user or container UID/GID running lalmax-nvr.
 
 ### Port conflicts
 

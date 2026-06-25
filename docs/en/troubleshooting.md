@@ -113,7 +113,7 @@ This guide helps you diagnose and resolve common issues with lalmax-nvr. If you 
 **Solution**:
 1. Check camera logs for connection errors:
    ```bash
-   journalctl -u lalmax-nvr -f
+   docker compose logs -f lalmax-nvr
    ```
 2. Test camera stream manually:
    ```bash
@@ -136,7 +136,7 @@ This guide helps you diagnose and resolve common issues with lalmax-nvr. If you 
 **Solution**:
 1. Check startup logs for configuration validation errors:
    ```bash
-   journalctl -u lalmax-nvr -f | grep -i "config\|error"
+   docker compose logs lalmax-nvr | grep -i "config\|error"
    ```
 2. Verify all required camera fields are present:
    ```yaml
@@ -571,14 +571,9 @@ observability:
 ```
 
 #### Log Locations
-**Systemd Service**:
-```bash
-journalctl -u lalmax-nvr -f
-```
-
 **Docker Container**:
 ```bash
-docker logs -f lalmax-nvr-container
+docker compose logs -f lalmax-nvr
 ```
 
 **Binary Run Directly**:
@@ -669,7 +664,7 @@ When creating a GitHub issue, include:
 
 4. **Logs** (last 50 lines):
    ```bash
-   journalctl -u lalmax-nvr --since "1 hour ago"
+   docker compose logs --tail 50 lalmax-nvr
    ```
 
 5. **Reproduction Steps**:
@@ -685,9 +680,9 @@ When creating a GitHub issue, include:
 ## Emergency Procedures
 
 ### System Becomes Unresponsive
-1. Stop the service:
+1. Stop Docker deployment if used:
    ```bash
-   sudo systemctl stop lalmax-nvr
+   docker compose stop lalmax-nvr
    ```
 2. Kill any remaining processes:
    ```bash
@@ -704,7 +699,7 @@ When creating a GitHub issue, include:
    # Use minimal config
    cp lalmax-nvr.yaml lalmax-nvr.yaml.backup
    # Edit to enable only essential cameras
-   sudo systemctl start lalmax-nvr
+   docker compose start lalmax-nvr
    ```
 
 ### Corrupted Configuration
@@ -723,7 +718,7 @@ When creating a GitHub issue, include:
      username: "admin"
      password: "temp-password"
    ```
-3. Restart service and reconfigure
+3. Restart the process or container and reconfigure
 
 ### Database Corruption
 1. Backup database:
@@ -736,6 +731,6 @@ When creating a GitHub issue, include:
    ```
 3. Restart service (database will be recreated):
    ```bash
-   sudo systemctl restart lalmax-nvr
+   docker compose restart lalmax-nvr
    ```
 4. Reconfigure all cameras

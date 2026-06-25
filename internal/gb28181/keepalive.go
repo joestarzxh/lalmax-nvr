@@ -39,8 +39,9 @@ func (g *GB28181API) handlerNotify(req *sip.Request, tx sip.ServerTransaction) {
 
 func (g *GB28181API) handleKeepalive(deviceID, source, status string) {
 	g.store.LoadOrStore(deviceID, &Device{
-		DeviceID: deviceID,
-		source:   source,
+		DeviceID:  deviceID,
+		source:    source,
+		GBVersion: g.configuredGBVersion(),
 	})
 
 	dev, _ := g.store.Load(deviceID)

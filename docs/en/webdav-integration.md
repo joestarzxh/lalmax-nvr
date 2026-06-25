@@ -310,7 +310,7 @@ curl -v -u admin:password -T /etc/hosts http://localhost:9090/dav/test.txt
 **检查系统日志**
 ```bash
 # 查看详细日志
-journalctl -u lalmax-nvr -f | grep webdav
+docker compose logs -f lalmax-nvr | grep webdav
 
 # Docker 容器
 docker logs -f lalmax-nvr | grep webdav

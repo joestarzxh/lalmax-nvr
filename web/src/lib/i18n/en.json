@@ -1099,6 +1099,8 @@
   "settings.gb28181.enabled": "Enable GB28181",
   "settings.gb28181.enabledState": "Enabled",
   "settings.gb28181.disabledState": "Disabled",
+  "settings.gb28181.standardVersion": "Standard Version",
+  "settings.gb28181.standardVersionHint": "Only affects backend protocol parsing and control dispatch; frontend operations do not branch by version",
   "settings.gb28181.id": "SIP Platform ID",
   "settings.gb28181.password": "Registration Password",
   "settings.gb28181.host": "SIP Listen Address",

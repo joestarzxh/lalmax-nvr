@@ -127,8 +127,6 @@ type Handler struct {
 	configWatcher     *config.Watcher
 	camMgr            *camera.CameraManager
 	mediaEngine       media.Engine
-	hlsMgr            media.HLS
-	flvMgr            media.FLV
 	wsMgr             media.WS
 	configPath        string
 	snapshotMu        sync.RWMutex
@@ -171,14 +169,13 @@ func (h *Handler) SetConfigWatcher(w *config.Watcher) {
 	h.configWatcher = w
 }
 
-func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, hlsMgr media.HLS, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
+func NewHandler(db *storage.DB, store *storage.Manager, authMW func(http.Handler) http.Handler, cfg *config.Config, camMgr *camera.CameraManager, configPath string, mergeMgr *merge.MergeManager, cloudProxy CloudAuthProxy) *Handler {
 	h := &Handler{
 		db:               db,
 		store:            store,
 		authMW:           authMW,
 		config:           cfg,
 		camMgr:           camMgr,
-		hlsMgr:           hlsMgr,
 		configPath:       configPath,
 		snapshots:        make(map[string]*snapshotCache),
 		mergeMgr:         mergeMgr,
@@ -451,6 +448,63 @@ func (h *Handler) Routes() http.Handler {
 				r.Delete("/channels", h.handleRemoveGroupChannel)
 			})
 		})
+		// GB28181 API routes
+		r.Route("/api/gb28181", func(r chi.Router) {
+			r.Get("/devices", h.handleGB28181ListDevices)
+			r.Post("/play", h.handleGB28181Play)
+			r.Post("/stop", h.handleGB28181StopPlay)
+			r.Post("/record_info", h.handleGB28181RecordInfo)
+			r.Post("/playback", h.handleGB28181Playback)
+			r.Post("/playback/speed", h.handleGB28181PlaySpeed)
+			r.Post("/playback/seek", h.handleGB28181PlaySeek)
+			r.Post("/playback/pause", h.handleGB28181PlayPause)
+			r.Post("/playback/resume", h.handleGB28181PlayResume)
+			r.Get("/platforms", h.handleGB28181ListPlatforms)
+			r.Post("/platforms", h.handleGB28181AddPlatform)
+			r.Delete("/platforms", h.handleGB28181DeletePlatform)
+			r.Post("/broadcast/start", h.handleGB28181StartBroadcast)
+			r.Post("/broadcast/stop", h.handleGB28181StopBroadcast)
+			r.Get("/talk/ws", h.handleGB28181TalkWS)
+			r.Post("/talk/start", h.handleGB28181StartTalkWhip)
+			r.Post("/talk/stop", h.handleGB28181StopTalkWhip)
+			r.Get("/alarms", h.handleGB28181ListAlarms)
+			r.Get("/platform/events", h.handleGB28181ListPlatformEvents)
+			r.Get("/platform/status", h.handleGB28181GetPlatformStatus)
+			r.Post("/download/start", h.handleGB28181StartDownload)
+			r.Post("/download/batch", h.handleGB28181BatchDownload)
+			r.Post("/download/stop", h.handleGB28181StopDownload)
+			r.Get("/downloads", h.handleGB28181ListDownloads)
+			r.Route("/devices/{deviceID}/channels/{channelID}", func(r chi.Router) {
+				// PTZ控制
+				r.Post("/ptz", h.handleGB28181PTZControl)
+				r.Post("/ptz/position", h.handleGB28181PTZPositionControl)
+				r.Get("/ptz/position", h.handleGB28181PTZQueryPosition)
+
+				// 预置位管理
+				r.Post("/preset/{presetID}", h.handleGB28181PresetSet)
+				r.Post("/preset/{presetID}/call", h.handleGB28181PresetCall)
+				r.Delete("/preset/{presetID}", h.handleGB28181PresetDelete)
+
+				// 巡航控制
+				r.Post("/cruise/point", h.handleGB28181CruiseAddPoint)
+				r.Delete("/cruise/point", h.handleGB28181CruiseDeletePoint)
+				r.Post("/cruise/{cruiseID}/start", h.handleGB28181CruiseStart)
+				r.Post("/cruise/{cruiseID}/stop", h.handleGB28181CruiseStop)
+
+				// 图像抓拍
+				r.Post("/snapshot", h.handleGB28181Snapshot)
+
+				// 设备控制
+				r.Post("/reset", h.handleGB28181DeviceReset)
+				r.Post("/record", h.handleGB28181RecordControl)
+				r.Post("/home-position", h.handleGB28181HomePosition)
+
+				// 设备查询
+				r.Get("/info", h.handleGB28181DeviceInfoQuery)
+				r.Get("/status", h.handleGB28181DeviceStatusQuery)
+				r.Get("/config", h.handleGB28181DeviceConfigQuery)
+			})
+		})
 		// Recording Plans
 		r.Route("/api/recording-plans", func(r chi.Router) {
 			r.Get("/", h.handleListRecordingPlans)
@@ -525,7 +579,7 @@ func noopAuthMW() func(http.Handler) http.Handler {
 
 // noopHandler is a helper for creating a Handler without real auth.
 func noopHandler(db *storage.DB, store *storage.Manager) *Handler {
-	h := NewHandler(db, store, noopAuthMW(), nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, noopAuthMW(), nil, nil, "", nil, nil)
 	h.readyzDiskUsage = func() (int64, int64, error) {
 		return 1_000_000_000_000, 100_000_000_000, nil
 	}
@@ -557,7 +611,7 @@ func TestHandlerWithAuth(db *storage.DB, store *storage.Manager, username, passw
 		GetUsername: func() string { return username },
 		GetHash:     func() string { return passwordHash },
 	}, "")
-	h := NewHandler(db, store, authMW, nil, nil, nil, "", nil, nil)
+	h := NewHandler(db, store, authMW, nil, nil, "", nil, nil)
 	// Set up multi-user middleware that injects a super_admin user after auth succeeds
 	h.SetMultiUserAuthMW(func(next http.Handler) http.Handler {
 		return authMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -586,11 +640,6 @@ func extractDIDFromURL(rawURL string) string {
 // strPtr returns a pointer to the given string.
 func strPtr(s string) *string {
 	return &s
-}
-
-// SetFLVManager sets the FLV manager on the handler.
-func (h *Handler) SetFLVManager(mgr media.FLV) {
-	h.flvMgr = mgr
 }
 
 // SetWSManager sets the WebSocket stream manager on the handler.
@@ -922,16 +971,6 @@ func (h *Handler) protocolPlayURL(ctx context.Context, cameraID, protocol string
 		}
 	}
 
-	switch protocol {
-	case "hls", "ll-hls":
-		if h.hlsMgr != nil {
-			return "/api/cameras/" + cameraID + "/stream/index.m3u8", "builtin-hls", true
-		}
-	case "flv":
-		if h.flvMgr != nil {
-			return "/api/cameras/" + cameraID + "/stream.flv", "builtin-flv", true
-		}
-	}
 	return "", "", false
 }
 

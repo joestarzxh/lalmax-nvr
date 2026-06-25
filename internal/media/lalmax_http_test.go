@@ -129,7 +129,7 @@ func TestLalmaxHTTPBuildPlayURL_HLS(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, playURL)
 	require.Equal(t, "hls", playURL.Protocol)
-	require.Equal(t, "http://127.0.0.1:8080/live/hls/cam1/index.m3u8?app_name=live", playURL.URL)
+	require.Equal(t, "http://127.0.0.1:8080/hls/cam1.m3u8", playURL.URL)
 }
 
 func TestLalmaxHTTPBuildPlayURL_LLHLS(t *testing.T) {
@@ -149,7 +149,7 @@ func TestLalmaxHTTPBuildPlayURL_LLHLS(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, playURL)
 	require.Equal(t, "ll-hls", playURL.Protocol)
-	require.Equal(t, "http://127.0.0.1:1290/live/hls/cam1/index.m3u8?app_name=live", playURL.URL)
+	require.Equal(t, "http://127.0.0.1:1290/live/hls/cam1/index.m3u8?app_name=live&ll-hls=1", playURL.URL)
 }
 
 func TestLalmaxHTTPBuildPlayURL_RTMP(t *testing.T) {

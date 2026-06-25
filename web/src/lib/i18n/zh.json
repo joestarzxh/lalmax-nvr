@@ -1097,6 +1097,8 @@
   "settings.gb28181.enabled": "启用 GB28181",
   "settings.gb28181.enabledState": "已启用",
   "settings.gb28181.disabledState": "已禁用",
+  "settings.gb28181.standardVersion": "协议版本",
+  "settings.gb28181.standardVersionHint": "仅影响后端协议解析和控制分派，前端操作不按版本分支",
   "settings.gb28181.id": "SIP 平台 ID",
   "settings.gb28181.password": "注册密码",
   "settings.gb28181.host": "SIP 监听地址",

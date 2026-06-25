@@ -179,9 +179,7 @@ hikvision-sdk-service/
 │
 ├── scripts/                          # 脚本
 │   ├── build.sh
-│   ├── install.sh
-│   └── systemd/
-│       └── hikvision-sdk.service
+│   └── run.sh
 │
 └── docker/                           # Docker支持
     ├── Dockerfile
@@ -1407,58 +1405,22 @@ echo "lalmax-nvr started with PID: $NVR_PID"
 wait $HIK_PID $NVR_PID
 ```
 
-### 6.2 Systemd服务配置
+### 6.2 前台运行
 
-```ini
-# /etc/systemd/system/hikvision-sdk.service
-[Unit]
-Description=Hikvision SDK Service
-After=network.target
+如果不使用 Docker，可以直接以前台方式运行海康 SDK 服务和 lalmax-nvr：
 
-[Service]
-Type=simple
-User=root
-Group=root
-WorkingDirectory=/opt/hikvision-sdk-service
-ExecStart=/opt/hikvision-sdk-service/hikvision-sdk-service --config /etc/hikvision-sdk/config.yaml
-ExecStop=/bin/kill -TERM $MAINPID
-Restart=always
-RestartSec=5
+```bash
+export LD_LIBRARY_PATH=/opt/hikvision-sdk/lib:$LD_LIBRARY_PATH
 
-# 环境变量
-Environment=LD_LIBRARY_PATH=/opt/hikvision-sdk/lib
-
-# 资源限制
-LimitNOFILE=65536
-LimitNPROC=65536
-
-[Install]
-WantedBy=multi-user.target
+cd /opt/hikvision-sdk-service
+./hikvision-sdk-service --config /etc/hikvision-sdk/config.yaml
 ```
 
-```ini
-# /etc/systemd/system/lalmax-nvr.service
-[Unit]
-Description=lalmax NVR
-After=network.target hikvision-sdk.service
-Requires=hikvision-sdk.service
+另开一个终端启动 lalmax-nvr：
 
-[Service]
-Type=simple
-User=root
-Group=root
-WorkingDirectory=/opt/lalmax-nvr
-ExecStart=/opt/lalmax-nvr/lalmax-nvr --config /etc/lalmax-nvr/config.yaml
-ExecStop=/bin/kill -TERM $MAINPID
-Restart=always
-RestartSec=5
-
-# 资源限制
-LimitNOFILE=65536
-LimitNPROC=65536
-
-[Install]
-WantedBy=multi-user.target
+```bash
+cd /opt/lalmax-nvr
+./lalmax-nvr --config /etc/lalmax-nvr/config.yaml
 ```
 
 ### 6.3 Docker部署
@@ -1946,9 +1908,9 @@ tail -f /var/log/hikvision-sdk/service.log
 # 查看lalmax-nvr日志
 tail -f /var/log/lalmax-nvr/nvr.log
 
-# 查看系统日志
-journalctl -u hikvision-sdk.service -f
-journalctl -u lalmax-nvr.service -f
+# Docker 部署时查看容器日志
+docker compose logs -f hikvision-sdk
+docker compose logs -f lalmax-nvr
 ```
 
 ### 9.3 调试模式

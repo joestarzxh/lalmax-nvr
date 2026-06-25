@@ -4,10 +4,10 @@
 
 ## 背景
 
-当前项目已经把大部分摄像头主链路收敛到 `lalmax`，但 `外部推流` 仍然存在模型不统一的问题：
+当前项目已经把摄像头媒体链路收敛到 `lalmax`，但 `外部推流` 还没有完全建模为一等业务对象：
 
 1. `lalmax embedded` 自带 `RTMP/RTSP/HTTP-FLV/WebRTC` 等媒体接入与分发能力
-2. 项目内仍保留独立的 `internal/rtmp.Server`
+2. `internal/media.IngestHandler` 只负责把 lalmax publish 事件映射到 camera ID
 3. API 与前端主要围绕 `camera_id` 建模
 4. `lalmax` 中已有的 stream group 不能自然映射为“可见、可绑定、可操作”的业务对象
 
@@ -19,18 +19,18 @@
 
 ## 当前问题
 
-### 1. 接入层重复
+### 1. 接入与业务绑定仍需分层
 
-当前存在两套 RTMP 路径：
+当前实际媒体接入已经只走 lalmax/lal：
 
-- `lalmax/lal` 自带 RTMP 接入
-- `internal/rtmp.Server` 自定义 RTMP 接入
+- `lalmax/lal` 自带 RTMP/SRT 接入
+- `internal/media.IngestHandler` 只保留 stream name 到 camera ID 的业务映射
 
-这会带来：
+后续仍需解决：
 
-- 状态来源分裂
-- 生命周期事件分裂
-- 以后扩展 SRT / 其它 ingest 时继续复制同类问题
+- 映射规则持久化
+- Stream API 与前端可见性
+- 推流生命周期的业务操作
 
 ### 2. 业务模型过度依赖 Camera
 
@@ -199,24 +199,24 @@
 - 提升为 source
 - 断开连接
 
-## 对 internal/rtmp.Server 的处理建议
+## 对 media ingest 映射的处理建议
 
 结论：
 
-- **不建议继续作为长期主路径维护**
-- **也不建议立即删除**
+- **实际 ingest 保持在 lalmax/lal**
+- **`internal/media.IngestHandler` 只作为业务胶水保留**
 
 原因：
 
-1. 它目前仍承担了部分 `stream key -> camera hub` 的过渡能力
-2. 但它不在统一的 `mediaEngine.ListStreams()` 状态面里
-3. 在 `Streams API + 绑定模型` 完成前，直接删除会导致功能回退
+1. 它承担 `stream key -> camera_id` 和 `stream name -> camera_id` 的映射
+2. 它避免在 lalmax-nvr 里复制 RTMP/SRT 协议代码
+3. 后续可被持久化的 stream binding 模型替代
 
 建议策略：
 
 ### 阶段 A
 
-- 停止为 `internal/rtmp.Server` 增加新能力
+- 停止在 lalmax/lal 之外新增协议级 ingest 能力
 - 所有新增 ingest 能力优先走 `lalmax`
 
 ### 阶段 B
@@ -227,12 +227,12 @@
 ### 阶段 C
 
 - 完成绑定与控制能力
-- 将 Settings 中的 `RTMP stream key -> camera ID` 改造为“绑定规则”而非“第二套服务器配置”
+- 将 Settings 中的 `RTMP stream key -> camera ID` 改造为“绑定规则”
 
 ### 阶段 D
 
-- 当 `lalmax` ingest 已能完整承接后
-- 下线 `internal/rtmp.Server`
+- 当 stream binding 完整建模后
+- 下线临时的事件到 camera 映射胶水
 
 ## 不建议的方向
 
@@ -301,7 +301,7 @@
 
 实施：
 
-- 停用 `internal/rtmp.Server`
+- 停用 lalmax/lal 之外的协议级 ingest 代码
 - 统一通过 `lalmax/lal` ingest + `lalmax-nvr` 业务绑定层工作
 
 ## 当前建议
@@ -311,7 +311,7 @@
 1. 先做 `GET /api/streams`
 2. 再做 `Streams` 页面
 3. 再做"绑定 camera / 提升 source"
-4. 最后下线 `internal/rtmp.Server`
+4. 最后用正式 stream binding 替代临时映射胶水
 
 这是风险最小、收益最快的路径。
 
