@@ -32,7 +32,16 @@ export interface Camera {
   audio_enabled?: boolean;
   source_type?: string;
   recording_paused?: boolean;
+  recording_mode?: RecordingMode;
   created_at?: string; // RFC3339
+}
+
+export type RecordingMode = 'continuous' | 'scheduled' | 'off';
+
+export interface RecordingScheduleRange {
+  day_of_week: number; // 0=Sunday .. 6=Saturday
+  start_time: string;  // "HH:MM"
+  end_time: string;    // "HH:MM"
 }
 
 export interface CreateCameraRequest {
@@ -76,6 +85,7 @@ export interface UpdateCameraRequest {
   profile_name?: string;
   stream_encoding?: string;
   audio_enabled?: boolean;
+  recording_mode?: RecordingMode;
 }
 
 export interface DiscoveredDevice {
@@ -305,6 +315,15 @@ export async function getCameraRecordingStats(id: string, signal?: AbortSignal):
   return apiRequest<CameraRecordingStats>(`/cameras/${id}/stats`, { signal });
 }
 
+// getRecordingDays returns days (YYYY-MM-DD) in the given month (YYYY-MM) that have recordings.
+export async function getRecordingDays(id: string, month: string, signal?: AbortSignal): Promise<string[]> {
+  const res = await apiRequest<{ days: string[] }>(
+    `/cameras/${id}/recordings/days?month=${encodeURIComponent(month)}`,
+    { signal },
+  );
+  return res.days ?? [];
+}
+
 export async function enableCamera(id: string, signal?: AbortSignal): Promise<Camera> {
   return updateCamera(id, { enabled: true }, signal);
 }
@@ -415,6 +434,29 @@ export async function updateMergeConfig(
   return apiRequest<{ status: string }>(`/cameras/${cameraId}/merge-config`, {
     method: 'PUT',
     body: JSON.stringify(config),
+    signal,
+  });
+}
+
+export async function getRecordingSchedule(
+  cameraId: string,
+  signal?: AbortSignal
+): Promise<RecordingScheduleRange[]> {
+  const res = await apiRequest<{ ranges: RecordingScheduleRange[] }>(
+    `/cameras/${cameraId}/recording-schedule`,
+    { signal }
+  );
+  return res.ranges ?? [];
+}
+
+export async function setRecordingSchedule(
+  cameraId: string,
+  ranges: RecordingScheduleRange[],
+  signal?: AbortSignal
+): Promise<{ status: string }> {
+  return apiRequest<{ status: string }>(`/cameras/${cameraId}/recording-schedule`, {
+    method: 'PUT',
+    body: JSON.stringify({ ranges }),
     signal,
   });
 }

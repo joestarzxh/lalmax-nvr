@@ -120,10 +120,6 @@ func (d *DB) Init(ctx context.Context) error {
 	if err := d.createGroupTables(ctx); err != nil {
 		return err
 	}
-	// Recording plan tables
-	if err := d.createRecordingPlanTables(ctx); err != nil {
-		return err
-	}
 	if err := d.createAITables(ctx); err != nil {
 		return err
 	}
@@ -399,6 +395,12 @@ func (d *DB) Init(ctx context.Context) error {
 		_, _ = d.db.ExecContext(ctx, "ALTER TABLE cameras ADD COLUMN profile_name TEXT DEFAULT ''")
 	}
 	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='22' WHERE key='schema_version'")
+
+	// Migration v22 → v23: per-camera recording_mode + schedules, migrate recording plans.
+	if err := d.migrateRecordingMode(ctx); err != nil {
+		return err
+	}
+	_, _ = d.db.ExecContext(ctx, "UPDATE schema_meta SET value='23' WHERE key='schema_version'")
 
 	return nil
 

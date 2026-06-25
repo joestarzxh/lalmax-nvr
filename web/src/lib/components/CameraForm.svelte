@@ -26,6 +26,7 @@
   import { showToast } from '$lib/toast';
   import MergeConfigEditor from '$lib/components/MergeConfigEditor.svelte';
   import TimelapseConfigEditor from '$lib/components/TimelapseConfigEditor.svelte';
+  import RecordingScheduleEditor from '$lib/components/RecordingScheduleEditor.svelte';
   import DeviceCapabilities from '$lib/components/DeviceCapabilities.svelte';
   import ImagingPanel from '$lib/components/ImagingPanel.svelte';
   import PresetManager from '$lib/components/PresetManager.svelte';
@@ -69,6 +70,7 @@
   let formRetentionDays = $state(0);
   let formStreamEncoding = $state('');
   let formAudioEnabled = $state(false);
+  let formRecordingMode = $state<'continuous' | 'scheduled' | 'off'>('continuous');
   let validationErrors = $state<Record<string, string>>({});
 
   // Test connection state
@@ -144,6 +146,7 @@
     formRetentionDays = 0;
     formStreamEncoding = '';
     formAudioEnabled = false;
+    formRecordingMode = 'continuous';
     formProfileToken = '';
     selectedProfile = null;
     onvifProfiles = [];
@@ -173,6 +176,7 @@
     formRetentionDays = camera.retention_days || 0;
     formStreamEncoding = camera.stream_encoding || '';
     formAudioEnabled = camera.audio_enabled ?? false;
+    formRecordingMode = camera.recording_mode ?? 'continuous';
     formProfileToken = camera.profile_token || '';
     selectedProfile = null;
     validationErrors = {};
@@ -307,6 +311,7 @@
           profile_token: formProtocol === 'onvif' ? (formProfileToken || undefined) : undefined,
           profile_name: formProtocol === 'onvif' ? (selectedProfile?.name || undefined) : undefined,
           audio_enabled: supportsAudioRecording() ? formAudioEnabled : false,
+          recording_mode: formRecordingMode,
         };
         if (formUsername && formUsername !== editingCamera.username) {
           data.username = formUsername;
@@ -618,6 +623,30 @@
       <p class="th-text-muted text-xs mt-1">{t('cameras.retentionDaysHint')}</p>
     </div>
   </div>
+
+  <!-- Recording mode (edit mode only) -->
+  {#if editingCamera}
+    <div class="mt-6 border th-border rounded-lg p-4">
+      <div class="mb-3">
+        <span class="th-text-secondary font-medium text-sm">{t('cameras.recordingMode.title')}</span>
+        <p class="th-text-muted text-xs mt-1">{t('cameras.recordingMode.hint')}</p>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        {#each (['continuous', 'scheduled', 'off'] as const) as mode}
+          <button
+            type="button"
+            class="btn px-3 py-1.5 text-sm {formRecordingMode === mode ? 'btn-primary' : 'btn-ghost'}"
+            onclick={() => formRecordingMode = mode}
+          >
+            {t(`cameras.recordingMode.${mode}`)}
+          </button>
+        {/each}
+      </div>
+      {#if formRecordingMode === 'scheduled'}
+        <RecordingScheduleEditor cameraId={editingCamera.id} />
+      {/if}
+    </div>
+  {/if}
 
   <!-- Merge Config (edit mode only) -->
   {#if editingCamera}

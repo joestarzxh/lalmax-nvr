@@ -78,6 +78,31 @@ func (d *DB) GetRecordingTrends(ctx context.Context, days int) ([]model.DailySta
 	return result, nil
 }
 
+// GetRecordingDays returns the distinct days (YYYY-MM-DD) in the given month
+// (YYYY-MM) that have at least one recording for the camera. Used to mark
+// available days in the recordings calendar.
+func (d *DB) GetRecordingDays(ctx context.Context, cameraID, month string) ([]string, error) {
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT DISTINCT DATE(started_at) as day
+		FROM recordings
+		WHERE camera_id = ? AND strftime('%Y-%m', started_at) = ?
+		ORDER BY day`, cameraID, month)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	days := make([]string, 0)
+	for rows.Next() {
+		var day string
+		if err := rows.Scan(&day); err != nil {
+			return nil, err
+		}
+		days = append(days, day)
+	}
+	return days, rows.Err()
+}
+
 // GetLastRecordingTime returns the most recent ended_at for a camera.
 func (d *DB) GetLastRecordingTime(ctx context.Context, cameraID string) (*time.Time, error) {
 	var endedAtStr sql.NullString

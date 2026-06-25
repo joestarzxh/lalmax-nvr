@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import { listRecordings, listCameras, deleteRecording, downloadRecording } from '$lib/api';
   import type { Recording, Camera } from '$lib/api';
   import { formatDate, formatDuration, formatFileSize } from '$lib/format';
@@ -8,10 +8,13 @@
   import { Trash2, Download, ChevronLeft, ChevronRight, Calendar, AlertCircle, Play } from 'lucide-svelte';
   import Timeline from '$lib/components/Timeline.svelte';
   import InlinePlayer from '$lib/components/InlinePlayer.svelte';
+  import RecordingCalendar from '$lib/components/RecordingCalendar.svelte';
+
+  let { initialCameraId = '' }: { initialCameraId?: string } = $props();
 
   // State
   let cameras = $state<Camera[]>([]);
-  let selectedCameraId = $state('');
+  let selectedCameraId = $state(untrack(() => initialCameraId));
   let selectedDate = $state(formatDateForInput(new Date()));
   let selectedHour = $state<number>(-1); // -1 = all hours
   let recordings = $state<Recording[]>([]);
@@ -23,6 +26,9 @@
   // Filters for recording list
   let formatFilter = $state('');
   let mergedFilter = $state('');
+
+  // Calendar (shows which days have recordings)
+  let showCalendar = $state(false);
 
   // Helpers
   function formatDateForInput(d: Date): string {
@@ -209,6 +215,14 @@
           <button onclick={goToToday} class="btn btn-secondary btn-sm">
             {t('recordings.page.today')}
           </button>
+          <button
+            onclick={() => showCalendar = !showCalendar}
+            class="btn btn-sm {showCalendar ? 'btn-primary' : 'btn-ghost'}"
+            title={t('recordings.calendar.toggle')}
+            aria-pressed={showCalendar}
+          >
+            <Calendar size={18} />
+          </button>
         </div>
 
         <!-- Hour selector -->
@@ -222,6 +236,16 @@
           </select>
         </div>
       </div>
+
+      {#if showCalendar && selectedCameraId}
+        <div class="mt-4 pt-4 border-t th-border max-w-xs">
+          <RecordingCalendar
+            cameraId={selectedCameraId}
+            {selectedDate}
+            onselect={(d) => { selectedDate = d; }}
+          />
+        </div>
+      {/if}
     </div>
 
     <!-- Timeline -->

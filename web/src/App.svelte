@@ -17,7 +17,6 @@
 
   import Devices from './routes/Devices.svelte';
   import DeviceGroups from './routes/DeviceGroups.svelte';
-  import RecordingPlans from './routes/RecordingPlans.svelte';
   import Users from './routes/Users.svelte';
   import AIDetection from './routes/AIDetection.svelte';
   import Header from './components/Header';
@@ -58,7 +57,12 @@
 
   // Parse hash-based routes (hoisted — function declarations are available before this line)
   function parseRoute(hash: string) {
-    const path = hash.slice(1); // Remove #
+    const raw = hash.slice(1); // Remove #
+    // Separate the query string so it doesn't leak into the path segments
+    // (e.g. "#/events?camera_id=X" must still match the "events" route).
+    const qIdx = raw.indexOf('?');
+    const path = qIdx >= 0 ? raw.slice(0, qIdx) : raw;
+    const query = new URLSearchParams(qIdx >= 0 ? raw.slice(qIdx + 1) : '');
 
     if (!path || path === '/') {
       return isAuthenticated() ? { route: 'dashboard', params: {} } : { route: 'login', params: {} };
@@ -83,11 +87,11 @@
       if (segments[1]) {
         return { route: 'recording-detail', params: { id: segments[1] } };
       }
-      return { route: 'recordings', params: {} };
+      return { route: 'recordings', params: { cameraId: query.get('camera_id') || '' } };
     }
 
     if (segments[0] === 'events') {
-      return { route: 'events', params: {} };
+      return { route: 'events', params: { cameraId: query.get('camera_id') || '' } };
     }
 
     if (segments[0] === 'cameras') {
@@ -139,9 +143,6 @@
       return { route: 'device-groups', params: {} };
     }
 
-    if (segments[0] === 'recording-plans') {
-      return { route: 'recording-plans', params: {} };
-    }
 
     if (segments[0] === 'users') {
       return { route: 'users', params: {} };
@@ -232,11 +233,11 @@
     <Header showBack={currentRoute === 'recording-detail' || currentRoute === 'live' || currentRoute === 'stream-detail'} />
     <main class="main-content">
       {#if currentRoute === 'recordings'}
-        <Recordings />
+        <Recordings initialCameraId={params.cameraId} />
       {:else if currentRoute === 'recording-detail'}
         <RecordingDetail recordingId={params.id} />
       {:else if currentRoute === 'events'}
-        <Events />
+        <Events initialCameraId={params.cameraId} />
       {:else if currentRoute === 'live'}
         <LiveView cameraId={params.id} />
       {:else if currentRoute === 'devices'}
@@ -253,8 +254,6 @@
         <Dashboard initialTab={params.tab || 'dashboard'} />
       {:else if currentRoute === 'device-groups'}
         <DeviceGroups />
-      {:else if currentRoute === 'recording-plans'}
-        <RecordingPlans />
       {:else if currentRoute === 'users'}
         <Users />
       {:else if currentRoute === 'ai-detection'}

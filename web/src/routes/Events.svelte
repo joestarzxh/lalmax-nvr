@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { listEvents, acknowledgeEvent, listCameras } from '$lib/api';
   import type { Camera, EventsResponse, NvrEvent } from '$lib/api';
   import { formatDate } from '$lib/format';
@@ -7,12 +7,14 @@
   import { Activity, AlertCircle, Check, ExternalLink, RefreshCw } from 'lucide-svelte';
   import Pagination from '../components/Pagination.svelte';
 
+  let { initialCameraId = '' }: { initialCameraId?: string } = $props();
+
   let events = $state<NvrEvent[]>([]);
   let cameras = $state<Camera[]>([]);
   let total = $state(0);
   let loading = $state(true);
   let error = $state('');
-  let cameraFilter = $state('');
+  let cameraFilter = $state(untrack(() => initialCameraId));
   let sourceFilter = $state('');
   let statusFilter = $state('');
   let page = $state(0);

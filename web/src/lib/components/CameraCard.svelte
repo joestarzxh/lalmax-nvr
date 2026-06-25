@@ -4,7 +4,7 @@
   import type { Camera, ProtocolInfo } from '$lib/api';
   import type { CameraHealth } from '$lib/api/health';
   import type { PTZCapabilitiesDetailed } from '$lib/api/cameras';
-  import { Pencil, Play, Pause, Square, RotateCw, Eye, MoreVertical, Archive, Trash2, Image, Bell, Move, Mic, MicOff, Camera as CameraIcon, ZoomIn, Home } from 'lucide-svelte';
+  import { Pencil, Play, Pause, Square, RotateCw, Eye, MoreVertical, Archive, Trash2, Image, Bell, Move, Mic, MicOff, Camera as CameraIcon, ZoomIn, Home, CalendarClock, CircleOff } from 'lucide-svelte';
 
   interface Props {
     camera: Camera;
@@ -267,6 +267,17 @@
           <span class="inline-flex items-center gap-1 text-xs text-purple-600 bg-purple-50 dark:text-purple-400 dark:bg-purple-900/30 px-2 py-0.5 rounded">
             <CameraIcon size={10} />
             快照
+          </span>
+        {/if}
+        {#if camera.recording_mode === 'scheduled'}
+          <span class="inline-flex items-center gap-1 text-xs text-amber-600 bg-amber-50 dark:text-amber-400 dark:bg-amber-900/30 px-2 py-0.5 rounded">
+            <CalendarClock size={10} />
+            {t('cameras.recordingMode.scheduled')}
+          </span>
+        {:else if camera.recording_mode === 'off'}
+          <span class="inline-flex items-center gap-1 text-xs th-text-tertiary th-bg-tertiary px-2 py-0.5 rounded">
+            <CircleOff size={10} />
+            {t('cameras.recordingMode.off')}
           </span>
         {/if}
       </div>

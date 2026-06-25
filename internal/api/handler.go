@@ -330,9 +330,13 @@ func (h *Handler) Routes() http.Handler {
 				r.With(middleware.RequireOperatePermission()).Put("/merge-config", h.handleUpdateCameraMergeConfig)
 				r.With(middleware.RequireOperatePermission()).Delete("/merge-config", h.handleDeleteCameraMergeConfig)
 				r.Get("/stats", h.handleCameraRecordingStats)
+				r.Get("/recordings/days", h.handleCameraRecordingDays)
 				// Per-camera timelapse configuration
 				r.Get("/timelapse", h.handleGetCameraTimelapse)
 				r.With(middleware.RequireOperatePermission()).Put("/timelapse", h.handlePutCameraTimelapse)
+				// Per-camera recording schedule (used when recording_mode = scheduled)
+				r.Get("/recording-schedule", h.handleGetRecordingSchedule)
+				r.With(middleware.RequireOperatePermission()).Put("/recording-schedule", h.handleSetRecordingSchedule)
 				r.With(middleware.RequireOperatePermission()).Post("/start", h.handleStartCamera)
 				r.With(middleware.RequireOperatePermission()).Post("/stop", h.handleStopCamera)
 				r.With(middleware.RequireOperatePermission()).Post("/pause-recording", h.handlePauseRecording)
@@ -508,19 +512,6 @@ func (h *Handler) Routes() http.Handler {
 				r.Get("/info", h.handleGB28181DeviceInfoQuery)
 				r.Get("/status", h.handleGB28181DeviceStatusQuery)
 				r.Get("/config", h.handleGB28181DeviceConfigQuery)
-			})
-		})
-		// Recording Plans
-		r.Route("/api/recording-plans", func(r chi.Router) {
-			r.Get("/", h.handleListRecordingPlans)
-			r.Post("/", h.handleCreateRecordingPlan)
-			r.Route("/{id}", func(r chi.Router) {
-				r.Get("/", h.handleGetRecordingPlan)
-				r.Put("/", h.handleUpdateRecordingPlan)
-				r.Delete("/", h.handleDeleteRecordingPlan)
-				r.Put("/channels", h.handleSetPlanChannels)
-				r.Post("/channels", h.handleAddPlanChannel)
-				r.Delete("/channels/{camera_id}", h.handleRemovePlanChannel)
 			})
 		})
 	})

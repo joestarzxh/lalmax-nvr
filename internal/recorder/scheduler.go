@@ -11,8 +11,9 @@ import (
 
 var schedLogger = slog.Default().With("component", "recording-scheduler")
 
-// RecordingScheduler periodically checks recording plans and pauses/resumes
-// cameras based on whether the current time falls within a plan's time range.
+// RecordingScheduler periodically reconciles each camera's recorder against its
+// recording_mode + weekly schedule: continuous → always recording, off/event →
+// paused, scheduled → recording only within the camera's time windows.
 type RecordingScheduler struct {
 	db     *storage.DB
 	mu     sync.Mutex
@@ -65,33 +66,22 @@ func (s *RecordingScheduler) check(ctx context.Context, pauseFn, resumeFn func(c
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Get cameras that should be active NOW based on plans
-	activeCameraIDs, err := s.db.GetActiveCameraIDs(ctx)
+	// Desired recording state per camera, derived from recording_mode + schedule.
+	desired, err := s.db.GetDesiredRecordingState(ctx)
 	if err != nil {
-		schedLogger.Error("failed to get active camera IDs", "error", err)
+		schedLogger.Error("failed to get desired recording state", "error", err)
 		return
 	}
 
-	// Get cameras that are associated with ANY enabled plan
-	camerasWithPlan, err := s.db.GetCamerasWithPlan(ctx)
-	if err != nil {
-		schedLogger.Error("failed to get cameras with plan", "error", err)
-		return
-	}
-
-	// For cameras in a plan but NOT in the active time range → pause
-	for cameraID := range camerasWithPlan {
-		if !activeCameraIDs[cameraID] {
+	for cameraID, shouldRecord := range desired {
+		if shouldRecord {
+			if err := resumeFn(ctx, cameraID); err != nil {
+				schedLogger.Debug("resume failed (camera may already be recording)", "camera_id", cameraID, "error", err)
+			}
+		} else {
 			if err := pauseFn(ctx, cameraID); err != nil {
 				schedLogger.Debug("pause failed (camera may already be paused)", "camera_id", cameraID, "error", err)
 			}
-		}
-	}
-
-	// For cameras in the active time range → resume
-	for cameraID := range activeCameraIDs {
-		if err := resumeFn(ctx, cameraID); err != nil {
-			schedLogger.Debug("resume failed (camera may already be recording)", "camera_id", cameraID, "error", err)
 		}
 	}
 }

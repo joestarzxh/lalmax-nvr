@@ -451,9 +451,14 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		ProfileToken   *string                         `json:"profile_token"`
 		StreamEncoding *string                         `json:"stream_encoding"`
 		AudioEnabled   *bool                           `json:"audio_enabled"`
+		RecordingMode  *string                         `json:"recording_mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.RecordingMode != nil && !isValidRecordingMode(*body.RecordingMode) {
+		writeError(w, http.StatusBadRequest, "recording_mode must be continuous, scheduled, or off")
 		return
 	}
 
@@ -486,6 +491,7 @@ func (h *Handler) handleUpdateCamera(w http.ResponseWriter, r *http.Request) {
 		ProfileToken:   body.ProfileToken,
 		StreamEncoding: body.StreamEncoding,
 		AudioEnabled:   body.AudioEnabled,
+		RecordingMode:  body.RecordingMode,
 	}
 	if body.RTSPTransport != nil && !config.IsValidRTSPTransport(*body.RTSPTransport) {
 		writeError(w, http.StatusBadRequest, "rtsp_transport must be tcp or udp")
@@ -662,6 +668,32 @@ func (h *Handler) handleCameraRecordingStats(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]interface{}{"recording_count": count, "total_size": totalSize})
 }
 
+// handleCameraRecordingDays returns the days of a month that have recordings for a camera.
+// Query param: month=YYYY-MM (defaults to the current month).
+func (h *Handler) handleCameraRecordingDays(w http.ResponseWriter, r *http.Request) {
+	id := getCameraID(r)
+	month := r.URL.Query().Get("month")
+	if month == "" {
+		month = time.Now().Format("2006-01")
+	}
+	if !isValidMonth(month) {
+		writeError(w, http.StatusBadRequest, "month must be in YYYY-MM format")
+		return
+	}
+	days, err := h.db.GetRecordingDays(r.Context(), id, month)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get recording days")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"days": days})
+}
+
+// isValidMonth validates a "YYYY-MM" string.
+func isValidMonth(s string) bool {
+	_, err := time.Parse("2006-01", s)
+	return err == nil
+}
+
 func (h *Handler) handleStartCamera(w http.ResponseWriter, r *http.Request) {
 	id := getCameraID(r)
 	if h.camMgr == nil {
@@ -731,6 +763,12 @@ func (h *Handler) handlePauseRecording(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "camera manager not available")
 		return
 	}
+	// Persist intent as recording_mode='off' so the scheduler doesn't resume it on the next tick.
+	if h.db != nil {
+		if err := h.db.UpdateCameraRecordingMode(r.Context(), id, storage.RecordingModeOff); err != nil {
+			logger.Warn("failed to persist recording_mode=off", "camera_id", id, "error", err)
+		}
+	}
 	if err := h.camMgr.PauseRecording(r.Context(), id); err != nil {
 		var cnf *model.CameraNotFoundError
 		if errors.As(err, &cnf) {
@@ -749,6 +787,12 @@ func (h *Handler) handleResumeRecording(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusServiceUnavailable, "camera manager not available")
 		return
 	}
+	// Manual resume sets the camera back to continuous recording.
+	if h.db != nil {
+		if err := h.db.UpdateCameraRecordingMode(r.Context(), id, storage.RecordingModeContinuous); err != nil {
+			logger.Warn("failed to persist recording_mode=continuous", "camera_id", id, "error", err)
+		}
+	}
 	if err := h.camMgr.ResumeRecording(r.Context(), id); err != nil {
 		var cnf *model.CameraNotFoundError
 		if errors.As(err, &cnf) {
@@ -759,6 +803,72 @@ func (h *Handler) handleResumeRecording(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recording"})
+}
+
+// isValidRecordingMode reports whether mode is an accepted recording_mode value.
+// 'event' is reserved for a later phase and not yet settable via the API.
+func isValidRecordingMode(mode string) bool {
+	switch mode {
+	case storage.RecordingModeContinuous, storage.RecordingModeScheduled, storage.RecordingModeOff:
+		return true
+	default:
+		return false
+	}
+}
+
+// handleGetRecordingSchedule returns a camera's weekly recording schedule.
+func (h *Handler) handleGetRecordingSchedule(w http.ResponseWriter, r *http.Request) {
+	id := getCameraID(r)
+	if h.db == nil {
+		writeError(w, http.StatusServiceUnavailable, "database not available")
+		return
+	}
+	ranges, err := h.db.GetCameraSchedule(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get recording schedule")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"ranges": ranges})
+}
+
+// handleSetRecordingSchedule replaces a camera's weekly recording schedule.
+func (h *Handler) handleSetRecordingSchedule(w http.ResponseWriter, r *http.Request) {
+	id := getCameraID(r)
+	if h.db == nil {
+		writeError(w, http.StatusServiceUnavailable, "database not available")
+		return
+	}
+	var body struct {
+		Ranges []storage.CameraScheduleRange `json:"ranges"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	for _, rg := range body.Ranges {
+		if rg.DayOfWeek < 0 || rg.DayOfWeek > 6 || !isValidHHMM(rg.StartTime) || !isValidHHMM(rg.EndTime) || rg.StartTime >= rg.EndTime {
+			writeError(w, http.StatusBadRequest, "invalid schedule range (day 0-6, HH:MM, start < end)")
+			return
+		}
+	}
+	if err := h.db.SetCameraSchedule(r.Context(), id, body.Ranges); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save recording schedule")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// isValidHHMM validates a "HH:MM" 24-hour time string.
+func isValidHHMM(s string) bool {
+	if len(s) != 5 || s[2] != ':' {
+		return false
+	}
+	hh := s[0:2]
+	mm := s[3:5]
+	if hh < "00" || hh > "23" || mm < "00" || mm > "59" {
+		return false
+	}
+	return true
 }
 
 // handleTestConnection attempts to connect to a camera URL with a short timeout.

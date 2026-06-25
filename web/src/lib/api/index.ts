@@ -58,6 +58,9 @@ export {
   testConnection,
   getMergeConfig,
   updateMergeConfig,
+  getRecordingSchedule,
+  setRecordingSchedule,
+  getRecordingDays,
   deleteCameraMergeConfig,
   ptzMove,
   ptzStop,
@@ -106,6 +109,8 @@ export type {
   Camera,
   CreateCameraRequest,
   UpdateCameraRequest,
+  RecordingMode,
+  RecordingScheduleRange,
   DiscoveredDevice,
   DiscoveryError,
   DiscoveryResult,
@@ -409,25 +414,6 @@ export type {
   AddGroupChannelRequest,
   RemoveGroupChannelRequest,
 } from './groups';
-
-// Recording Plans
-export {
-  listRecordingPlans,
-  getRecordingPlan,
-  createRecordingPlan,
-  updateRecordingPlan,
-  deleteRecordingPlan,
-  setPlanChannels,
-  addPlanChannel,
-  removePlanChannel,
-} from './recording-plans';
-
-export type {
-  RecordingPlan,
-  RecordingPlanTimeRange,
-  RecordingPlanChannel,
-  CreateRecordingPlanRequest,
-} from './recording-plans';
 
 // Users — user management
 export {

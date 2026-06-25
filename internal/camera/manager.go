@@ -46,6 +46,7 @@ type CameraUpdate struct {
 	ProfileToken   *string
 	StreamEncoding *string
 	AudioEnabled   *bool
+	RecordingMode  *string
 }
 
 type CameraManager struct {
@@ -1373,6 +1374,12 @@ func (cm *CameraManager) UpdateCamera(ctx context.Context, cameraID string, upda
 			rd := intPtrOrZero(updates.RetentionDays)
 			if err := cm.db.UpdateCameraMetadata(ctx, cam.ID, desc, loc, br, mo, sn, rd); err != nil {
 				logger.Error("failed to update camera metadata", "camera_id", cam.ID, "error", err)
+			}
+		}
+		// Persist recording mode (the scheduler reconciles the recorder on its next tick)
+		if updates.RecordingMode != nil {
+			if err := cm.db.UpdateCameraRecordingMode(ctx, cam.ID, *updates.RecordingMode); err != nil {
+				logger.Error("failed to update recording mode", "camera_id", cam.ID, "error", err)
 			}
 		}
 	}
