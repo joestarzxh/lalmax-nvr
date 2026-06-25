@@ -268,7 +268,26 @@ func (m *MergeManager) processCamera(ctx context.Context, cameraID string, minAg
 	return merged, segments, freed, nil
 }
 
-// mergeFormatGroup parses segments, groups by SPS/PPS, and merges eligible groups.
+// mergeGroupKey returns a key that is identical only for segments that can be
+// safely merged into one file. It covers every dimension MergeMP4Segments requires
+// to be consistent: codec, video parameter sets (SPS/PPS/VPS), video timescale, and
+// audio presence/config/timescale. Segments with any difference get different keys
+// and are therefore merged into separate recordings.
+func mergeGroupKey(info *SegmentInfo) string {
+	key := info.Codec + "\x00" +
+		string(info.SPS) + "\x00" +
+		string(info.PPS) + "\x00" +
+		string(info.VPS) + "\x00" +
+		fmt.Sprintf("%d", info.Timescale) + "\x00"
+	if info.HasAudio {
+		key += "a" + string(info.AudioConfig) + "\x00" + fmt.Sprintf("%d", info.AudioTimescale)
+	} else {
+		key += "n"
+	}
+	return key
+}
+
+// mergeFormatGroup parses segments, groups by compatibility, and merges eligible groups.
 // For MJPEG format, it skips ParseSegment and calls MergeMJPEGSegments directly.
 func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format string, recs []*model.Recording, cfg config.MergeConfig) (merged, segments int, freed int64) {
 	// MJPEG segments are directories containing JPEG files — ParseSegment only handles MP4.
@@ -278,10 +297,8 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 
 	// Parse all segments.
 	type parsedRec struct {
-		rec    *model.Recording
-		info   *SegmentInfo
-		spsKey []byte // SPS bytes for grouping
-		ppsKey []byte // PPS bytes for grouping
+		rec  *model.Recording
+		info *SegmentInfo
 	}
 
 	var parsed []parsedRec
@@ -296,12 +313,7 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		if info.Codec != format {
 			continue
 		}
-		parsed = append(parsed, parsedRec{
-			rec:    rec,
-			info:   info,
-			spsKey: info.SPS,
-			ppsKey: info.PPS,
-		})
+		parsed = append(parsed, parsedRec{rec: rec, info: info})
 	}
 
 	// Mark parse-failed recordings permanently.
@@ -313,16 +325,13 @@ func (m *MergeManager) mergeFormatGroup(ctx context.Context, cameraID, format st
 		}
 	}
 
-	// Group by SPS/PPS bytes.
-	type spsGroupKey struct {
-		sps []byte
-		pps []byte
-	}
+	// Group by full compatibility key so each group is guaranteed mergeable.
+	// Segments that differ in video config (SPS/PPS/VPS), timescale, or audio
+	// (presence/config) fall into separate groups and become separate recordings,
+	// rather than failing the whole batch.
 	groups := make(map[string][]parsedRec)
 	for _, p := range parsed {
-		key := spsGroupKey{sps: p.spsKey, pps: p.ppsKey}
-		keyStr := string(key.sps) + "\x00" + string(key.pps) + "\x00" + string(p.info.VPS)
-		groups[keyStr] = append(groups[keyStr], p)
+		groups[mergeGroupKey(p.info)] = append(groups[mergeGroupKey(p.info)], p)
 	}
 
 	var smallGroupIDs []string

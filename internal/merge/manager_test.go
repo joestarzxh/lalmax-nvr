@@ -714,3 +714,40 @@ func TestRunOnce_UndersizedGroupMarkedAsFailed(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, recs, "failed segments should not be mergeable")
 }
+
+func TestMergeGroupKey_GroupsByCompatibility(t *testing.T) {
+	base := &SegmentInfo{
+		Codec: "h264", SPS: []byte{1, 2}, PPS: []byte{3}, Timescale: 1000,
+	}
+	// Identical config → same key (mergeable together).
+	same := &SegmentInfo{
+		Codec: "h264", SPS: []byte{1, 2}, PPS: []byte{3}, Timescale: 1000,
+	}
+	require.Equal(t, mergeGroupKey(base), mergeGroupKey(same))
+
+	// Each of these differs in exactly one merge-critical dimension → different key.
+	cases := map[string]*SegmentInfo{
+		"diff SPS":       {Codec: "h264", SPS: []byte{9}, PPS: []byte{3}, Timescale: 1000},
+		"diff PPS":       {Codec: "h264", SPS: []byte{1, 2}, PPS: []byte{9}, Timescale: 1000},
+		"diff timescale": {Codec: "h264", SPS: []byte{1, 2}, PPS: []byte{3}, Timescale: 90000},
+		"diff codec":     {Codec: "h265", SPS: []byte{1, 2}, PPS: []byte{3}, Timescale: 1000},
+		"has audio": {
+			Codec: "h264", SPS: []byte{1, 2}, PPS: []byte{3}, Timescale: 1000,
+			HasAudio: true, AudioConfig: []byte{0x12, 0x10}, AudioTimescale: 48000,
+		},
+	}
+	for name, info := range cases {
+		require.NotEqual(t, mergeGroupKey(base), mergeGroupKey(info), "expected different group key for %q", name)
+	}
+
+	// Two audio segments with different audio config must not group together.
+	audioA := &SegmentInfo{
+		Codec: "h264", SPS: []byte{1, 2}, PPS: []byte{3}, Timescale: 1000,
+		HasAudio: true, AudioConfig: []byte{0x12, 0x10}, AudioTimescale: 48000,
+	}
+	audioB := &SegmentInfo{
+		Codec: "h264", SPS: []byte{1, 2}, PPS: []byte{3}, Timescale: 1000,
+		HasAudio: true, AudioConfig: []byte{0x11, 0x90}, AudioTimescale: 44100,
+	}
+	require.NotEqual(t, mergeGroupKey(audioA), mergeGroupKey(audioB))
+}
