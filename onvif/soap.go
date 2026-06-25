@@ -115,11 +115,19 @@ func (s *SOAPClient) sendInternal(req *SOAPRequest) (*SOAPResponse, error) {
 		HTTPCode: httpResp.StatusCode,
 	}
 
-	// Handle 401 with HTTP Digest Auth fallback
+	// Handle 401: try HTTP Digest first (preserving the nonce), then WS-Security PasswordText
 	if httpResp.StatusCode == http.StatusUnauthorized {
 		wwwAuth := httpResp.Header.Get("WWW-Authenticate")
 		if wwwAuth != "" && s.username != "" {
-			return s.sendWithDigestAuth(req, wwwAuth)
+			resp, err := s.sendWithDigestAuth(req, wwwAuth)
+			if err == nil {
+				return resp, nil
+			}
+		}
+		// Digest failed or not offered; try WS-Security PasswordText (plain text password)
+		// Many cameras (especially Chinese brands) only support PasswordText, not PasswordDigest
+		if s.username != "" {
+			return s.sendWithPasswordText(req)
 		}
 		return nil, fmt.Errorf("onvif: authentication failed (401)")
 	}
@@ -211,7 +219,12 @@ func (s *SOAPClient) sendWithDigestAuth(req *SOAPRequest, wwwAuth string) (*SOAP
 	}
 
 	if httpResp.StatusCode == http.StatusUnauthorized {
-		return nil, fmt.Errorf("onvif: digest auth failed (401)")
+		// Log the response body to help diagnose auth failures (passwords may be wrong or device uses PasswordText)
+		preview := string(body)
+		if len(preview) > 256 {
+			preview = preview[:256]
+		}
+		return nil, fmt.Errorf("onvif: digest auth failed (401), response: %s", preview)
 	}
 
 	if httpResp.StatusCode != http.StatusOK {
@@ -226,6 +239,78 @@ func (s *SOAPClient) sendWithDigestAuth(req *SOAPRequest, wwwAuth string) (*SOAP
 	}
 
 	return resp, nil
+}
+
+// sendWithPasswordText retries a request using WS-Security PasswordText (plain text).
+// Many cameras only support PasswordText and reject PasswordDigest.
+func (s *SOAPClient) sendWithPasswordText(req *SOAPRequest) (*SOAPResponse, error) {
+	envelope := s.buildEnvelopePasswordText(req.Body, req.Action)
+
+	httpReq, err := http.NewRequest("POST", req.ServiceURL, bytes.NewBufferString(envelope))
+	if err != nil {
+		return nil, fmt.Errorf("onvif: create request failed: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/soap+xml; charset=utf-8")
+	if req.Action != "" {
+		httpReq.Header.Set("SOAPAction", req.Action)
+	}
+
+	httpResp, err := s.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("onvif: send request failed: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("onvif: read response failed: %w", err)
+	}
+
+	if httpResp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("onvif: password text auth failed (401)")
+	}
+	if httpResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("onvif: HTTP error %d", httpResp.StatusCode)
+	}
+
+	resp := &SOAPResponse{Body: body, HTTPCode: httpResp.StatusCode}
+	fault, err := s.parseFault(body)
+	if err == nil && fault != nil {
+		resp.Fault = fault
+		return resp, fault
+	}
+	return resp, nil
+}
+
+// buildEnvelopePasswordText builds a SOAP envelope with WS-Security PasswordText (plain text).
+func (s *SOAPClient) buildEnvelopePasswordText(body, action string) string {
+	var buf bytes.Buffer
+	buf.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:a="http://www.w3.org/2005/08/addressing">
+<s:Header>`)
+
+	if s.username != "" {
+		_, timestamp := s.generateWSSE()
+		buf.WriteString(fmt.Sprintf(`
+<Security s:mustUnderstand="1" xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
+<UsernameToken>
+<Username>%s</Username>
+<Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">%s</Password>
+<Created xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">%s</Created>
+</UsernameToken>
+</Security>`,
+			s.username, s.password, timestamp,
+		))
+	}
+
+	buf.WriteString(`
+</s:Header>
+<s:Body xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">`)
+	buf.WriteString(body)
+	buf.WriteString(`
+</s:Body>
+</s:Envelope>`)
+	return buf.String()
 }
 
 // buildEnvelope builds a complete SOAP envelope with WS-Security.
