@@ -17,6 +17,8 @@ type SegmentInfo struct {
 	PPS           []byte // H.264 only
 	VPS           []byte // H.265 only
 	Timescale     uint32
+	Width         uint16 // coded video width (from the source visual sample entry)
+	Height        uint16 // coded video height
 	SampleCount   int
 	TotalDuration time.Duration
 	MdatOffset    int64 // file offset of mdat box header
@@ -46,9 +48,10 @@ type trackAccum struct {
 	timescale   uint32
 
 	// Video codec fields
-	codec    string
-	sps, pps []byte
-	vps      []byte
+	codec         string
+	sps, pps      []byte
+	vps           []byte
+	width, height uint16
 
 	// Audio codec fields
 	audioConfig []byte
@@ -131,6 +134,12 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 		switch b := box.(type) {
 		case *mp4.Hdlr:
 			current.handlerType = b.HandlerType
+
+		case *mp4.VisualSampleEntry:
+			// Coded dimensions from the avc1/hvc1 sample entry. The merged output
+			// must carry these or browsers can't size the video and won't render it.
+			current.width = b.Width
+			current.height = b.Height
 
 		case *mp4.Mdhd:
 			current.timescale = b.Timescale
@@ -245,6 +254,8 @@ func ParseSegment(filePath string) (*SegmentInfo, error) {
 		PPS:           videoTrack.pps,
 		VPS:           videoTrack.vps,
 		Timescale:     videoTrack.timescale,
+		Width:         videoTrack.width,
+		Height:        videoTrack.height,
 		SampleCount:   len(videoSamples),
 		TotalDuration: totalDur,
 		MdatOffset:    mdatOffset,

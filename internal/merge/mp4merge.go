@@ -89,6 +89,8 @@ func MergeMP4Segments(segments []*SegmentInfo, outputPath string) error {
 		pps:          first.PPS,
 		vps:          first.VPS,
 		timescale:    first.Timescale,
+		width:        first.Width,
+		height:       first.Height,
 		totalSamples: totalVideoSamples,
 	}
 	// Populate placeholder samples so the size calculation includes per-sample tables.
@@ -308,16 +310,17 @@ func copySampleData(src *os.File, dst io.Writer, offset, size int64, buf []byte)
 
 // mergeTrack holds track info for building the merged moov box.
 type mergeTrack struct {
-	isH265       bool
-	isAudio      bool
-	sps          []byte
-	pps          []byte
-	vps          []byte
-	audioConfig  []byte
-	timescale    uint32
-	totalSamples int
-	duration     uint32
-	samples      []mergedSample
+	isH265        bool
+	isAudio       bool
+	sps           []byte
+	pps           []byte
+	vps           []byte
+	audioConfig   []byte
+	timescale     uint32
+	width, height uint16
+	totalSamples  int
+	duration      uint32
+	samples       []mergedSample
 }
 
 // writeMergeMoov writes a complete moov box for the merged output.
@@ -375,7 +378,7 @@ func writeMergeTrak(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	if err != nil {
 		return err
 	}
-	// tkhd — width/height unknown from merge, use 0 (players infer from stream).
+	// tkhd — width/height are 16.16 fixed-point; audio tracks leave them 0.
 	bi2, err := w.StartBox(&mp4.BoxInfo{Type: mp4.StrToBoxType("tkhd")})
 	if err != nil {
 		return err
@@ -387,8 +390,8 @@ func writeMergeTrak(w *mp4.Writer, tr *mergeTrack, chunkOffset int64) error {
 	tkhd := &mp4.Tkhd{
 		TrackID:    trackID,
 		DurationV0: tr.duration,
-		Width:      0,
-		Height:     0,
+		Width:      uint32(tr.width) << 16,
+		Height:     uint32(tr.height) << 16,
 		Matrix: [9]int32{
 			0x00010000, 0, 0,
 			0, 0x00010000, 0,
@@ -773,6 +776,8 @@ func writeMergeH264SampleEntry(w *mp4.Writer, tr *mergeTrack) error {
 			AnyTypeBox:         mp4.AnyTypeBox{Type: mp4.StrToBoxType("avc1")},
 			DataReferenceIndex: 1,
 		},
+		Width:           tr.width,
+		Height:          tr.height,
 		Horizresolution: 0x00480000,
 		Vertresolution:  0x00480000,
 		FrameCount:      1,
@@ -826,6 +831,8 @@ func writeMergeH265SampleEntry(w *mp4.Writer, tr *mergeTrack) error {
 			AnyTypeBox:         mp4.AnyTypeBox{Type: mp4.StrToBoxType("hvc1")},
 			DataReferenceIndex: 1,
 		},
+		Width:           tr.width,
+		Height:          tr.height,
 		Horizresolution: 0x00480000,
 		Vertresolution:  0x00480000,
 		FrameCount:      1,

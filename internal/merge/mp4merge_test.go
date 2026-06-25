@@ -69,6 +69,39 @@ func TestMergeMP4Segments_SameSPS(t *testing.T) {
 	require.Equal(t, 165*time.Millisecond, merged.TotalDuration)
 }
 
+// TestMergeMP4Segments_PreservesDimensions verifies the merged output carries the
+// source video width/height. Without these, browsers can't size the <video>
+// element and won't render the merged recording (regression guard).
+func TestMergeMP4Segments_PreservesDimensions(t *testing.T) {
+	dir := t.TempDir()
+
+	// testSPS720 is a known 1280x720 Baseline SPS (mirrors internal/muxer test data).
+	sps := []byte{0x67, 0x42, 0xc0, 0x1e, 0xf4, 0x02, 0x80, 0x2d, 0x80}
+	pps := []byte{0x68, 0xce, 0x38, 0x80}
+	idrNAL := []byte{0x65, 0x88, 0x80, 0x40}
+	pNAL := []byte{0x41, 0x10, 0x00, 0x0c}
+
+	seg1 := createH264SegmentWithSamples(t, dir, "seg1.mp4", sps, pps, [][]byte{idrNAL, pNAL})
+	seg2 := createH264SegmentWithSamples(t, dir, "seg2.mp4", sps, pps, [][]byte{idrNAL, pNAL})
+
+	info1, err := ParseSegment(seg1)
+	require.NoError(t, err)
+	info2, err := ParseSegment(seg2)
+	require.NoError(t, err)
+
+	// Source segments must have the real dimensions.
+	require.Equal(t, uint16(1280), info1.Width)
+	require.Equal(t, uint16(720), info1.Height)
+
+	outputPath := filepath.Join(dir, "merged.mp4")
+	require.NoError(t, MergeMP4Segments([]*SegmentInfo{info1, info2}, outputPath))
+
+	merged, err := ParseSegment(outputPath)
+	require.NoError(t, err)
+	require.Equal(t, uint16(1280), merged.Width, "merged output lost video width")
+	require.Equal(t, uint16(720), merged.Height, "merged output lost video height")
+}
+
 func TestMergeMP4Segments_DifferentSPS(t *testing.T) {
 	dir := t.TempDir()
 
