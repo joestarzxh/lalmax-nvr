@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
-  import { getStream, unbindCamera, promoteStream, deleteStream, kickPublisher, deleteCamera } from '$lib/api';
-  import type { StreamInfo } from '$lib/api';
+  import { onMount, onDestroy, tick } from 'svelte';
+  import { getStream, unbindCamera, promoteStream, deleteStream, kickPublisher, deleteCamera, getStreamMetricsHistory } from '$lib/api';
+  import type { StreamInfo, StreamMetricSample, StreamMetricsPeriod } from '$lib/api';
+  import { loadChart, createStreamMetricChart, updateStreamMetricChart } from '$lib/charts';
   import { t } from '$lib/i18n';
   import { showToast } from '$lib/toast';
   import {
@@ -15,6 +16,7 @@
     Video,
     AudioLines,
     Activity,
+    BarChart3,
     Link,
     Unlink,
     ArrowUpCircle,
@@ -35,6 +37,20 @@
   let loading = $state(true);
   let error = $state('');
   let refreshTimer: number | undefined;
+
+  // Tabs
+  type DetailTab = 'detail' | 'metrics' | 'urls' | 'actions';
+  let activeTab = $state<DetailTab>('detail');
+
+  // Live metrics tab
+  let metricsPeriod = $state<StreamMetricsPeriod>('15m');
+  let metricSamples = $state<StreamMetricSample[]>([]);
+  let metricsLoading = $state(false);
+  let metricsTimer: number | undefined;
+  let ChartJs: any = null;
+  let fpsChart: any = null;
+  let bitrateChart: any = null;
+  let subsChart: any = null;
 
   // Player state
   let selectedProtocol = $state<string>('hls');
@@ -111,6 +127,81 @@
 
   function goBack() {
     window.location.hash = '#/streams';
+  }
+
+  // ── Live metrics tab ────────────────────────────────────────────────────
+
+  async function loadMetrics() {
+    if (!stream) return;
+    metricsLoading = metricSamples.length === 0;
+    try {
+      metricSamples = await getStreamMetricsHistory(stream.stream_id, metricsPeriod);
+    } catch (e) {
+      console.error('[StreamDetail] load metrics failed', e);
+    } finally {
+      metricsLoading = false;
+    }
+    await renderMetricCharts();
+  }
+
+  async function renderMetricCharts() {
+    // Skip while empty so we never create a chart on a hidden (zero-size) canvas.
+    if (metricSamples.length === 0) return;
+    if (!ChartJs) ChartJs = await loadChart();
+
+    const fpsData = metricSamples.map(s => ({ ts: s.ts, value: +s.in_fps.toFixed(1) }));
+    const brData  = metricSamples.map(s => ({ ts: s.ts, value: s.bitrate_kbits }));
+    const subData = metricSamples.map(s => ({ ts: s.ts, value: s.subscribers }));
+
+    if (fpsChart && bitrateChart && subsChart) {
+      updateStreamMetricChart(fpsChart, fpsData);
+      updateStreamMetricChart(bitrateChart, brData);
+      updateStreamMetricChart(subsChart, subData);
+      return;
+    }
+
+    const fpsCtx = document.getElementById('streamFpsChart') as HTMLCanvasElement | null;
+    const brCtx  = document.getElementById('streamBitrateChart') as HTMLCanvasElement | null;
+    const subCtx = document.getElementById('streamSubsChart') as HTMLCanvasElement | null;
+    if (fpsCtx) fpsChart     = createStreamMetricChart(ChartJs, fpsCtx, fpsData, t('streams.metricFps'), 'fps', 'rgba(56, 189, 248, 0.85)');
+    if (brCtx)  bitrateChart = createStreamMetricChart(ChartJs, brCtx,  brData,  t('streams.metricBitrate'), 'Kbps', 'rgba(139, 92, 246, 0.85)');
+    if (subCtx) subsChart    = createStreamMetricChart(ChartJs, subCtx, subData, t('streams.metricSubscribers'), '', 'rgba(16, 185, 129, 0.85)');
+  }
+
+  function destroyMetricCharts() {
+    if (fpsChart)     { fpsChart.destroy();     fpsChart = null; }
+    if (bitrateChart) { bitrateChart.destroy(); bitrateChart = null; }
+    if (subsChart)    { subsChart.destroy();    subsChart = null; }
+  }
+
+  function startMetricsPolling() {
+    stopMetricsPolling();
+    metricsTimer = window.setInterval(() => { void loadMetrics(); }, 5000);
+  }
+
+  function stopMetricsPolling() {
+    if (metricsTimer) { window.clearInterval(metricsTimer); metricsTimer = undefined; }
+  }
+
+  async function switchTab(tab: DetailTab) {
+    if (tab === activeTab) return;
+    if (activeTab === 'metrics') {
+      stopMetricsPolling();
+      destroyMetricCharts();
+    }
+    activeTab = tab;
+    if (tab === 'metrics') {
+      await tick(); // wait for canvases to mount
+      await loadMetrics();
+      startMetricsPolling();
+    }
+  }
+
+  async function changeMetricsPeriod(p: StreamMetricsPeriod) {
+    if (p === metricsPeriod) return;
+    metricsPeriod = p;
+    destroyMetricCharts(); // recreate with new window
+    await loadMetrics();
   }
 
   function getPlayURL(protocol: string): string {
@@ -342,6 +433,8 @@
     if (refreshTimer) {
       window.clearInterval(refreshTimer);
     }
+    stopMetricsPolling();
+    destroyMetricCharts();
   });
 </script>
 
@@ -410,9 +503,9 @@
         </div>
       </header>
 
-      <!-- Main content grid -->
-      <div class="content-grid">
-        <!-- Player section -->
+      <!-- Main content -->
+      <div class="detail-body">
+        <!-- Player section (always visible) -->
         <section class="player-section glass">
           <div class="section-header">
             <h2>
@@ -493,6 +586,27 @@
           {/if}
         </section>
 
+        <!-- Tab navigation -->
+        <nav class="detail-tabs">
+          <button class="detail-tab" class:active={activeTab === 'detail'} onclick={() => switchTab('detail')}>
+            <Activity size={15} />
+            {t('streams.tabDetail')}
+          </button>
+          <button class="detail-tab" class:active={activeTab === 'metrics'} onclick={() => switchTab('metrics')}>
+            <BarChart3 size={15} />
+            {t('streams.tabMetrics')}
+          </button>
+          <button class="detail-tab" class:active={activeTab === 'urls'} onclick={() => switchTab('urls')}>
+            <ExternalLink size={15} />
+            {t('streams.tabUrls')}
+          </button>
+          <button class="detail-tab" class:active={activeTab === 'actions'} onclick={() => switchTab('actions')}>
+            <Trash2 size={15} />
+            {t('streams.tabActions')}
+          </button>
+        </nav>
+
+        {#if activeTab === 'detail'}
         <!-- Stream info section -->
         <section class="info-section glass">
           <div class="section-header">
@@ -614,7 +728,52 @@
             </div>
           {/if}
         </section>
+        {:else if activeTab === 'metrics'}
+        <!-- Live metrics section -->
+        <section class="metrics-section glass">
+          <div class="section-header">
+            <h2>
+              <BarChart3 size={18} />
+              {t('streams.metrics')}
+            </h2>
+            <div class="protocol-selector">
+              <button class="protocol-btn" class:active={metricsPeriod === '5m'} onclick={() => changeMetricsPeriod('5m')}>
+                {t('streams.metricsPeriod5m')}
+              </button>
+              <button class="protocol-btn" class:active={metricsPeriod === '15m'} onclick={() => changeMetricsPeriod('15m')}>
+                {t('streams.metricsPeriod15m')}
+              </button>
+              <button class="protocol-btn" class:active={metricsPeriod === '30m'} onclick={() => changeMetricsPeriod('30m')}>
+                {t('streams.metricsPeriod30m')}
+              </button>
+            </div>
+          </div>
 
+          <p class="metrics-hint">{t('streams.metricsHint')}</p>
+
+          {#if !metricsLoading && metricSamples.length === 0}
+            <div class="metrics-empty">
+              <Activity size={32} />
+              <p>{t('streams.metricsEmpty')}</p>
+            </div>
+          {/if}
+
+          <div class="metrics-charts" class:hidden={!metricsLoading && metricSamples.length === 0}>
+            <div class="metric-chart-card">
+              <span class="metric-chart-title"><Activity size={14} /> {t('streams.metricFps')}</span>
+              <div class="metric-chart-canvas"><canvas id="streamFpsChart"></canvas></div>
+            </div>
+            <div class="metric-chart-card">
+              <span class="metric-chart-title"><Radio size={14} /> {t('streams.metricBitrate')}</span>
+              <div class="metric-chart-canvas"><canvas id="streamBitrateChart"></canvas></div>
+            </div>
+            <div class="metric-chart-card">
+              <span class="metric-chart-title"><Users size={14} /> {t('streams.metricSubscribers')}</span>
+              <div class="metric-chart-canvas"><canvas id="streamSubsChart"></canvas></div>
+            </div>
+          </div>
+        </section>
+        {:else if activeTab === 'urls'}
         <!-- Play URLs section -->
         <section class="urls-section glass">
           <div class="section-header">
@@ -642,7 +801,7 @@
             </div>
           {/if}
         </section>
-
+        {:else if activeTab === 'actions'}
         <!-- Actions section -->
         <section class="actions-section glass">
           <div class="section-header">
@@ -685,6 +844,7 @@
             </button>
           </div>
         </section>
+        {/if}
       </div>
     {/if}
   </main>
@@ -855,16 +1015,45 @@
     gap: 0.5rem;
   }
 
-  .content-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+  .detail-body {
+    display: flex;
+    flex-direction: column;
     gap: 1rem;
   }
 
-  @media (max-width: 1024px) {
-    .content-grid {
-      grid-template-columns: 1fr;
-    }
+  /* Tab navigation */
+  .detail-tabs {
+    display: flex;
+    gap: 0.25rem;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.25rem;
+  }
+
+  .detail-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.55rem 1rem;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s ease;
+  }
+
+  .detail-tab:hover {
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+  }
+
+  .detail-tab.active {
+    color: var(--color-primary);
+    border-bottom-color: var(--color-primary);
   }
 
   .glass {
@@ -891,8 +1080,62 @@
     gap: 0.5rem;
   }
 
-  .player-section {
-    grid-column: 1 / -1;
+  /* Live metrics tab */
+  .metrics-hint {
+    margin: 0;
+    padding: 0.75rem 1.25rem 0;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+  }
+
+  .metrics-charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+    padding: 1rem 1.25rem 1.25rem;
+  }
+
+  .metrics-charts.hidden {
+    display: none;
+  }
+
+  .metric-chart-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.85rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .metric-chart-title {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  .metric-chart-title :global(svg) {
+    color: var(--color-primary);
+  }
+
+  .metric-chart-canvas {
+    position: relative;
+    height: 180px;
+  }
+
+  .metrics-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 2.5rem 1.25rem;
+    color: var(--text-secondary);
+    text-align: center;
   }
 
   .protocol-selector {

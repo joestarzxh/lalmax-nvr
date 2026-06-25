@@ -344,3 +344,11 @@ type SystemMetricSample struct {
 	NetDnBps   float64 `json:"net_dn"`     // bytes/sec received
 	Goroutines int     `json:"goroutines"` // runtime.NumGoroutine()
 }
+
+// StreamMetricSample is a single periodic snapshot of a stream's live metrics.
+type StreamMetricSample struct {
+	Timestamp    int64   `json:"ts"`            // Unix seconds
+	InFPS        float64 `json:"in_fps"`        // publisher input frame rate
+	BitrateKbits int     `json:"bitrate_kbits"` // publisher bitrate (audio+video combined)
+	Subscribers  int     `json:"subscribers"`   // number of active subscribers
+}

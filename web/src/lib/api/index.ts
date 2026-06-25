@@ -244,6 +244,7 @@ export {
   promoteStream,
   deleteStream,
   kickPublisher,
+  getStreamMetricsHistory,
 } from './streams';
 
 export type {
@@ -254,6 +255,8 @@ export type {
   BindCameraRequest,
   PromoteStreamRequest,
   StreamOperationResponse,
+  StreamMetricSample,
+  StreamMetricsPeriod,
 } from './streams';
 
 // Xiaomi — cloud auth, devices, sync

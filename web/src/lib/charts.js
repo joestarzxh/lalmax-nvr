@@ -246,6 +246,87 @@ export function updateSystemMetricChart(chart, samples, metric) {
 }
 
 /**
+ * Create a stream real-time metric chart (FPS / bitrate / subscribers).
+ * @param {import('chart.js')} Chart
+ * @param {HTMLCanvasElement} canvas
+ * @param {{ ts: number; value: number }[]} samples
+ * @param {string} label  y-axis label text
+ * @param {string} unit   e.g. 'fps', 'Kbps', ''
+ * @param {string} [color]  optional border color override
+ * @returns {import('chart.js').Chart | null}
+ */
+export function createStreamMetricChart(Chart, canvas, samples, label, unit, color) {
+  if (!canvas) return null;
+  const { gridColor, textColor } = getChartThemeColors();
+  const borderColor = color ?? 'rgba(56, 189, 248, 0.85)';
+  const fillColor   = color
+    ? color.replace(/[\d.]+\)$/, '0.08)')
+    : 'rgba(56, 189, 248, 0.08)';
+
+  return new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: samples.map(s => fmtTimeSec(s.ts)),
+      datasets: [{
+        label: `${label}${unit ? ' (' + unit + ')' : ''}`,
+        data:   samples.map(s => s.value),
+        borderColor:     borderColor,
+        backgroundColor: fillColor,
+        fill: true,
+        tension: 0.35,
+        pointRadius: 0,
+        borderWidth: 1.5,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          callbacks: { label: ctx => `${ctx.parsed.y} ${unit}` },
+        },
+      },
+      scales: {
+        x: {
+          grid:  { color: gridColor },
+          ticks: { color: textColor, maxTicksLimit: 5, maxRotation: 0 },
+        },
+        y: {
+          grid:      { color: gridColor },
+          ticks:     { color: textColor, callback: v => v + (unit ? ' ' + unit : '') },
+          beginAtZero: true,
+        },
+      },
+    },
+  });
+}
+
+/**
+ * Update a stream metric chart in place without flicker.
+ * @param {import('chart.js').Chart} chart
+ * @param {{ ts: number; value: number }[]} samples
+ */
+export function updateStreamMetricChart(chart, samples) {
+  if (!chart || !samples || samples.length === 0) return;
+  chart.data.labels = samples.map(s => fmtTimeSec(s.ts));
+  chart.data.datasets[0].data = samples.map(s => s.value);
+  chart.update('none');
+}
+
+/** Format Unix timestamp (seconds) as HH:MM:SS for stream charts */
+function fmtTimeSec(ts) {
+  const d = new Date(ts * 1000);
+  const hh = d.getHours().toString().padStart(2, '0');
+  const mm = d.getMinutes().toString().padStart(2, '0');
+  const ss = d.getSeconds().toString().padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
+
+/**
  * Create the hourly recording activity bar chart.
  * @param {import('chart.js')} Chart
  * @param {HTMLCanvasElement} canvas

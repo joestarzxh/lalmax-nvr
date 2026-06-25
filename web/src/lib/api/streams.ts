@@ -136,3 +136,22 @@ export async function kickPublisher(streamId: string, signal?: AbortSignal): Pro
     signal,
   });
 }
+
+export interface StreamMetricSample {
+  ts: number;            // Unix seconds
+  in_fps: number;        // publisher input frame rate
+  bitrate_kbits: number; // publisher bitrate (audio+video combined)
+  subscribers: number;   // number of active subscribers
+}
+
+export type StreamMetricsPeriod = '5m' | '15m' | '30m';
+
+export async function getStreamMetricsHistory(
+  streamId: string,
+  period: StreamMetricsPeriod = '15m',
+  signal?: AbortSignal,
+): Promise<StreamMetricSample[]> {
+  const path = `/streams/${encodeURIComponent(streamId)}/metrics/history?period=${period}`;
+  const data = await apiRequest<StreamMetricSample[]>(path, { signal });
+  return data ?? [];
+}
